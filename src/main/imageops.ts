@@ -156,6 +156,16 @@ export async function clearAllBackups(): Promise<number> {
   return removed
 }
 
+/** 读取 EXIF 自动旋转后的显示像素尺寸（orientation 5-8 时宽高互换） */
+async function displayedDims(p: string): Promise<{ w: number; h: number }> {
+  const meta = await sharp(p, { failOn: 'none' }).metadata()
+  const swap = (meta.orientation ?? 1) >= 5 && (meta.orientation ?? 1) <= 8
+  return {
+    w: swap ? (meta.height ?? 0) : (meta.width ?? 0),
+    h: swap ? (meta.width ?? 0) : (meta.height ?? 0)
+  }
+}
+
 export async function saveEdits(
   id: number,
   edit: {
@@ -165,6 +175,10 @@ export async function saveEdits(
     brightness?: number
     contrast?: number
     saturation?: number
+    temperature?: number
+    tint?: number
+    sharpen?: number
+    crop?: { x: number; y: number; w: number; h: number }
   }
 ): Promise<void> {
   const row = getPhotoRow(id)
@@ -184,10 +198,33 @@ export async function saveEdits(
     if (edit.rotateDelta) pipe = pipe.rotate(edit.rotateDelta)
     if (edit.flipH) pipe = pipe.flop()
     if (edit.flipV) pipe = pipe.flip()
+    // 裁剪：归一化区域 × EXIF 旋转后的显示尺寸（裁剪 UI 仅在无旋转/翻转状态下可用）
+    if (edit.crop && edit.crop.w > 0.001 && edit.crop.h > 0.001) {
+      const dims = await displayedDims(row.path)
+      if (dims.w > 0 && dims.h > 0) {
+        const left = Math.max(0, Math.min(dims.w - 1, Math.round(edit.crop.x * dims.w)))
+        const top = Math.max(0, Math.min(dims.h - 1, Math.round(edit.crop.y * dims.h)))
+        const width = Math.max(1, Math.min(dims.w - left, Math.round(edit.crop.w * dims.w)))
+        const height = Math.max(1, Math.min(dims.h - top, Math.round(edit.crop.h * dims.h)))
+        pipe = pipe.extract({ left, top, width, height })
+      }
+    }
     const brightness = clamp(1 + (edit.brightness ?? 0) / 100, 0.1, 2)
     const saturation = clamp(1 + (edit.saturation ?? 0) / 100, 0, 3)
     const k = clamp(1 + (edit.contrast ?? 0) / 100, 0.4, 1.8)
-    pipe.modulate({ brightness, saturation }).linear(k, -(k - 1) * 128)
+    // 色温：暖(+) 红↑蓝↓；色调：品红(+) 绿↓；与对比度合并为逐通道 linear
+    const t = clamp(edit.temperature ?? 0, -100, 100) / 100
+    const tint = clamp(edit.tint ?? 0, -100, 100) / 100
+    const rGain = k * (1 + t * 0.3)
+    const gGain = k * (1 - tint * 0.25)
+    const bGain = k * (1 - t * 0.3)
+    pipe.modulate({ brightness, saturation }).linear(
+      [rGain, gGain, bGain],
+      [-(k - 1) * 128, -(k - 1) * 128, -(k - 1) * 128]
+    )
+    if (edit.sharpen && edit.sharpen > 0) {
+      pipe.sharpen({ sigma: 0.3 + (clamp(edit.sharpen, 0, 100) / 100) * 1.7 })
+    }
 
     // 保持源格式；PNG 保持无损，JPEG 默认 q92
     if (row.ext === 'jpg' || row.ext === 'jpeg') pipe = pipe.jpeg({ quality: 92 })

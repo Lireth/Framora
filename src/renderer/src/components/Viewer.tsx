@@ -3,6 +3,7 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import {
   ChevronLeft,
   ChevronRight,
+  Crop,
   FlipHorizontal2,
   FlipVertical2,
   Loader2,
@@ -22,7 +23,7 @@ import { api } from '../lib/api'
 import { mediaUrl, thumbUrl, formatBytes } from '../lib/format'
 import { cn, IconButton, PrimaryButton, GhostButton } from './ui'
 import { DetailPanel } from './DetailPanel'
-import type { PhotoLite } from '@shared/types'
+import type { CropRect, PhotoLite } from '@shared/types'
 
 interface EditState {
   rotateDelta: number
@@ -31,16 +32,32 @@ interface EditState {
   brightness: number
   contrast: number
   saturation: number
+  temperature: number
+  tint: number
+  sharpen: number
+  crop: CropRect | null
 }
-
 const EDIT_RESET: EditState = {
   rotateDelta: 0,
   flipH: false,
   flipV: false,
   brightness: 0,
   contrast: 0,
-  saturation: 0
+  saturation: 0,
+  temperature: 0,
+  tint: 0,
+  sharpen: 0,
+  crop: null
 }
+
+type Aspect = 'free' | '1:1' | '4:3' | '3:2' | '16:9'
+const ASPECT_RATIOS: [Aspect, number, number][] = [
+  ['free', 0, 0],
+  ['1:1', 1, 1],
+  ['4:3', 4, 3],
+  ['3:2', 3, 2],
+  ['16:9', 16, 9]
+]
 
 const MIN_ZOOM = 0.15
 const MAX_ZOOM = 8
@@ -118,19 +135,27 @@ function EditPanel({
   edit,
   setEdit,
   photo,
-  onSaved
+  onSaved,
+  cropMode,
+  aspect,
+  setAspect,
+  onToggleCrop
 }: {
   edit: EditState
   setEdit: (e: EditState) => void
   photo: PhotoLite
   onSaved: () => void
+  cropMode: boolean
+  aspect: Aspect
+  setAspect: (a: Aspect) => void
+  onToggleCrop: () => void
 }): React.JSX.Element {
   const [saving, setSaving] = useState(false)
   const [exporting, setExporting] = useState(false)
 
   const slider = (
     label: string,
-    key: 'brightness' | 'contrast' | 'saturation',
+    key: 'brightness' | 'contrast' | 'saturation' | 'temperature' | 'tint' | 'sharpen',
     min = -100,
     max = 100
   ): React.JSX.Element => (
@@ -159,7 +184,7 @@ function EditPanel({
   const save = async (): Promise<void> => {
     setSaving(true)
     try {
-      await api.saveEdits(photo.id, edit)
+      await api.saveEdits(photo.id, { ...edit, crop: edit.crop ?? undefined })
       useStore.getState().toast('success', '编辑已保存（原文件已备份）')
       const rec = await api.getPhoto(photo.id)
       useStore.getState().patchPhoto(photo.id, {
@@ -209,7 +234,13 @@ function EditPanel({
         {slider('亮度', 'brightness')}
         {slider('对比度', 'contrast')}
         {slider('饱和度', 'saturation')}
+        {slider('色温', 'temperature')}
+        {slider('色调', 'tint')}
+        {slider('锐化', 'sharpen', 0, 100)}
       </div>
+      {edit.sharpen > 0 && (
+        <p className="mt-1 text-[10.5px] text-white/35">锐化在保存时应用，实时预览不可见。</p>
+      )}
       <div className="mt-4 flex gap-1.5">
         <button
           className="flex h-8 flex-1 items-center justify-center gap-1.5 rounded-md border border-white/15 text-[12px] text-white/80 hover:bg-white/10"
@@ -244,6 +275,57 @@ function EditPanel({
           <FlipVertical2 size={13} /> 垂直翻转
         </button>
       </div>
+
+      {/* 裁剪 */}
+      <div className="mt-2">
+        <button
+          className={cn(
+            'flex h-8 w-full items-center justify-center gap-1.5 rounded-md border text-[12px] hover:bg-white/10',
+            cropMode || edit.crop
+              ? 'border-[var(--c-accent)] text-accent'
+              : 'border-white/15 text-white/80'
+          )}
+          disabled={edit.rotateDelta !== 0 || edit.flipH || edit.flipV}
+          title={
+            edit.rotateDelta !== 0 || edit.flipH || edit.flipV
+              ? '重置旋转/翻转后可使用裁剪'
+              : undefined
+          }
+          onClick={onToggleCrop}
+        >
+          <Crop size={13} /> {cropMode ? '退出裁剪' : '裁剪'}
+        </button>
+        {cropMode && (
+          <>
+            <div className="mt-1.5 flex flex-wrap gap-1">
+              {ASPECT_RATIOS.map(([a]) => (
+                <button
+                  key={a}
+                  className={cn(
+                    'rounded border px-1.5 py-0.5 text-[11px] transition-colors',
+                    aspect === a
+                      ? 'border-[var(--c-accent)] text-accent'
+                      : 'border-white/15 text-white/60 hover:text-white/90'
+                  )}
+                  onClick={() => setAspect(a)}
+                >
+                  {a === 'free' ? '自由' : a}
+                </button>
+              ))}
+            </div>
+            <p className="mt-1 text-[10.5px] text-white/35">在画面上拖拽框选裁剪区域。</p>
+          </>
+        )}
+        {edit.crop && !cropMode && (
+          <button
+            className="mt-1.5 h-7 w-full rounded-md border border-white/15 text-[11.5px] text-white/60 hover:bg-white/10"
+            onClick={() => setEdit({ ...edit, crop: null })}
+          >
+            清除裁剪区域
+          </button>
+        )}
+      </div>
+
       <button
         className="mt-3 flex h-8 w-full items-center justify-center gap-1.5 rounded-md border border-white/15 text-[12px] text-white/70 hover:bg-white/10"
         onClick={() => setEdit(EDIT_RESET)}
@@ -295,12 +377,60 @@ export function Viewer(): React.JSX.Element {
   const dragRef = useRef<{ startX: number; startY: number; ox: number; oy: number } | null>(null)
   const [dragging, setDragging] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
+  const imgRef = useRef<HTMLImageElement>(null)
+
+  /* 裁剪模式状态 */
+  const [cropMode, setCropMode] = useState(false)
+  const [aspect, setAspect] = useState<Aspect>('free')
+  const cropStartRef = useRef<{ x: number; y: number } | null>(null)
+  const [draggingCrop, setDraggingCrop] = useState(false)
+  const [imgBox, setImgBox] = useState<{ left: number; top: number; width: number; height: number } | null>(null)
 
   useEffect(() => {
     setZoom(1)
     setOffset({ x: 0, y: 0 })
     setEdit(EDIT_RESET)
+    setCropMode(false)
   }, [activeId])
+
+  // 裁剪模式：跟踪画面内图像盒位置用于绘制选框与遮罩
+  useEffect(() => {
+    if (!cropMode) {
+      setImgBox(null)
+      return
+    }
+    const update = (): void => {
+      const c = containerRef.current?.getBoundingClientRect()
+      const r = imgRef.current?.getBoundingClientRect()
+      if (c && r && r.width > 0 && r.height > 0) {
+        setImgBox({ left: r.left - c.left, top: r.top - c.top, width: r.width, height: r.height })
+      }
+    }
+    update()
+    window.addEventListener('resize', update)
+    return () => window.removeEventListener('resize', update)
+  }, [cropMode])
+
+  const relInImg = (clientX: number, clientY: number): { x: number; y: number } | null => {
+    const r = imgRef.current?.getBoundingClientRect()
+    if (!r || r.width === 0 || r.height === 0) return null
+    return {
+      x: clamp((clientX - r.left) / r.width, 0, 1),
+      y: clamp((clientY - r.top) / r.height, 0, 1)
+    }
+  }
+
+  const toggleCrop = (): void => {
+    if (cropMode) {
+      setCropMode(false)
+      setEdit({ ...edit, crop: null })
+    } else {
+      setEdit({ ...edit, crop: null })
+      setZoom(1)
+      setOffset({ x: 0, y: 0 })
+      setCropMode(true)
+    }
+  }
 
   // 预取相邻原图（±2），翻页时即时呈现
   useEffect(() => {
@@ -380,16 +510,51 @@ export function Viewer(): React.JSX.Element {
 
   const onPointerDown = (e: React.PointerEvent): void => {
     if (e.button !== 0) return
+    if (cropMode) {
+      const rel = relInImg(e.clientX, e.clientY)
+      if (!rel) return
+      cropStartRef.current = rel
+      setEdit({ ...edit, crop: { x: rel.x, y: rel.y, w: 0, h: 0 } })
+      setDraggingCrop(true)
+      ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+      return
+    }
     dragRef.current = { startX: e.clientX, startY: e.clientY, ox: offset.x, oy: offset.y }
     setDragging(true)
     ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
   }
   const onPointerMove = (e: React.PointerEvent): void => {
+    if (cropMode) {
+      if (!draggingCrop || !cropStartRef.current) return
+      const rel = relInImg(e.clientX, e.clientY)
+      const r = imgRef.current?.getBoundingClientRect()
+      if (!rel || !r || r.width === 0 || r.height === 0) return
+      const s = cropStartRef.current
+      let pxW = (rel.x - s.x) * r.width
+      let pxH = (rel.y - s.y) * r.height
+      const ratio = ASPECT_RATIOS.find((a) => a[0] === aspect)
+      if (ratio && ratio[1] > 0) {
+        const ar = ratio[1] / ratio[2]
+        if (Math.abs(pxW) / Math.max(1, Math.abs(pxH)) > ar) {
+          pxH = Math.sign(pxH || 1) * Math.abs(pxW) / ar
+        } else {
+          pxW = Math.sign(pxW || 1) * Math.abs(pxH) * ar
+        }
+      }
+      const x1 = clamp(Math.min(s.x, s.x + pxW / r.width), 0, 1)
+      const y1 = clamp(Math.min(s.y, s.y + pxH / r.height), 0, 1)
+      const x2 = clamp(Math.max(s.x, s.x + pxW / r.width), 0, 1)
+      const y2 = clamp(Math.max(s.y, s.y + pxH / r.height), 0, 1)
+      setEdit({ ...edit, crop: { x: x1, y: y1, w: x2 - x1, h: y2 - y1 } })
+      return
+    }
     const d = dragRef.current
     if (!d) return
     setOffset({ x: d.ox + (e.clientX - d.startX), y: d.oy + (e.clientY - d.startY) })
   }
   const onPointerUp = (): void => {
+    cropStartRef.current = null
+    setDraggingCrop(false)
     dragRef.current = null
     setDragging(false)
   }
@@ -405,7 +570,18 @@ export function Viewer(): React.JSX.Element {
   }
 
   const rotation = (photo.orientation || 0) + edit.rotateDelta
-  const cssFilter = `brightness(${1 + edit.brightness / 100}) contrast(${1 + edit.contrast / 100}) saturate(${1 + edit.saturation / 100})`
+  // 色温/色调用 CSS 滤镜做方向性近似预览（保存时按精确通道增益写盘）
+  const t = edit.temperature / 100
+  const tintF = edit.tint / 100
+  const cssFilter = [
+    `brightness(${1 + edit.brightness / 100})`,
+    `contrast(${1 + edit.contrast / 100})`,
+    `saturate(${1 + edit.saturation / 100})`,
+    t > 0 ? `sepia(${(t * 0.35).toFixed(3)})` : t < 0 ? `hue-rotate(${(t * 14).toFixed(2)}deg)` : '',
+    tintF !== 0 ? `hue-rotate(${(tintF * 8).toFixed(2)}deg)` : ''
+  ]
+    .filter(Boolean)
+    .join(' ')
   const idx = photos.findIndex((p) => p.id === photo.id)
 
   return (
@@ -460,9 +636,10 @@ export function Viewer(): React.JSX.Element {
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
-        onDoubleClick={() => zoomTo(zoom === 1 ? 2.5 : 1 / zoom)}
+        onDoubleClick={cropMode ? undefined : () => zoomTo(zoom === 1 ? 2.5 : 1 / zoom)}
       >
         <img
+          ref={imgRef}
           src={mediaUrl(photo)}
           alt={photo.name}
           draggable
@@ -484,6 +661,21 @@ export function Viewer(): React.JSX.Element {
           )}
         />
       </div>
+
+      {/* 裁剪选框与遮罩 */}
+      {cropMode && imgBox && edit.crop && edit.crop.w > 0.002 && edit.crop.h > 0.002 && (
+        <div
+          className="pointer-events-none absolute z-10"
+          style={{
+            left: imgBox.left + edit.crop.x * imgBox.width,
+            top: imgBox.top + edit.crop.y * imgBox.height,
+            width: edit.crop.w * imgBox.width,
+            height: edit.crop.h * imgBox.height,
+            boxShadow: '0 0 0 9999px rgba(0,0,0,0.55)',
+            outline: '2px solid var(--c-accent)'
+          }}
+        />
+      )}
 
       {/* 前后导航 */}
       {idx > 0 && (
@@ -544,7 +736,16 @@ export function Viewer(): React.JSX.Element {
       </div>
 
       {editOpen && (
-        <EditPanel edit={edit} setEdit={setEdit} photo={photo} onSaved={() => undefined} />
+        <EditPanel
+          edit={edit}
+          setEdit={setEdit}
+          photo={photo}
+          onSaved={() => undefined}
+          cropMode={cropMode}
+          aspect={aspect}
+          setAspect={setAspect}
+          onToggleCrop={toggleCrop}
+        />
       )}
       {detailOpen && (
         <div

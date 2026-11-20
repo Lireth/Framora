@@ -74,6 +74,14 @@ export interface QueryResult {
   total: number
 }
 
+export interface CropRect {
+  /** 归一化裁剪区域（相对当前视觉画面，0..1） */
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
 export interface EditSpec {
   rotateDelta?: number
   flipH?: boolean
@@ -81,6 +89,14 @@ export interface EditSpec {
   brightness?: number
   contrast?: number
   saturation?: number
+  /** 色温：正=暖，负=冷 */
+  temperature?: number
+  /** 色调：正=品红，负=偏绿 */
+  tint?: number
+  /** 锐化强度 0..100 */
+  sharpen?: number
+  /** 裁剪（归一化，应用在旋转/翻转后的视觉空间） */
+  crop?: CropRect
 }
 
 export interface ExportOptions {

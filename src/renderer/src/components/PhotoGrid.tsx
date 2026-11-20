@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { AlertTriangle, Check, FolderPlus, ImageOff, SearchX } from 'lucide-react'
 import { useStore } from '../store'
@@ -11,6 +11,14 @@ import type { PhotoLite } from '@shared/types'
 
 const TILE_PX = { s: 128, m: 172, l: 228 } as const
 const GAP = 10
+/** 时间线分组头部行高 */
+const HEADER_H = 34
+
+interface GridRow {
+  kind: 'header' | 'tiles'
+  label?: string
+  items?: PhotoLite[]
+}
 
 function Tile({
   p,
@@ -204,6 +212,9 @@ export function PhotoGrid(): React.JSX.Element {
   const anchorId = useStore((s) => s.anchorId)
   const navTick = useStore((s) => s.navTick)
   const setGridCols = useStore((s) => s.setGridCols)
+  const loadMorePhotos = useStore((s) => s.loadMorePhotos)
+  const sort = useStore((s) => s.sort)
+  const scope = useStore((s) => s.scope)
   const parentRef = useRef<HTMLDivElement>(null)
   const [width, setWidth] = useState(1200)
 
@@ -221,7 +232,47 @@ export function PhotoGrid(): React.JSX.Element {
   const tileH = TILE_PX[tile]
   const cols = Math.max(2, Math.floor((width + GAP) / (tileH + GAP)))
   const tileW = Math.floor((width - (cols - 1) * GAP) / cols)
-  const rowCount = Math.ceil(photos.length / cols)
+
+  /* 行模型：按拍摄/导入月份分组的头部行 + 瓦片行（时间线视图） */
+  const { rows, rowIndexOfPhoto } = useMemo(() => {
+    const groupable = scope === 'recent' || sort === 'taken' || sort === 'imported'
+    const monthKey = (p: PhotoLite): [number, number] => {
+      const ts = scope === 'recent' || sort === 'imported' ? p.imported_at : (p.taken_at ?? p.imported_at)
+      const d = new Date(ts)
+      return [d.getFullYear(), d.getMonth()]
+    }
+    const rowsOut: GridRow[] = []
+    const indexById = new Map<number, number>()
+    if (!groupable) {
+      for (let i = 0; i < photos.length; i += cols) {
+        const items = photos.slice(i, i + cols)
+        for (const p of items) indexById.set(p.id, rowsOut.length)
+        rowsOut.push({ kind: 'tiles', items })
+      }
+      return { rows: rowsOut, rowIndexOfPhoto: indexById }
+    }
+    let curKey = ''
+    let bucket: PhotoLite[] = []
+    const flush = (): void => {
+      if (!bucket.length) return
+      for (const p of bucket) indexById.set(p.id, rowsOut.length)
+      rowsOut.push({ kind: 'tiles', items: bucket })
+      bucket = []
+    }
+    for (const p of photos) {
+      const [y, m] = monthKey(p)
+      const key = `${y}-${m}`
+      if (key !== curKey) {
+        flush()
+        curKey = key
+        rowsOut.push({ kind: 'header', label: `${y}年${m + 1}月` })
+      }
+      bucket.push(p)
+      if (bucket.length === cols) flush()
+    }
+    flush()
+    return { rows: rowsOut, rowIndexOfPhoto: indexById }
+  }, [photos, cols, sort, scope])
 
   // 上报列数，供方向键导航按行列位移
   useEffect(() => {
@@ -229,19 +280,18 @@ export function PhotoGrid(): React.JSX.Element {
   }, [cols, setGridCols])
 
   const virtualizer = useVirtualizer({
-    count: rowCount,
+    count: rows.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => tileH + GAP,
+    estimateSize: (i) => (rows[i].kind === 'header' ? HEADER_H : tileH + GAP),
     overscan: 4
   })
-  const loadMorePhotos = useStore((s) => s.loadMorePhotos)
 
   // 键盘导航后把锚点所在行滚动到可视区
   useEffect(() => {
     if (!navTick || anchorId === null) return
-    const idx = photos.findIndex((p) => p.id === anchorId)
-    if (idx < 0) return
-    virtualizer.scrollToIndex(Math.floor(idx / cols), { align: 'auto' })
+    const row = rowIndexOfPhoto.get(anchorId)
+    if (row === undefined) return
+    virtualizer.scrollToIndex(row, { align: 'auto' })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [navTick])
 
@@ -250,9 +300,9 @@ export function PhotoGrid(): React.JSX.Element {
     if (!hasMore) return
     const items = virtualizer.getVirtualItems()
     const last = items.length ? items[items.length - 1].index : -1
-    if (last >= rowCount - 3) void loadMorePhotos()
+    if (last >= rows.length - 3) void loadMorePhotos()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [virtualizer.getVirtualItems().length, rowCount, hasMore])
+  }, [virtualizer.getVirtualItems().length, rows.length, hasMore])
 
   return (
     <div
@@ -267,8 +317,7 @@ export function PhotoGrid(): React.JSX.Element {
           style={{ height: virtualizer.getTotalSize(), position: 'relative', width: '100%' }}
         >
           {virtualizer.getVirtualItems().map((vi) => {
-            const start = vi.index * cols
-            const items = photos.slice(start, start + cols)
+            const row = rows[vi.index]
             return (
               <div
                 key={vi.key}
@@ -277,15 +326,24 @@ export function PhotoGrid(): React.JSX.Element {
                   top: 0,
                   left: 0,
                   width: '100%',
-                  height: tileH + GAP,
+                  height: vi.size,
                   transform: `translateY(${vi.start}px)`
                 }}
               >
-                <div className="flex" style={{ gap: GAP }}>
-                  {items.map((p) => (
-                    <Tile key={p.id} p={p} tileW={tileW} tileH={tileH} />
-                  ))}
-                </div>
+                {row.kind === 'header' ? (
+                  <div
+                    className="flex items-end pb-1.5 text-[12px] font-semibold tracking-wide text-ink2"
+                    style={{ height: HEADER_H }}
+                  >
+                    {row.label}
+                  </div>
+                ) : (
+                  <div className="flex" style={{ gap: GAP }}>
+                    {row.items!.map((p) => (
+                      <Tile key={p.id} p={p} tileW={tileW} tileH={tileH} />
+                    ))}
+                  </div>
+                )}
               </div>
             )
           })}

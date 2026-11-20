@@ -9,7 +9,7 @@ export async function startWatcher(folderId: number, root: string): Promise<void
   const watcher = chokidar.watch(root, {
     ignoreInitial: true,
     ignored: /(^|[/\\])\../,
-    depth: 8,
+    // 不限制监听深度，与 scanner.walk 的无限递归保持一致，避免深层目录成为同步盲区
     awaitWriteFinish: {
       stabilityThreshold: 600,
       pollInterval: 120

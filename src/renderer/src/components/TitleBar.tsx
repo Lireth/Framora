@@ -1,6 +1,8 @@
-import { Moon, Settings, Sun } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Copy, Minus, Moon, Settings, Square, Sun, X } from 'lucide-react'
 import { useStore } from '../store'
-import { cn, IconButton } from './ui'
+import { api, onEvent } from '../lib/api'
+import { IconButton } from './ui'
 
 function Logo(): React.JSX.Element {
   return (
@@ -18,10 +20,46 @@ function Logo(): React.JSX.Element {
   )
 }
 
+function WinButton({
+  label,
+  onClick,
+  danger,
+  children
+}: {
+  label: string
+  onClick: () => void
+  danger?: boolean
+  children: React.ReactNode
+}): React.JSX.Element {
+  return (
+    <button
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+      className={
+        danger
+          ? 'grid h-full w-[46px] place-items-center text-ink2 transition-colors hover:bg-[#c42b1c] hover:text-white'
+          : 'grid h-full w-[46px] place-items-center text-ink2 transition-colors hover:bg-hover hover:text-ink'
+      }
+    >
+      {children}
+    </button>
+  )
+}
+
 export function TitleBar(): React.JSX.Element {
   const theme = useStore((s) => s.theme)
   const setTheme = useStore((s) => s.setTheme)
   const setSettingsOpen = useStore((s) => s.setSettingsOpen)
+  const [maximized, setMaximized] = useState(false)
+
+  useEffect(() => {
+    api
+      .isMaximized()
+      .then(setMaximized)
+      .catch(() => undefined)
+    return onEvent('evt:maximize', (data) => setMaximized(data as boolean))
+  }, [])
 
   return (
     <div className="drag-region flex h-10 shrink-0 select-none items-center border-b border-line bg-panel pl-3.5">
@@ -47,7 +85,17 @@ export function TitleBar(): React.JSX.Element {
           onClick={() => setSettingsOpen(true)}
         />
       </div>
-      <div className={cn('drag-region h-full w-[132px]')} />
+      <div className="no-drag ml-1 flex h-full items-stretch">
+        <WinButton label="最小化" onClick={() => void api.minimizeWindow()}>
+          <Minus size={13} strokeWidth={1.4} />
+        </WinButton>
+        <WinButton label={maximized ? '向下还原' : '最大化'} onClick={() => void api.toggleMaximize()}>
+          {maximized ? <Copy size={11} strokeWidth={1.4} /> : <Square size={11} strokeWidth={1.4} />}
+        </WinButton>
+        <WinButton label="关闭" danger onClick={() => void api.closeWindow()}>
+          <X size={13} strokeWidth={1.4} />
+        </WinButton>
+      </div>
     </div>
   )
 }

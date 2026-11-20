@@ -51,6 +51,10 @@ const CALLABLE = new Set([
   'smartAlbums:rename',
   'smartAlbums:delete',
   'window:setTheme',
+  'window:minimize',
+  'window:maximizeToggle',
+  'window:isMaximized',
+  'window:close',
   'window:toggleFullscreen',
   'app:openDataDir',
   'app:openThumbsDir',
@@ -59,7 +63,14 @@ const CALLABLE = new Set([
   'app:dragOutPhotos'
 ])
 
-const EVENTS = new Set(['evt:scan', 'evt:thumb', 'evt:watch', 'evt:library', 'evt:export'])
+const EVENTS = new Set([
+  'evt:scan',
+  'evt:thumb',
+  'evt:watch',
+  'evt:library',
+  'evt:export',
+  'evt:maximize'
+])
 
 const api = {
   invoke: (channel: string, ...args: unknown[]): Promise<unknown> => {

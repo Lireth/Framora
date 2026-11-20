@@ -109,6 +109,10 @@ export const api = {
   deleteSmartAlbum: (id: number): Promise<void> => call('smartAlbums:delete', id),
 
   setTheme: (mode: ThemeMode): Promise<void> => call('window:setTheme', mode),
+  minimizeWindow: (): Promise<void> => call('window:minimize'),
+  toggleMaximize: (): Promise<void> => call('window:maximizeToggle'),
+  isMaximized: (): Promise<boolean> => call('window:isMaximized'),
+  closeWindow: (): Promise<void> => call('window:close'),
   toggleFullscreen: (): Promise<void> => call('window:toggleFullscreen'),
   openDataDir: (): Promise<void> => call('app:openDataDir'),
   openThumbsDir: (): Promise<void> => call('app:openThumbsDir'),
@@ -117,6 +121,12 @@ export const api = {
   dragOutPhotos: (ids: number[]): Promise<void> => call('app:dragOutPhotos', ids)
 }
 
-export type EventChannel = 'evt:scan' | 'evt:thumb' | 'evt:watch' | 'evt:library' | 'evt:export'
+export type EventChannel =
+  | 'evt:scan'
+  | 'evt:thumb'
+  | 'evt:watch'
+  | 'evt:library'
+  | 'evt:export'
+  | 'evt:maximize'
 export const onEvent = (channel: EventChannel, cb: (data: never) => void): (() => void) =>
   window.framora.on(channel, cb as (data: unknown) => void)

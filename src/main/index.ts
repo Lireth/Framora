@@ -3,6 +3,8 @@ import fs from 'node:fs'
 import { BrowserWindow, Menu, app, dialog, net, protocol, screen } from 'electron'
 import { pathToFileURL } from 'node:url'
 import { initDb, closeDb, getSetting, setSetting, listFolders, listFolderPaths, listPhotoIdsPendingThumb } from './db'
+import { themeBackground } from './theme'
+import type { ThemeMode } from '@shared/types'
 import { registerIpc } from './ipc'
 import { isImagePath } from './scanner'
 import { startWatcher, stopAllWatchers } from './watcher'
@@ -75,6 +77,7 @@ function isOnSomeDisplay(x: number, y: number): boolean {
 function createWindow(): void {
   const saved = loadWindowBounds()
   const usePosition = saved ? isOnSomeDisplay(saved.x, saved.y) : false
+  const initialTheme: ThemeMode = getSetting('theme') === 'light' ? 'light' : 'dark'
   win = new BrowserWindow({
     width: saved?.width ?? DEFAULT_WIDTH,
     height: saved?.height ?? DEFAULT_HEIGHT,
@@ -82,13 +85,8 @@ function createWindow(): void {
     minWidth: 1000,
     minHeight: 640,
     show: false,
-    backgroundColor: '#101014',
+    backgroundColor: themeBackground(initialTheme),
     titleBarStyle: 'hidden',
-    titleBarOverlay: {
-      color: '#101014',
-      symbolColor: '#e7e8ea',
-      height: 40
-    },
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
       sandbox: true,
@@ -116,6 +114,11 @@ function createWindow(): void {
   win.on('closed', () => {
     win = null
   })
+  const notifyMaximize = (maximized: boolean): void => {
+    win?.webContents.send('evt:maximize', maximized)
+  }
+  win.on('maximize', () => notifyMaximize(true))
+  win.on('unmaximize', () => notifyMaximize(false))
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
 
   if (isDev && process.env['ELECTRON_RENDERER_URL']) {

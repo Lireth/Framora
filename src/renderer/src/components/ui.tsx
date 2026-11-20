@@ -123,7 +123,7 @@ export function Modal({
   if (!open) return null
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 animate-fadeIn"
+      className="fixed inset-x-0 bottom-0 top-10 z-50 flex items-center justify-center bg-black/50 animate-fadeIn"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose()
       }}

@@ -81,6 +81,13 @@ img {
   -webkit-user-drag: none;
 }
 
+.drag-region {
+  -webkit-app-region: drag;
+}
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
 .thumb-skeleton {
   background: linear-gradient(
     110deg,

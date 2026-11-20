@@ -473,19 +473,26 @@ export function registerIpc(): void {
 
   /* ---------- window / theme ---------- */
   ipcMain.handle('window:setTheme', (_e, mode: ThemeMode) => {
-    const win = BrowserWindow.getAllWindows()[0]
-    if (win && process.platform === 'win32') {
-      try {
-        win.setTitleBarOverlay(
-          mode === 'dark'
-            ? { color: '#101014', symbolColor: '#e7e8ea' }
-            : { color: '#f4f5f7', symbolColor: '#3a3f4b' }
-        )
-      } catch {
-        /* win10 老版本可能不支持 */
-      }
-    }
     db.setSetting('theme', mode)
+  })
+
+  ipcMain.handle('window:minimize', (e) => {
+    BrowserWindow.fromWebContents(e.sender)?.minimize()
+  })
+
+  ipcMain.handle('window:maximizeToggle', (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender)
+    if (!win) return
+    if (win.isMaximized()) win.unmaximize()
+    else win.maximize()
+  })
+
+  ipcMain.handle('window:isMaximized', (e) => {
+    return BrowserWindow.fromWebContents(e.sender)?.isMaximized() ?? false
+  })
+
+  ipcMain.handle('window:close', (e) => {
+    BrowserWindow.fromWebContents(e.sender)?.close()
   })
 
   ipcMain.handle('window:toggleFullscreen', () => {

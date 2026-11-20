@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import {
   ChevronLeft,
   ChevronRight,
@@ -48,41 +49,67 @@ function clamp(v: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, v))
 }
 
+const STRIP_ITEM = 56
+const STRIP_GAP = 6
+
 function Filmstrip({ activeId }: { activeId: number | null }): React.JSX.Element {
   const photos = useStore((s) => s.photos)
   const setActive = useStore((s) => s.setActive)
   const stripRef = useRef<HTMLDivElement>(null)
 
+  // 横向虚拟化：万级库下只挂载可视区内的胶片格
+  const virtualizer = useVirtualizer({
+    count: photos.length,
+    getScrollElement: () => stripRef.current,
+    estimateSize: () => STRIP_ITEM + STRIP_GAP,
+    horizontal: true,
+    overscan: 8
+  })
+
   useEffect(() => {
-    if (activeId === null || !stripRef.current) return
-    const el = stripRef.current.querySelector(`[data-photo="${activeId}"]`)
-    el?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' })
+    if (activeId === null) return
+    const idx = photos.findIndex((p) => p.id === activeId)
+    if (idx >= 0) virtualizer.scrollToIndex(idx, { align: 'center' })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId])
 
   return (
     <div
       ref={stripRef}
-      className="absolute bottom-0 left-0 right-0 flex h-[74px] items-center gap-1.5 overflow-x-auto border-t border-white/10 bg-black/60 px-3 backdrop-blur"
+      className="absolute bottom-0 left-0 right-0 flex h-[74px] items-center overflow-x-auto overflow-y-hidden border-t border-white/10 bg-black/60 px-3 backdrop-blur"
     >
-      {photos.map((p) => (
-        <button
-          key={p.id}
-          data-photo={p.id}
-          onClick={() => setActive(p.id)}
-          className={cn(
-            'h-[56px] w-[56px] shrink-0 overflow-hidden rounded-md transition-all',
-            p.id === activeId
-              ? 'ring-2 ring-[var(--c-accent)] opacity-100'
-              : 'opacity-55 hover:opacity-95'
-          )}
-        >
-          {p.thumb_status === 1 ? (
-            <img src={thumbUrl(p)} alt="" className="h-full w-full object-cover" draggable={false} />
-          ) : (
-            <div className="h-full w-full bg-white/10" />
-          )}
-        </button>
-      ))}
+      <div style={{ width: virtualizer.getTotalSize(), height: '100%', position: 'relative' }}>
+        {virtualizer.getVirtualItems().map((vi) => {
+          const p = photos[vi.index]
+          return (
+            <button
+              key={p.id}
+              data-photo={p.id}
+              onClick={() => setActive(p.id)}
+              style={{
+                position: 'absolute',
+                top: (74 - STRIP_ITEM) / 2,
+                left: 0,
+                width: STRIP_ITEM,
+                height: STRIP_ITEM,
+                transform: `translateX(${vi.start}px)`
+              }}
+              className={cn(
+                'shrink-0 overflow-hidden rounded-md transition-all',
+                p.id === activeId
+                  ? 'ring-2 ring-[var(--c-accent)] opacity-100'
+                  : 'opacity-55 hover:opacity-95'
+              )}
+            >
+              {p.thumb_status === 1 ? (
+                <img src={thumbUrl(p)} alt="" className="h-full w-full object-cover" draggable={false} />
+              ) : (
+                <div className="h-full w-full bg-white/10" />
+              )}
+            </button>
+          )
+        })}
+      </div>
     </div>
   )
 }
@@ -274,6 +301,19 @@ export function Viewer(): React.JSX.Element {
     setOffset({ x: 0, y: 0 })
     setEdit(EDIT_RESET)
   }, [activeId])
+
+  // 预取相邻原图（±2），翻页时即时呈现
+  useEffect(() => {
+    if (!photo) return
+    const idx = photos.findIndex((p) => p.id === photo.id)
+    for (const d of [-1, 1, -2, 2]) {
+      const p = photos[idx + d]
+      if (!p || p.missing) continue
+      const img = new Image()
+      img.src = mediaUrl(p)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [photo?.id])
 
   const zoomTo = useCallback(
     (factor: number, cx?: number, cy?: number): void => {

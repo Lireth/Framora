@@ -1,0 +1,39 @@
+import { describe, expect, it } from 'vitest'
+import { formatBytes, formatCount, formatDate, formatDateTime, mediaUrl, thumbUrl } from '../src/renderer/src/lib/format'
+
+describe('formatBytes', () => {
+  it('按单位阶梯格式化', () => {
+    expect(formatBytes(512)).toBe('512 B')
+    expect(formatBytes(2048)).toBe('2.0 KB')
+    expect(formatBytes(5 * 1024 * 1024)).toBe('5.0 MB')
+    expect(formatBytes(3.5 * 1024 * 1024 * 1024)).toBe('3.50 GB')
+  })
+})
+
+describe('formatDate / formatDateTime', () => {
+  it('空值显示占位符', () => {
+    expect(formatDate(null)).toBe('—')
+    expect(formatDateTime(undefined)).toBe('—')
+  })
+  it('格式化为本地日期时间', () => {
+    const ts = new Date(2026, 2, 5, 8, 7).getTime() // 本地时区 2026-03-05 08:07
+    expect(formatDate(ts)).toBe('2026-03-05')
+    expect(formatDateTime(ts)).toBe('2026-03-05 08:07')
+  })
+})
+
+describe('formatCount', () => {
+  it('万级转换单位', () => {
+    expect(formatCount(9999)).toBe('9999')
+    expect(formatCount(30000)).toBe('3.0 万')
+  })
+})
+
+describe('mediaUrl / thumbUrl', () => {
+  it('路径与版本参数被正确编码', () => {
+    const url = mediaUrl({ path: 'D:\\pic\\a b.jpg', mtime: 42 })
+    expect(url).toContain('media://img/?p=')
+    expect(url).toContain('v=42')
+    expect(thumbUrl({ id: 7, thumb_ts: 99 })).toBe('thumb://t/7.webp?v=99')
+  })
+})

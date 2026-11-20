@@ -27,7 +27,6 @@ export async function exportPhotos(
     try {
       const fmt = opts.format ?? 'original'
       const base = path.basename(row.name, path.extname(row.name))
-      let outName = ''
       let outPath = ''
       let pipe: sharp.Sharp | null = null
       let ext = row.ext
@@ -36,7 +35,7 @@ export async function exportPhotos(
         fmt === 'original' && !opts.maxSide && !row.orientation && !row.flip_h && !row.flip_v
       if (noTransform) {
         ext = row.ext
-        ;({ outName, outPath } = pickName(destDir, base, ext, used))
+        ;({ outPath } = pickName(destDir, base, ext, used))
         await fs.promises.copyFile(row.path, outPath)
         used.add(outPath.toLowerCase())
         exported++
@@ -66,7 +65,7 @@ export async function exportPhotos(
         else if (row.ext === 'png') pipe = pipe.png()
         else pipe = pipe.jpeg({ quality: 92 })
       }
-      ;({ outName, outPath } = pickName(destDir, base, ext, used))
+      ;({ outPath } = pickName(destDir, base, ext, used))
       await pipe.toFile(outPath)
       used.add(outPath.toLowerCase())
       exported++
@@ -77,7 +76,7 @@ export async function exportPhotos(
   return { exported, failed }
 }
 
-function pickName(
+export function pickName(
   destDir: string,
   base: string,
   ext: string,

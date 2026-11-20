@@ -6,7 +6,7 @@ import { initDb, closeDb, getSetting, setSetting, listFolders, listPhotoIdsPendi
 import { registerIpc } from './ipc'
 import { isImagePath } from './scanner'
 import { startWatcher, stopAllWatchers } from './watcher'
-import { thumbPath, thumbsDir, enqueueThumb } from './thumbs'
+import { thumbsDir, enqueueThumb } from './thumbs'
 
 const isDev = !app.isPackaged
 

@@ -370,7 +370,6 @@ export function createTag(name: string, color: string | null): TagInfo {
   const info = stmt('INSERT OR IGNORE INTO tags (name, color) VALUES (?, ?)')
     .run(name, color)
   if (info.changes === 0) {
-    const existed = stmt('SELECT id FROM tags WHERE name = ?').get(name) as { id: number }
     throw new Error(`标签「${name}」已存在`)
   }
   return { id: Number(info.lastInsertRowid), name, color, count: 0 }

@@ -5,7 +5,7 @@ import { useStore } from '../store'
 import { thumbUrl } from '../lib/format'
 import { cn, ContextMenu, StarRating, type MenuItem } from './ui'
 import { api } from '../lib/api'
-import { deletePhotosAction, importFolderAction } from '../lib/actions'
+import { importFolderAction } from '../lib/actions'
 import { TagPicker } from './TagPicker'
 import type { PhotoLite } from '@shared/types'
 
@@ -147,8 +147,10 @@ function EmptyState(): React.JSX.Element {
   const folders = useStore((s) => s.folders)
   const total = useStore((s) => s.total)
   const keyword = useStore((s) => s.keyword)
-  const hasFilter =
-    !!(useStore((s) => s.dateFrom) || useStore((s) => s.dateTo) || useStore((s) => s.minRating))
+  const dateFrom = useStore((s) => s.dateFrom)
+  const dateTo = useStore((s) => s.dateTo)
+  const minRating = useStore((s) => s.minRating)
+  const hasFilter = !!(dateFrom || dateTo || minRating)
 
   if (folders.length === 0) {
     return (

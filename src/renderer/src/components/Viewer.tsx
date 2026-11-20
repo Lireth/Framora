@@ -254,12 +254,10 @@ function EditPanel({
 export function Viewer(): React.JSX.Element {
   const photos = useStore((s) => s.photos)
   const activeId = useStore((s) => s.activeId)
-  const setActive = useStore((s) => s.setActive)
   const stepViewer = useStore((s) => s.stepViewer)
   const closeViewer = useStore((s) => s.closeViewer)
   const detailOpen = useStore((s) => s.detailOpen)
   const toggleDetail = useStore((s) => s.toggleDetail)
-  const patchPhoto = useStore((s) => s.patchPhoto)
 
   const photo = photos.find((p) => p.id === activeId) ?? photos[0]
 

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { FolderPlus, Info, LayoutGrid, ListFilter, Search, SlidersHorizontal, X } from 'lucide-react'
+import { FolderPlus, Info, LayoutGrid, Search, SlidersHorizontal, X } from 'lucide-react'
 import { useStore, type SortKey } from '../store'
 import { importFolderAction } from '../lib/actions'
 import { cn, IconButton, StarRating, useOutsideClose } from './ui'

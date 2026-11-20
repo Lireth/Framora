@@ -23,7 +23,6 @@ export function formatCount(n: number): string {
   return n >= 10000 ? `${(n / 10000).toFixed(1)} 万` : String(n)
 }
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
 export function debounce<T extends (...args: any[]) => void>(fn: T, ms: number): T {
   let timer: ReturnType<typeof setTimeout> | null = null
   const wrapped = (...args: Parameters<T>): void => {

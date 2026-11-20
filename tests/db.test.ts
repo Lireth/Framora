@@ -248,6 +248,23 @@ describe('dupCache 失效语义（第一批修复回归）', () => {
     expect(db.duplicatePhotoIds()).toHaveLength(2)
   })
 
+  it('duplicateClusters 保留簇边界且与拍平 id 一致', () => {
+    const f = newFolder('C:\\pics')
+    const [a, b] = dupPair(f, 0x00000000)
+    // 第二簇用与 0 汉明距离 32 位的哈希，确保不与第一簇合并
+    const c = seed(f, 'dup-2nd-a')
+    const d = seed(f, 'dup-2nd-b')
+    db.setPhotoPhash(c, 0xffffffff, 0xffffffff)
+    db.setPhotoPhash(d, 0xffffffff, 0xffffffff)
+    const clusters = db.duplicateClusters()
+    expect(clusters).toHaveLength(2)
+    expect(clusters.every((x) => x.length === 2)).toBe(true)
+    expect(clusters.flat().sort((x, y) => x - y)).toEqual(
+      db.duplicatePhotoIds().sort((x, y) => x - y)
+    )
+    expect(clusters.flat().sort((x, y) => x - y)).toEqual([a, b, c, d].sort((x, y) => x - y))
+  })
+
   it('queryDuplicates 按簇顺序分页', () => {
     const f = newFolder('C:\\pics')
     const [a, b] = dupPair(f, 5)

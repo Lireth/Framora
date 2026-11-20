@@ -1,5 +1,16 @@
 import React from 'react'
-import { Database, Eraser, FileClock, FileWarning, HardDrive, Images, Moon, Sun } from 'lucide-react'
+import {
+  Database,
+  Download,
+  Eraser,
+  FileClock,
+  FileWarning,
+  HardDrive,
+  Images,
+  Moon,
+  Sun,
+  Upload
+} from 'lucide-react'
 import { useStore } from '../store'
 import { api } from '../lib/api'
 import { cn, ConfirmDialog, Modal, PrimaryButton } from './ui'
@@ -13,6 +24,7 @@ export function SettingsModal(): React.JSX.Element | null {
   const appVersion = useStore((s) => s.appVersion)
   const [rebuildOpen, setRebuildOpen] = useState(false)
   const [clearBackupsOpen, setClearBackupsOpen] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
 
   return (
     <>
@@ -100,6 +112,39 @@ export function SettingsModal(): React.JSX.Element | null {
           </div>
 
           <div>
+            <p className="mb-2 font-medium">备份与迁移</p>
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={() =>
+                  api
+                    .exportBackup()
+                    .then((p) =>
+                      p
+                        ? useStore.getState().toast('success', `已导出备份：${p}`)
+                        : undefined
+                    )
+                    .catch((e) =>
+                      useStore.getState().toast('error', e instanceof Error ? e.message : '导出失败')
+                    )
+                }
+                className="flex items-center gap-1.5 rounded-md border border-line px-3 py-1.5 text-[12px] text-ink2 hover:bg-hover hover:text-ink"
+              >
+                <Download size={13} /> 导出索引库备份
+              </button>
+              <button
+                onClick={() => setImportOpen(true)}
+                className="flex items-center gap-1.5 rounded-md border border-line px-3 py-1.5 text-[12px] text-ink2 hover:bg-hover hover:text-ink"
+              >
+                <Upload size={13} /> 从备份导入索引库
+              </button>
+            </div>
+            <p className="mt-1.5 text-[11px] text-ink3">
+              备份仅含索引与整理成果（评分 / 标签 / 相册），不含照片文件；换机时配合照片文件一起迁移。
+              导入会替换当前索引库，原库将自动保留为 .pre-import 文件。
+            </p>
+          </div>
+
+          <div>
             <p className="mb-2 font-medium">关于</p>
             <div className="rounded-lg border border-line bg-panel px-3 py-2.5 text-[12px] leading-relaxed text-ink2">
               <p className="font-semibold text-ink">拾帧 Framora {appVersion || ''}</p>
@@ -141,6 +186,30 @@ export function SettingsModal(): React.JSX.Element | null {
             .clearBackups()
             .then((n) => useStore.getState().toast('success', `已清理 ${n} 个备份文件`))
             .catch(() => useStore.getState().toast('error', '清理失败'))
+        }}
+      />
+
+      <ConfirmDialog
+        open={importOpen}
+        title="从备份导入索引库"
+        message="将用备份文件替换当前索引库（评分 / 标签 / 相册等整理成果）。照片文件不受影响，原库会自动保留。若备份中的照片路径与本机不一致，需重新导入对应文件夹。继续吗？"
+        confirmText="选择备份文件"
+        danger
+        onClose={() => setImportOpen(false)}
+        onConfirm={() => {
+          api
+            .importBackup()
+            .then((r) => {
+              if (!r) return
+              useStore
+                .getState()
+                .toast('success', `导入完成：${r.photos} 张照片${r.rebuiltThumbs ? `，补建 ${r.rebuiltThumbs} 个缩略图` : ''}`)
+              void useStore.getState().refreshLibrary()
+              void useStore.getState().refreshPhotos()
+            })
+            .catch((e) =>
+              useStore.getState().toast('error', e instanceof Error ? e.message : '导入失败')
+            )
         }}
       />
     </>

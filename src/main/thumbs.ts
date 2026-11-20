@@ -11,6 +11,9 @@ import type { ThumbEvent } from '@shared/types'
 
 const CONCURRENCY = Math.max(2, Math.min(6, os.cpus().length - 1))
 
+/** RAW 扩展名（不含点）：sharp 预编译 libvips 不含 libraw，只能取嵌入预览 */
+export const RAW_EXTS = new Set(['cr2', 'cr3', 'nef', 'nrw', 'arw', 'raf', 'dng', 'rw2', 'orf', 'pef'])
+
 const queue: number[] = []
 const queued = new Set<number>()
 let running = 0
@@ -25,6 +28,11 @@ export function backupsDir(): string {
 
 export function thumbPath(id: number): string {
   return path.join(thumbsDir(), `${id}.webp`)
+}
+
+/** RAW 照片的嵌入预览（查看器显示源） */
+export function previewPath(id: number): string {
+  return path.join(thumbsDir(), `${id}.preview.jpg`)
 }
 
 function emit(e: ThumbEvent): void {
@@ -88,8 +96,16 @@ async function run(id: number): Promise<void> {
   if (!row || row.missing) return
   try {
     if (!fs.existsSync(row.path)) throw new Error('file missing')
-    // 同一实例先读头部元数据再生成缩略图，避免重复解析文件头
-    const img = sharp(row.path, { failOn: 'none' })
+    // RAW：提取嵌入预览 JPEG 作为像素源（无预览则标记失败），同时落盘供查看器使用
+    let input: string | Uint8Array = row.path
+    if (RAW_EXTS.has(row.ext)) {
+      const preview = await exifr.thumbnail(row.path)
+      if (!preview || !preview.length) throw new Error('RAW 文件无可提取的嵌入预览')
+      input = preview
+      await fs.promises.writeFile(previewPath(id), preview)
+    }
+    // 同一实例先读头部元数据再生成缩略图，避免重复解析
+    const img = sharp(input, { failOn: 'none' })
     const [meta, takenAt] = await Promise.all([img.metadata(), readTakenAt(row.path)])
     await img
       .rotate()
@@ -127,7 +143,7 @@ export function cleanupOrphanThumbs(): number {
     return 0
   }
   for (const name of names) {
-    const m = /^(\d+)\.webp$/.exec(name)
+    const m = /^(\d+)(?:\.webp|\.preview\.jpg)$/.exec(name)
     if (!m || ids.has(Number(m[1]))) continue
     try {
       fs.rmSync(path.join(dir, name), { force: true })

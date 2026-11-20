@@ -1,6 +1,7 @@
 import type {
   AlbumInfo,
   AppInfo,
+  BackupInfo,
   DeleteResult,
   EditSpec,
   ExifData,
@@ -44,6 +45,11 @@ export const api = {
   rescan: (id: number): Promise<ImportResult> => call('library:rescan', id),
   removeFolder: (id: number): Promise<{ removed: number }> => call('library:removeFolder', id),
   stats: (): Promise<LibraryStats> => call('library:stats'),
+  exportBackup: (): Promise<string | null> => call('library:exportBackup'),
+  importBackup: (): Promise<{ photos: number; rebuiltThumbs: number } | null> =>
+    call('library:importBackup'),
+  selectRedundant: (mode: 'best' | 'oldest'): Promise<{ ids: number[]; clusters: number }> =>
+    call('duplicates:selectRedundant', mode),
 
   queryPhotos: (q: PhotoQuery): Promise<QueryResult> => call('photos:query', q),
   queryPhotoIds: (q: PhotoQuery): Promise<number[]> => call('photos:queryIds', q),
@@ -60,7 +66,9 @@ export const api = {
     opts: ExportOptions
   ): Promise<{ exported: number; failed: number }> => call('photos:export', ids, dir, opts),
   saveEdits: (id: number, edit: EditSpec): Promise<PhotoRecord> => call('photos:saveEdits', id, edit),
-  revertEdits: (id: number): Promise<PhotoRecord> => call('photos:revert', id),
+  revertEdits: (id: number, backupName?: string): Promise<PhotoRecord> =>
+    call('photos:revert', id, backupName),
+  listBackups: (id: number): Promise<BackupInfo[]> => call('photos:listBackups', id),
   openInExplorer: (id: number): Promise<void> => call('photos:openInExplorer', id),
   regenerateThumb: (id: number): Promise<void> => call('photos:regenerateThumb', id),
   rebuildThumbs: (): Promise<void> => call('thumbs:rebuildAll'),

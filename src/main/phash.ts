@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import sharp from 'sharp'
 import { getPhotoRow, listPhotosForPhash, markPhashDirty, setPhotoPhash } from './db'
+import { thumbPath } from './thumbs'
 import { logError } from './log'
 import { packDhashBits } from './phashCore'
 
@@ -31,12 +32,14 @@ function pump(): void {
   }
 }
 
-/** 从原图计算 64-bit dHash（9×8 灰度水平梯度），随缩略图生成后异步补齐 */
+/** 计算 64-bit dHash（9×8 灰度水平梯度）：优先用已生成的缩略图（RAW 的唯一像素源，普通格式也省一次全图解码） */
 async function run(id: number): Promise<void> {
   const row = getPhotoRow(id)
   if (!row || row.missing) return
-  if (!fs.existsSync(row.path)) return
-  const { data } = await sharp(row.path, { failOn: 'none' })
+  const thumb = thumbPath(id)
+  const source = fs.existsSync(thumb) ? thumb : row.path
+  if (!fs.existsSync(source)) return
+  const { data } = await sharp(source, { failOn: 'none' })
     .rotate()
     .greyscale()
     .resize(9, 8, { fit: 'fill' })

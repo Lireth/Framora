@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Clock, FilePlus, FolderPlus, Info, LayoutGrid, Search, SlidersHorizontal, Trash2, X } from 'lucide-react'
 import { useStore, type SortKey } from '../store'
-import { importFilesAction, importFolderAction } from '../lib/actions'
+import { importFilesAction, importFolderAction, selectRedundantAction } from '../lib/actions'
 import { cn, IconButton, StarRating, useOutsideClose } from './ui'
 
 function useScopeLabel(): string {
@@ -116,6 +116,7 @@ function FilterPopover({ onClose }: { onClose: () => void }): React.JSX.Element 
 
 export function Toolbar(): React.JSX.Element {
   const total = useStore((s) => s.total)
+  const scope = useStore((s) => s.scope)
   const keyword = useStore((s) => s.keyword)
   const tile = useStore((s) => s.tile)
   const detailOpen = useStore((s) => s.detailOpen)
@@ -229,6 +230,26 @@ export function Toolbar(): React.JSX.Element {
         />
         {filterOpen && <FilterPopover onClose={() => setFilterOpen(false)} />}
       </div>
+
+      {scope === 'duplicates' && (
+        <div className="flex items-center overflow-hidden rounded-md border border-line">
+          <button
+            onClick={() => void selectRedundantAction('best')}
+            title="每组保留体积最大（其次最早导入）的一张，选中其余冗余项"
+            className="h-8 px-2.5 text-[12px] text-ink2 hover:bg-hover hover:text-ink"
+          >
+            保留最佳
+          </button>
+          <span className="h-5 w-px bg-line" />
+          <button
+            onClick={() => void selectRedundantAction('oldest')}
+            title="每组保留最早导入的一张，选中其余冗余项"
+            className="h-8 px-2.5 text-[12px] text-ink2 hover:bg-hover hover:text-ink"
+          >
+            保留最早
+          </button>
+        </div>
+      )}
 
       <div className="mx-1 h-5 w-px bg-line" />
 

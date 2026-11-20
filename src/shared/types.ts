@@ -176,6 +176,13 @@ export interface ImportResult {
   found: number
 }
 
+/** 单张照片的编辑备份条目（按时间倒序） */
+export interface BackupInfo {
+  name: string
+  ts: number
+  size: number
+}
+
 export interface ImportFilesResult {
   /** 资料库内直接入库的数量 */
   indexed: number

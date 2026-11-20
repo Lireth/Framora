@@ -2,10 +2,10 @@ import path from 'node:path'
 import fs from 'node:fs'
 import sharp from 'sharp'
 import { getPhotoRow, updatePhotoFileFields, updatePhotoMeta } from './db'
-import { backupsDir, enqueueThumb } from './thumbs'
+import { backupsDir, enqueueThumb, RAW_EXTS } from './thumbs'
 import { broadcastExport } from './scanner'
 import { logError } from './log'
-import type { ExportOptions } from '@shared/types'
+import type { BackupInfo, ExportOptions } from '@shared/types'
 
 function clamp(v: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, v))
@@ -216,6 +216,7 @@ export async function saveEdits(
   const row = getPhotoRow(id)
   if (!row) throw new Error('照片不存在')
   if (!fs.existsSync(row.path)) throw new Error('源文件已丢失，无法编辑')
+  if (RAW_EXTS.has(row.ext)) throw new Error('RAW 文件不支持写回编辑，请使用导出转换格式')
   const backupName = `${id}-${Date.now()}${path.extname(row.path)}`
   const backupPath = path.join(backupsDir(), backupName)
   await fs.promises.copyFile(row.path, backupPath)
@@ -278,16 +279,46 @@ export async function saveEdits(
   enqueueThumb(id)
 }
 
-export async function revertEdits(id: number): Promise<void> {
+export async function listBackups(id: number): Promise<BackupInfo[]> {
+  const dir = backupsDir()
+  let names: string[]
+  try {
+    names = await fs.promises.readdir(dir)
+  } catch {
+    return []
+  }
+  const out: BackupInfo[] = []
+  for (const n of names) {
+    const m = /^(\d+)-(\d+)\.[a-z0-9]+$/i.exec(n)
+    if (!m || Number(m[1]) !== id) continue
+    const st = await fs.promises.stat(path.join(dir, n)).catch(() => null)
+    out.push({ name: n, ts: Number(m[2]), size: st?.size ?? 0 })
+  }
+  out.sort((a, b) => b.ts - a.ts)
+  return out
+}
+
+/** 恢复编辑：默认最近一份备份，可指定历史备份名（编辑历史面板） */
+export async function revertEdits(id: number, backupName?: string): Promise<void> {
   const row = getPhotoRow(id)
   if (!row) throw new Error('照片不存在')
-  const prefix = `${id}-`
-  const files = await fs.promises
-    .readdir(backupsDir())
-    .then((names) => names.filter((n) => n.startsWith(prefix)))
-  if (!files.length) throw new Error('没有可恢复的编辑备份')
-  files.sort((a, b) => b.localeCompare(a))
-  const latest = path.join(backupsDir(), files[0])
+  let latest: string
+  if (backupName !== undefined) {
+    if (!new RegExp(`^${id}-\\d+\\.[a-z0-9]+$`, 'i').test(backupName)) {
+      throw new Error('无效的备份文件名')
+    }
+    latest = path.join(backupsDir(), backupName)
+    if (!fs.existsSync(latest)) throw new Error('备份文件不存在')
+  } else {
+    const prefix = `${id}-`
+    const files = await fs.promises
+      .readdir(backupsDir())
+      .then((names) => names.filter((n) => n.startsWith(prefix)))
+      .catch(() => [] as string[])
+    if (!files.length) throw new Error('没有可恢复的编辑备份')
+    files.sort((a, b) => b.localeCompare(a))
+    latest = path.join(backupsDir(), files[0])
+  }
   // 与 saveEdits 相同的 tmp+rm+rename 落盘方式：直接覆盖已存在文件在 Windows 上
   // 可能因目标被占用而报 UNKNOWN
   const tmp = `${row.path}.framora-revert-tmp${path.extname(row.path)}`

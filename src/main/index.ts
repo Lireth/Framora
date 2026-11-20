@@ -172,7 +172,7 @@ function registerProtocols(): void {
     try {
       const u = new URL(req.url)
       const name = u.hostname === 't' ? u.pathname.slice(1) : u.hostname + u.pathname
-      if (!/^\d+\.webp$/.test(name)) return new Response(null, { status: 400 })
+      if (!/^\d+(\.webp|\.preview\.jpg)$/.test(name)) return new Response(null, { status: 400 })
       const p = path.join(thumbsDir(), name)
       if (!fs.existsSync(p)) return new Response(null, { status: 404 })
       return await fileResponse(p)

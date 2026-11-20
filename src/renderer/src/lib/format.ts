@@ -42,3 +42,25 @@ export function mediaUrl(p: { path: string; mtime?: number }): string {
 export function thumbUrl(p: { id: number; thumb_ts: number }): string {
   return `thumb://t/${p.id}.webp?v=${p.thumb_ts}`
 }
+
+/** RAW 扩展名：浏览器无法直接渲染，查看器改用提取的嵌入预览 */
+const RAW_EXTS = new Set(['cr2', 'cr3', 'nef', 'nrw', 'arw', 'raf', 'dng', 'rw2', 'orf', 'pef'])
+
+export function isRawPhoto(p: { ext: string }): boolean {
+  return RAW_EXTS.has(p.ext.toLowerCase())
+}
+
+export function previewUrl(p: { id: number; thumb_ts: number }): string {
+  return `thumb://t/${p.id}.preview.jpg?v=${p.thumb_ts}`
+}
+
+/** 查看器显示源：RAW 用嵌入预览，其余用原文件 */
+export function displayUrl(p: {
+  path: string
+  mtime?: number
+  id: number
+  thumb_ts: number
+  ext: string
+}): string {
+  return isRawPhoto(p) ? previewUrl(p) : mediaUrl(p)
+}

@@ -76,6 +76,7 @@ interface AppState extends Filters {
   loadMorePhotos: () => Promise<void>
   toggleSelect: (id: number, opts?: { additive?: boolean; range?: boolean }) => void
   selectAll: () => Promise<void>
+  setSelection: (ids: number[]) => void
   clearSelection: () => void
   openViewer: (id: number) => void
   closeViewer: () => void
@@ -380,6 +381,8 @@ export const useStore = create<AppState>((set, get) => ({
       get().toast('error', `全选失败：${err instanceof Error ? err.message : String(err)}`)
     }
   },
+
+  setSelection: (ids) => set({ selection: new Set(ids), anchorId: null }),
 
   clearSelection: () => set({ selection: new Set(), anchorId: null }),
 

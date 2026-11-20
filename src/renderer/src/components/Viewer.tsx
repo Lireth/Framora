@@ -6,6 +6,7 @@ import {
   Crop,
   FlipHorizontal2,
   FlipVertical2,
+  History,
   Loader2,
   Maximize,
   Pencil,
@@ -20,10 +21,10 @@ import {
 } from 'lucide-react'
 import { useStore } from '../store'
 import { api } from '../lib/api'
-import { mediaUrl, thumbUrl, formatBytes } from '../lib/format'
+import { displayUrl, thumbUrl, formatBytes, formatDateTime } from '../lib/format'
 import { cn, IconButton, PrimaryButton, GhostButton } from './ui'
 import { DetailPanel } from './DetailPanel'
-import type { CropRect, PhotoLite } from '@shared/types'
+import type { BackupInfo, CropRect, PhotoLite } from '@shared/types'
 
 interface EditState {
   rotateDelta: number
@@ -227,6 +228,34 @@ function EditPanel({
     }
   }
 
+  // 编辑历史：备份按时间倒序，可恢复到任意一份
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [backups, setBackups] = useState<BackupInfo[] | null>(null)
+
+  const toggleHistory = async (): Promise<void> => {
+    const next = !historyOpen
+    setHistoryOpen(next)
+    if (next) {
+      try {
+        setBackups(await api.listBackups(photo.id))
+      } catch {
+        setBackups([])
+      }
+    }
+  }
+
+  const restoreTo = async (b: BackupInfo): Promise<void> => {
+    try {
+      await api.revertEdits(photo.id, b.name)
+      useStore.getState().toast('success', `已恢复到 ${formatDateTime(b.ts)} 保存前的状态`)
+      setEdit(EDIT_RESET)
+      useStore.getState().patchPhoto(photo.id, { thumb_status: 0 })
+      onSaved()
+    } catch (e) {
+      useStore.getState().toast('error', e instanceof Error ? e.message : '恢复失败')
+    }
+  }
+
   return (
     <div className="absolute right-0 top-11 bottom-[74px] z-10 w-[248px] overflow-y-auto border-l border-white/10 bg-[#141418]/95 p-4 backdrop-blur">
       <h3 className="mb-3 text-[13px] font-semibold text-white/90">基础编辑</h3>
@@ -340,6 +369,34 @@ function EditPanel({
         >
           <Undo2 size={13} /> 撤销编辑（恢复备份）
         </button>
+        <button
+          className="flex h-8 w-full items-center justify-center gap-1.5 rounded-md border border-white/15 text-[12px] text-white/70 hover:bg-white/10"
+          onClick={() => void toggleHistory()}
+        >
+          <History size={13} /> 编辑历史…
+        </button>
+        {historyOpen && (
+          <div className="rounded-md border border-white/10 bg-black/30 p-1.5">
+            {backups === null ? (
+              <p className="px-1 py-1.5 text-[11px] text-white/40">加载中…</p>
+            ) : backups.length === 0 ? (
+              <p className="px-1 py-1.5 text-[11px] text-white/40">暂无历史备份（每张照片保留最近 5 份）</p>
+            ) : (
+              backups.map((b) => (
+                <div key={b.name} className="flex items-center gap-1.5 px-1 py-1 text-[11px]">
+                  <span className="flex-1 truncate text-white/70">{formatDateTime(b.ts)}</span>
+                  <span className="text-white/35">{formatBytes(b.size)}</span>
+                  <button
+                    className="rounded border border-white/15 px-1.5 py-0.5 text-white/70 hover:bg-white/10"
+                    onClick={() => void restoreTo(b)}
+                  >
+                    恢复
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+        )}
         <GhostButton onClick={saveAs} disabled={exporting}>
           <span className="flex items-center justify-center gap-1.5">
             {exporting ? <Loader2 size={13} className="animate-spin" /> : <ExternalLink size={13} />}
@@ -440,7 +497,7 @@ export function Viewer(): React.JSX.Element {
       const p = photos[idx + d]
       if (!p || p.missing) continue
       const img = new Image()
-      img.src = mediaUrl(p)
+      img.src = displayUrl(p)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [photo?.id])
@@ -640,7 +697,7 @@ export function Viewer(): React.JSX.Element {
       >
         <img
           ref={imgRef}
-          src={mediaUrl(photo)}
+          src={displayUrl(photo)}
           alt={photo.name}
           draggable
           onDragStart={(e) => {

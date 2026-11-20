@@ -5,9 +5,24 @@ import sharp from 'sharp'
 import { BrowserWindow, dialog, ipcMain, shell, app } from 'electron'
 import * as db from './db'
 import { IMAGE_EXTS, importFolder, isImagePath, trackNewFile } from './scanner'
-import { cleanupOrphanThumbs, enqueueThumb, rebuildAllThumbs, thumbPath, thumbsDir } from './thumbs'
-import { startWatcher, stopWatcher } from './watcher'
-import { clearAllBackups, applyTemplate, exportPhotos, pickName, revertEdits, saveEdits } from './imageops'
+import {
+  cleanupOrphanThumbs,
+  enqueueThumb,
+  previewPath,
+  rebuildAllThumbs,
+  thumbPath,
+  thumbsDir
+} from './thumbs'
+import { startWatcher, stopAllWatchers, stopWatcher } from './watcher'
+import {
+  clearAllBackups,
+  applyTemplate,
+  exportPhotos,
+  listBackups,
+  pickName,
+  revertEdits,
+  saveEdits
+} from './imageops'
 import { suppressTracking } from './scanner'
 import { logsDir, logError } from './log'
 import { listFolders } from './db'
@@ -144,11 +159,74 @@ export function registerIpc(): void {
     const rows = db.removeFolderRows(folderId)
     for (const r of rows) {
       fs.promises.rm(thumbPath(r.id), { force: true }).catch(() => undefined)
+      fs.promises.rm(previewPath(r.id), { force: true }).catch(() => undefined)
     }
     return { removed: rows.length }
   })
 
   ipcMain.handle('library:stats', () => db.libraryStats())
+
+  /** 导出索引库备份为单文件 */
+  ipcMain.handle('library:exportBackup', async () => {
+    const win = BrowserWindow.getFocusedWindow()
+    const d = new Date()
+    const pad = (n: number): string => String(n).padStart(2, '0')
+    const defaultName = `framora-backup-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}.db`
+    const r = await dialog.showSaveDialog(win!, {
+      title: '导出索引库备份',
+      defaultPath: defaultName,
+      filters: [{ name: 'SQLite 数据库', extensions: ['db'] }]
+    })
+    if (r.canceled || !r.filePath) return null
+    await db.exportBackup(r.filePath)
+    return r.filePath
+  })
+
+  /** 用备份文件替换当前索引库，并重挂监听、补建缺失缩略图 */
+  ipcMain.handle('library:importBackup', async () => {
+    const win = BrowserWindow.getFocusedWindow()
+    const r = await dialog.showOpenDialog(win!, {
+      title: '选择索引库备份文件',
+      properties: ['openFile'],
+      filters: [{ name: 'SQLite 数据库', extensions: ['db'] }]
+    })
+    if (r.canceled || !r.filePaths[0]) return null
+    await db.importBackup(r.filePaths[0])
+    // 旧库的 watcher 与新库 id 不对应，全部停掉后按新库重建
+    await stopAllWatchers()
+    for (const f of listFolders()) {
+      if (fs.existsSync(f.path)) startWatcher(f.id, f.path)
+    }
+    let rebuilt = 0
+    for (const id of db.listAllPhotoIds()) {
+      if (!fs.existsSync(thumbPath(id))) {
+        db.setThumbStatus(id, 0)
+        enqueueThumb(id)
+        rebuilt++
+      }
+    }
+    return { photos: db.libraryStats().total, rebuiltThumbs: rebuilt }
+  })
+
+  /** 重复治理：每组保留一张（最佳=体积最大，其次最早；最早=导入时间最早），选中其余冗余项 */
+  ipcMain.handle('duplicates:selectRedundant', (_e, mode: 'best' | 'oldest') => {
+    const clusters = db.duplicateClusters()
+    const redundant: number[] = []
+    for (const cluster of clusters) {
+      const rows = cluster
+        .map((id) => db.getPhotoRow(id))
+        .filter((r): r is NonNullable<typeof r> => r !== undefined)
+      if (rows.length < 2) continue
+      const keeper = rows.reduce((a, b) => {
+        // best：体积最大优先，其次最早导入；oldest：最早导入优先；并列取 id 小者
+        if (mode === 'best' && b.size !== a.size) return b.size > a.size ? b : a
+        if (b.imported_at !== a.imported_at) return b.imported_at < a.imported_at ? b : a
+        return b.id < a.id ? b : a
+      })
+      for (const r of rows) if (r.id !== keeper.id) redundant.push(r.id)
+    }
+    return { ids: redundant, clusters: clusters.length }
+  })
 
   /* ---------- photos ---------- */
   ipcMain.handle('photos:query', (_e, q: PhotoQuery) =>
@@ -261,9 +339,12 @@ export function registerIpc(): void {
     await Promise.all(Array.from({ length: Math.max(1, Math.min(CONCURRENCY, trashing.length)) }, worker))
     // 单事务批量清理索引行
     db.deletePhotoRows(okIds)
-    // 并行清理缩略图文件
+    // 并行清理缩略图与 RAW 预览文件
     await Promise.all(
-      okIds.map((id) => fs.promises.rm(thumbPath(id), { force: true }).catch(() => undefined))
+      okIds.flatMap((id) => [
+        fs.promises.rm(thumbPath(id), { force: true }).catch(() => undefined),
+        fs.promises.rm(previewPath(id), { force: true }).catch(() => undefined)
+      ])
     )
     return { deleted: okIds.length, failed }
   })
@@ -279,10 +360,12 @@ export function registerIpc(): void {
     return db.getPhotoRecord(id)
   })
 
-  ipcMain.handle('photos:revert', async (_e, id: number) => {
-    await revertEdits(id)
+  ipcMain.handle('photos:revert', async (_e, id: number, backupName?: string) => {
+    await revertEdits(id, backupName)
     return db.getPhotoRecord(id)
   })
+
+  ipcMain.handle('photos:listBackups', async (_e, id: number) => listBackups(id))
 
   ipcMain.handle('photos:openInExplorer', (_e, id: number) => {
     const row = db.getPhotoRow(id)

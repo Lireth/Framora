@@ -45,6 +45,22 @@ export async function importFilesAction(): Promise<void> {
   }
 }
 
+/** 重复治理：按策略保留每组一张，选中其余冗余项（随后可批量删除） */
+export async function selectRedundantAction(mode: 'best' | 'oldest'): Promise<void> {
+  const s = useStore.getState()
+  try {
+    const r = await api.selectRedundant(mode)
+    if (!r.ids.length) {
+      s.toast('info', r.clusters ? '各组已只剩一张，无冗余可清理' : '没有发现重复照片')
+      return
+    }
+    s.setSelection(r.ids)
+    s.toast('success', `已选中 ${r.ids.length} 张冗余照片（${r.clusters} 组），可批量删除`)
+  } catch (e) {
+    useStore.getState().toast('error', e instanceof Error ? e.message : '选择冗余项失败')
+  }
+}
+
 /** 删除（移入回收站）所选照片 */
 export async function deletePhotosAction(ids: number[]): Promise<void> {
   if (!ids.length) return

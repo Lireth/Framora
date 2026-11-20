@@ -295,6 +295,41 @@ export function closeDb(): void {
   }
 }
 
+/** 导出当前索引库为单文件备份（better-sqlite3 backup API，对 WAL 安全） */
+export async function exportBackup(destFile: string): Promise<void> {
+  await db.backup(destFile)
+}
+
+/**
+ * 用备份文件替换当前索引库：校验 → 保留现库为 .pre-import-<ts> → 复制 → 重开并迁移。
+ * 照片文件本体不受影响；导入后调用方需重挂 watcher 并补建缺失缩略图。
+ */
+export async function importBackup(srcFile: string): Promise<void> {
+  const probe = new Database(srcFile, { readonly: true })
+  try {
+    const t = probe
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='photos'")
+      .get()
+    if (!t) throw new Error('所选文件不是有效的 Framora 索引库备份')
+  } finally {
+    probe.close()
+  }
+  closeDb()
+  const target = path.join(app.getPath('userData'), 'framora.db')
+  const stamp = Date.now()
+  for (const suffix of ['', '-wal', '-shm']) {
+    const src = target + suffix
+    try {
+      if (fs.existsSync(src)) fs.renameSync(src, `${target}.pre-import-${stamp}${suffix}`)
+    } catch {
+      /* 单个改名失败不阻塞导入 */
+    }
+  }
+  fs.copyFileSync(srcFile, target)
+  await openAndMigrate()
+  markPhashDirty()
+}
+
 /* ---------- settings ---------- */
 
 export function getSetting(key: string): string | null {
@@ -892,19 +927,24 @@ export function listPhashes(): { id: number; lo: number; hi: number }[] {
   ).all() as { id: number; lo: number; hi: number }[]
 }
 
-/** 聚类结果缓存：哈希变化后置脏，下次查询重算 */
-let dupCache: number[] | null = null
+/** 聚类结果缓存（保留簇边界）：哈希/缺失/删除变化后置脏，下次查询重算 */
+let dupClustersCache: number[][] | null = null
 
 export function markPhashDirty(): void {
-  dupCache = null
+  dupClustersCache = null
 }
 
-/** 疑似重复照片 id（按簇顺序排列，仅含成员数 ≥ 2 的簇） */
-export function duplicatePhotoIds(): number[] {
-  if (dupCache) return dupCache
+/** 疑似重复簇（仅含成员数 ≥ 2 的簇） */
+export function duplicateClusters(): number[][] {
+  if (dupClustersCache) return dupClustersCache
   const rows = listPhashes().sort((a, b) => a.id - b.id)
-  dupCache = clusterPhashes(rows).flat()
-  return dupCache
+  dupClustersCache = clusterPhashes(rows).filter((c) => c.length >= 2)
+  return dupClustersCache
+}
+
+/** 疑似重复照片 id（按簇顺序排列） */
+export function duplicatePhotoIds(): number[] {
+  return duplicateClusters().flat()
 }
 
 /** 按簇顺序查询疑似重复照片（支持分页） */

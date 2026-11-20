@@ -26,7 +26,18 @@ export const IMAGE_EXTS = new Set([
   '.tif',
   '.tiff',
   '.heic',
-  '.heif'
+  '.heif',
+  // RAW（TIFF/ISO-BMFF 容器）：元数据走 exifr，显示像素取嵌入预览
+  '.cr2',
+  '.cr3',
+  '.nef',
+  '.nrw',
+  '.arw',
+  '.raf',
+  '.dng',
+  '.rw2',
+  '.orf',
+  '.pef'
 ])
 
 export function isImagePath(p: string): boolean {

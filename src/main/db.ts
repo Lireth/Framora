@@ -658,6 +658,14 @@ export function renameTag(id: number, name: string): void {
   recomputeSearchText(affected)
 }
 
+export function setTagColor(id: number, color: string | null): void {
+  stmt('UPDATE tags SET color = ? WHERE id = ?').run(color, id)
+}
+
+export function setAlbumColor(id: number, color: string | null): void {
+  stmt('UPDATE albums SET color = ? WHERE id = ?').run(color, id)
+}
+
 export function deleteTag(id: number): void {
   const affected = (
     stmt('SELECT photo_id FROM photo_tags WHERE tag_id = ?').all(id) as { photo_id: number }[]
@@ -707,7 +715,8 @@ export function batchRate(ids: number[], rating: number): void {
 export function listAlbums(): AlbumInfo[] {
   return stmt(
     `SELECT a.id, a.name, a.color, a.created_at,
-      (SELECT COUNT(*) FROM album_photos ap WHERE ap.album_id = a.id) AS count
+      (SELECT COUNT(*) FROM album_photos ap WHERE ap.album_id = a.id) AS count,
+      (SELECT ap.photo_id FROM album_photos ap WHERE ap.album_id = a.id LIMIT 1) AS cover_id
      FROM albums a ORDER BY a.created_at ASC`
   ).all() as AlbumInfo[]
 }

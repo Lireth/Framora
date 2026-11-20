@@ -6,6 +6,7 @@ import {
   FolderPlus,
   Image,
   Images,
+  Palette,
   Pencil,
   RefreshCw,
   Tag,
@@ -16,7 +17,33 @@ import { api } from '../lib/api'
 import { importFolderAction } from '../lib/actions'
 import { cn, ContextMenu, type MenuItem } from './ui'
 import { useState } from 'react'
-import { formatCount } from '../lib/format'
+import { formatCount, thumbUrl } from '../lib/format'
+
+/** 标签/相册颜色预设 */
+const COLOR_PRESETS = [
+  '#e0533d',
+  '#e2983d',
+  '#d9c23d',
+  '#7fb069',
+  '#4f9dd0',
+  '#7a6fd0',
+  '#d06fb8',
+  '#8a8a8a'
+]
+
+function colorMenu(onPick: (color: string | null) => void): MenuItem[] {
+  return [
+    ...COLOR_PRESETS.map(
+      (c): MenuItem => ({
+        label: c,
+        icon: <span className="inline-block h-3 w-3 rounded-full border border-line" style={{ background: c }} />,
+        onClick: () => void onPick(c)
+      })
+    ),
+    { separator: true },
+    { label: '默认颜色', onClick: () => void onPick(null) }
+  ]
+}
 
 function SectionHeader({
   title,
@@ -126,6 +153,16 @@ export function Sidebar(): React.JSX.Element {
         setRenameValue(name)
       }
     },
+    {
+      label: '颜色',
+      icon: <Palette size={13} />,
+      submenu: colorMenu((c) =>
+        api
+          .setAlbumColor(id, c)
+          .then(() => useStore.getState().refreshLibrary())
+          .catch(() => undefined)
+      )
+    },
     { separator: true },
     {
       label: '删除相册',
@@ -151,6 +188,16 @@ export function Sidebar(): React.JSX.Element {
         setRename({ kind: 'tag', id, name })
         setRenameValue(name)
       }
+    },
+    {
+      label: '颜色',
+      icon: <Palette size={13} />,
+      submenu: colorMenu((c) =>
+        api
+          .setTagColor(id, c)
+          .then(() => useStore.getState().refreshLibrary())
+          .catch(() => undefined)
+      )
     },
     { separator: true },
     {
@@ -248,7 +295,20 @@ export function Sidebar(): React.JSX.Element {
       {albums.map((a) => (
         <NavRow
           key={a.id}
-          icon={<Images size={15} />}
+          icon={
+            a.cover_id ? (
+              <img
+                src={thumbUrl({ id: a.cover_id, thumb_ts: a.count })}
+                alt=""
+                className="h-[22px] w-[22px] rounded object-cover"
+                draggable={false}
+              />
+            ) : a.color ? (
+              <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: a.color }} />
+            ) : (
+              <Images size={15} />
+            )
+          }
           label={a.name}
           count={a.count}
           active={scope === 'album' && scopeId === a.id}

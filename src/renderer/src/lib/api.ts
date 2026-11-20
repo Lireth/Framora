@@ -75,12 +75,15 @@ export const api = {
   createTag: (name: string, color: string | null): Promise<TagInfo> =>
     call('tags:create', name, color),
   renameTag: (id: number, name: string): Promise<void> => call('tags:rename', id, name),
+  setTagColor: (id: number, color: string | null): Promise<void> => call('tags:setColor', id, color),
   deleteTag: (id: number): Promise<void> => call('tags:delete', id),
 
   listAlbums: (): Promise<AlbumInfo[]> => call('albums:list'),
   createAlbum: (name: string, color: string | null): Promise<number> =>
     call('albums:create', name, color),
   renameAlbum: (id: number, name: string): Promise<void> => call('albums:rename', id, name),
+  setAlbumColor: (id: number, color: string | null): Promise<void> =>
+    call('albums:setColor', id, color),
   deleteAlbum: (id: number): Promise<void> => call('albums:delete', id),
 
   setTheme: (mode: ThemeMode): Promise<void> => call('window:setTheme', mode),

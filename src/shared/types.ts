@@ -50,6 +50,8 @@ export interface AlbumInfo {
   color: string | null
   count: number
   created_at: number
+  /** 相册封面照片 id（相册内第一张照片，空相册为 undefined） */
+  cover_id?: number | null
 }
 
 export type PhotoScope = 'all' | 'recent' | 'missing' | 'folder' | 'album' | 'tag' | 'untagged'

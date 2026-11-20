@@ -228,6 +228,7 @@ export function registerIpc(): void {
     db.createTag(name.trim(), color)
   )
   ipcMain.handle('tags:rename', (_e, id: number, name: string) => db.renameTag(id, name.trim()))
+  ipcMain.handle('tags:setColor', (_e, id: number, color: string | null) => db.setTagColor(id, color))
   ipcMain.handle('tags:delete', (_e, id: number) => db.deleteTag(id))
   ipcMain.handle('photos:setTags', (_e, photoId: number, tagIds: number[]) =>
     db.setPhotoTags(photoId, tagIds)
@@ -254,6 +255,9 @@ export function registerIpc(): void {
     db.createAlbum(name.trim(), color)
   )
   ipcMain.handle('albums:rename', (_e, id: number, name: string) => db.renameAlbum(id, name.trim()))
+  ipcMain.handle('albums:setColor', (_e, id: number, color: string | null) =>
+    db.setAlbumColor(id, color)
+  )
   ipcMain.handle('albums:delete', (_e, id: number) => db.deleteAlbum(id))
 
   /* ---------- window / theme ---------- */

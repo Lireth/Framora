@@ -10,6 +10,11 @@ import { thumbsDir, enqueueThumb } from './thumbs'
 
 const isDev = !app.isPackaged
 
+// 测试隔离：允许通过环境变量重定向 userData 目录（冒烟测试避免污染真实资料库）
+if (process.env['FRAMORA_USER_DATA']) {
+  app.setPath('userData', process.env['FRAMORA_USER_DATA'])
+}
+
 protocol.registerSchemesAsPrivileged([
   { scheme: 'media', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
   { scheme: 'thumb', privileges: { standard: true, secure: true, supportFetchAPI: true } }

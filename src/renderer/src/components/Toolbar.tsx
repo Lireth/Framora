@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { Clock, FilePlus, FolderPlus, Info, LayoutGrid, Search, SlidersHorizontal, Trash2, X } from 'lucide-react'
+import { Clock, FilePlus, FolderPlus, Grid3x3, Info, LayoutGrid, Search, SlidersHorizontal, Square, Trash2, X } from 'lucide-react'
 import { useStore, type SortKey } from '../store'
 import { importFilesAction, importFolderAction, selectRedundantAction } from '../lib/actions'
 import { cn, IconButton, StarRating, useOutsideClose } from './ui'
@@ -264,7 +264,13 @@ export function Toolbar(): React.JSX.Element {
               tile === t ? 'bg-accent-soft text-accent' : 'text-ink3 hover:bg-hover hover:text-ink'
             )}
           >
-            <LayoutGrid size={13} strokeWidth={t === 'l' ? 2.6 : t === 'm' ? 2 : 1.5} />
+            {t === 's' ? (
+              <Grid3x3 size={13} strokeWidth={1.6} />
+            ) : t === 'm' ? (
+              <LayoutGrid size={13} strokeWidth={1.6} />
+            ) : (
+              <Square size={13} strokeWidth={1.6} />
+            )}
           </button>
         ))}
       </div>

@@ -73,6 +73,10 @@ export default function App(): React.JSX.Element {
         if (e.key === 'Escape') s.closeViewer()
         else if (e.key === 'ArrowLeft') s.stepViewer(-1)
         else if (e.key === 'ArrowRight') s.stepViewer(1)
+        else if (e.key === ' ' && t.tagName !== 'BUTTON') {
+          e.preventDefault()
+          s.closeViewer()
+        }
         return
       }
       if (s.settingsOpen || s.exportOpen || s.confirmDeleteOpen) return
@@ -81,10 +85,25 @@ export default function App(): React.JSX.Element {
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
         e.preventDefault()
         s.selectAll()
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault()
+        s.navigateGrid(-1, 0)
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault()
+        s.navigateGrid(1, 0)
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        s.navigateGrid(0, -1)
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        s.navigateGrid(0, 1)
       } else if (e.key === 'Delete' && s.selection.size) {
         s.setConfirmDeleteOpen(true)
       } else if (e.key === 'Enter' && s.selection.size === 1) {
         s.openViewer([...s.selection][0])
+      } else if (e.key === ' ' && t.tagName !== 'BUTTON') {
+        e.preventDefault()
+        if (s.selection.size === 1) s.openViewer([...s.selection][0])
       }
     }
     window.addEventListener('keydown', handler)

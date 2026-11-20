@@ -82,6 +82,7 @@ export const api = {
   deleteAlbum: (id: number): Promise<void> => call('albums:delete', id),
 
   setTheme: (mode: ThemeMode): Promise<void> => call('window:setTheme', mode),
+  toggleFullscreen: (): Promise<void> => call('window:toggleFullscreen'),
   openDataDir: (): Promise<void> => call('app:openDataDir'),
   openThumbsDir: (): Promise<void> => call('app:openThumbsDir'),
   clearBackups: (): Promise<number> => call('app:clearBackups')

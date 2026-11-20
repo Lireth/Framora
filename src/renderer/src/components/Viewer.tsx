@@ -5,13 +5,16 @@ import {
   FlipHorizontal2,
   FlipVertical2,
   Loader2,
+  Maximize,
   Pencil,
   RotateCcw,
   RotateCw,
   Undo2,
   X,
   Save,
-  ExternalLink
+  ExternalLink,
+  ZoomIn,
+  ZoomOut
 } from 'lucide-react'
 import { useStore } from '../store'
 import { api } from '../lib/api'
@@ -293,6 +296,35 @@ export function Viewer(): React.JSX.Element {
     []
   )
 
+  const resetZoom = useCallback((): void => {
+    setZoom(1)
+    setOffset({ x: 0, y: 0 })
+  }, [])
+
+  /* 查看器快捷键：+/− 缩放、0 复位、F 全屏 */
+  useEffect(() => {
+    const handler = (e: KeyboardEvent): void => {
+      const t = e.target as HTMLElement
+      if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable) return
+      if (e.ctrlKey || e.metaKey || e.altKey) return
+      const k = e.key
+      if (k === '+' || k === '=') {
+        e.preventDefault()
+        zoomTo(1.25)
+      } else if (k === '-') {
+        e.preventDefault()
+        zoomTo(1 / 1.25)
+      } else if (k === '0') {
+        e.preventDefault()
+        resetZoom()
+      } else if (k.toLowerCase() === 'f') {
+        void api.toggleFullscreen().catch(() => undefined)
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [zoomTo, resetZoom])
+
   const onWheel = (e: React.WheelEvent): void => {
     e.preventDefault()
     const rect = containerRef.current?.getBoundingClientRect()
@@ -424,9 +456,41 @@ export function Viewer(): React.JSX.Element {
         </button>
       )}
 
-      {/* 缩放指示 */}
-      <div className="absolute bottom-[82px] left-3 z-20 rounded-full bg-black/45 px-2.5 py-1 text-[11px] text-white/70 backdrop-blur">
-        {Math.round(zoom * 100)}%
+      {/* 缩放与全屏控制条 */}
+      <div className="absolute bottom-[82px] left-3 z-20 flex items-center gap-0.5 rounded-full bg-black/45 px-1 py-0.5 text-[11px] text-white/70 backdrop-blur">
+        <button
+          className="grid h-7 w-7 place-items-center rounded-full hover:bg-white/15 hover:text-white"
+          onClick={() => zoomTo(1 / 1.25)}
+          aria-label="缩小 (-)"
+          title="缩小 (-)"
+        >
+          <ZoomOut size={14} />
+        </button>
+        <button
+          className="grid h-7 min-w-[46px] place-items-center rounded-full hover:bg-white/15 hover:text-white"
+          onClick={resetZoom}
+          aria-label="重置缩放 (0)"
+          title="重置缩放 (0)"
+        >
+          {Math.round(zoom * 100)}%
+        </button>
+        <button
+          className="grid h-7 w-7 place-items-center rounded-full hover:bg-white/15 hover:text-white"
+          onClick={() => zoomTo(1.25)}
+          aria-label="放大 (+)"
+          title="放大 (+)"
+        >
+          <ZoomIn size={14} />
+        </button>
+        <span className="mx-0.5 h-4 w-px bg-white/15" />
+        <button
+          className="grid h-7 w-7 place-items-center rounded-full hover:bg-white/15 hover:text-white"
+          onClick={() => api.toggleFullscreen().catch(() => undefined)}
+          aria-label="切换全屏 (F)"
+          title="切换全屏 (F)"
+        >
+          <Maximize size={13} />
+        </button>
       </div>
 
       {editOpen && (

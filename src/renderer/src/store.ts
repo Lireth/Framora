@@ -50,6 +50,8 @@ interface AppState extends Filters {
   viewerOpen: boolean
   detailOpen: boolean
   tile: 's' | 'm' | 'l'
+  gridCols: number
+  navTick: number
   scan: ScanState
   toasts: Toast[]
   settingsOpen: boolean
@@ -73,6 +75,8 @@ interface AppState extends Filters {
   stepViewer: (delta: number) => void
   toggleDetail: () => void
   setTile: (t: 's' | 'm' | 'l') => void
+  setGridCols: (n: number) => void
+  navigateGrid: (dx: number, dy: number) => void
   setScan: (s: ScanState) => void
   toast: (type: Toast['type'], text: string) => void
   dismissToast: (id: number) => void
@@ -152,6 +156,8 @@ export const useStore = create<AppState>((set, get) => ({
   viewerOpen: false,
   detailOpen: false,
   tile: 'm',
+  gridCols: 6,
+  navTick: 0,
   scan: { active: false, label: '' },
   toasts: [],
   settingsOpen: false,
@@ -306,6 +312,25 @@ export const useStore = create<AppState>((set, get) => ({
   setTile: (tile) => {
     set({ tile })
     persistViewState()
+  },
+
+  setGridCols: (n) => {
+    if (get().gridCols !== n) set({ gridCols: n })
+  },
+
+  /** 网格方向键导航：dx/dy 为位移量，移动后单选目标项并触发滚动定位 */
+  navigateGrid: (dx, dy) => {
+    const { photos, anchorId, gridCols, navTick } = get()
+    if (!photos.length) return
+    const idx = photos.findIndex((p) => p.id === anchorId)
+    if (idx < 0) {
+      set({ anchorId: photos[0].id, selection: new Set([photos[0].id]), navTick: navTick + 1 })
+      return
+    }
+    const next = Math.min(photos.length - 1, Math.max(0, idx + dx + dy * Math.max(1, gridCols)))
+    if (next === idx) return
+    const id = photos[next].id
+    set({ anchorId: id, selection: new Set([id]), navTick: navTick + 1 })
   },
 
   setScan: (scan) => set({ scan }),

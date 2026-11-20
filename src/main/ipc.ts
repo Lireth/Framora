@@ -250,6 +250,11 @@ export function registerIpc(): void {
     db.setSetting('theme', mode)
   })
 
+  ipcMain.handle('window:toggleFullscreen', () => {
+    const win = BrowserWindow.getAllWindows()[0]
+    if (win) win.setFullScreen(!win.isFullScreen())
+  })
+
   ipcMain.handle('app:openDataDir', () => {
     shell.openPath(app.getPath('userData'))
   })

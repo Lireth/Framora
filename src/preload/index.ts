@@ -36,6 +36,7 @@ const CALLABLE = new Set([
   'albums:rename',
   'albums:delete',
   'window:setTheme',
+  'window:toggleFullscreen',
   'app:openDataDir',
   'app:openThumbsDir',
   'app:clearBackups'

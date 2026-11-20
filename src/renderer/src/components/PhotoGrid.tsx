@@ -198,6 +198,9 @@ export function PhotoGrid(): React.JSX.Element {
   const photos = useStore((s) => s.photos)
   const tile = useStore((s) => s.tile)
   const loading = useStore((s) => s.loading)
+  const anchorId = useStore((s) => s.anchorId)
+  const navTick = useStore((s) => s.navTick)
+  const setGridCols = useStore((s) => s.setGridCols)
   const parentRef = useRef<HTMLDivElement>(null)
   const [width, setWidth] = useState(1200)
 
@@ -217,12 +220,26 @@ export function PhotoGrid(): React.JSX.Element {
   const tileW = Math.floor((width - (cols - 1) * GAP) / cols)
   const rowCount = Math.ceil(photos.length / cols)
 
+  // 上报列数，供方向键导航按行列位移
+  useEffect(() => {
+    setGridCols(cols)
+  }, [cols, setGridCols])
+
   const virtualizer = useVirtualizer({
     count: rowCount,
     getScrollElement: () => parentRef.current,
     estimateSize: () => tileH + GAP,
     overscan: 4
   })
+
+  // 键盘导航后把锚点所在行滚动到可视区
+  useEffect(() => {
+    if (!navTick || anchorId === null) return
+    const idx = photos.findIndex((p) => p.id === anchorId)
+    if (idx < 0) return
+    virtualizer.scrollToIndex(Math.floor(idx / cols), { align: 'auto' })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navTick])
 
   return (
     <div

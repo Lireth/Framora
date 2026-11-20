@@ -314,8 +314,9 @@ export const useStore = create<AppState>((set, get) => ({
         selection,
         lastQueryKey: queryKey
       })
-    } catch {
+    } catch (err) {
       set({ loading: false })
+      get().toast('error', `照片查询失败：${err instanceof Error ? err.message : String(err)}`)
     }
   },
 
@@ -340,8 +341,9 @@ export const useStore = create<AppState>((set, get) => ({
         hasMore: merged.length < r.total,
         loadingMore: false
       })
-    } catch {
+    } catch (err) {
       set({ loadingMore: false })
+      get().toast('error', `加载更多失败：${err instanceof Error ? err.message : String(err)}`)
     }
   },
 
@@ -373,8 +375,9 @@ export const useStore = create<AppState>((set, get) => ({
     try {
       const ids = await api.queryPhotoIds(q)
       set({ selection: new Set(ids), anchorId: null, lastQueryKey: JSON.stringify(q) })
-    } catch {
-      /* 查询失败保持原选择 */
+    } catch (err) {
+      // 查询失败保持原选择，但需让用户可见
+      get().toast('error', `全选失败：${err instanceof Error ? err.message : String(err)}`)
     }
   },
 

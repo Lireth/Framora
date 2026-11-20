@@ -176,6 +176,15 @@ export interface ImportResult {
   found: number
 }
 
+export interface ImportFilesResult {
+  /** 资料库内直接入库的数量 */
+  indexed: number
+  /** 资料库外复制到目标文件夹后入库的数量 */
+  copied: number
+  /** 非图片 / 复制失败 / 取消目标选择而跳过的数量 */
+  skipped: number
+}
+
 export interface AppInfo {
   version: string
   electron: string

@@ -4,16 +4,17 @@ import exifr from 'exifr'
 import sharp from 'sharp'
 import { BrowserWindow, dialog, ipcMain, shell, app } from 'electron'
 import * as db from './db'
-import { importFolder } from './scanner'
+import { IMAGE_EXTS, importFolder, isImagePath, trackNewFile } from './scanner'
 import { cleanupOrphanThumbs, enqueueThumb, rebuildAllThumbs, thumbPath, thumbsDir } from './thumbs'
 import { startWatcher, stopWatcher } from './watcher'
-import { clearAllBackups, applyTemplate, exportPhotos, revertEdits, saveEdits } from './imageops'
+import { clearAllBackups, applyTemplate, exportPhotos, pickName, revertEdits, saveEdits } from './imageops'
 import { suppressTracking } from './scanner'
 import { logsDir, logError } from './log'
 import { listFolders } from './db'
 import type {
   EditSpec,
   ExportOptions,
+  FolderInfo,
   MetaPair,
   PhotoQuery,
   SmartAlbumQuery,
@@ -52,6 +53,16 @@ export function registerIpc(): void {
     return r.canceled ? null : r.filePaths[0]
   })
 
+  ipcMain.handle('dialog:pickFiles', async () => {
+    const win = BrowserWindow.getFocusedWindow()
+    const r = await dialog.showOpenDialog(win!, {
+      title: '选择要导入的照片',
+      properties: ['openFile', 'multiSelections'],
+      filters: [{ name: '图片', extensions: [...IMAGE_EXTS].map((e) => e.slice(1)) }]
+    })
+    return r.canceled ? null : r.filePaths
+  })
+
   /* ---------- library ---------- */
   ipcMain.handle('library:listFolders', () => listFolders())
 
@@ -60,6 +71,65 @@ export function registerIpc(): void {
     const folder = db.getFolderByPath(folderPath)
     if (folder) await startWatcher(folder.id, folder.path)
     return result
+  })
+
+  ipcMain.handle('library:importFiles', async (_e, filePaths: string[]) => {
+    // 资料库内文件直接入库；库外文件复制到用户选择的目标文件夹后入库（复制式导入）
+    const folders = listFolders()
+    const internal: { folderId: number; path: string }[] = []
+    const external: string[] = []
+    let skipped = 0
+    for (const p of filePaths) {
+      if (!isImagePath(p)) {
+        skipped++
+        continue
+      }
+      const owner = findOwnerFolder(p, folders)
+      if (owner) internal.push({ folderId: owner.id, path: p })
+      else external.push(p)
+    }
+    let copied = 0
+    if (external.length) {
+      const win = BrowserWindow.getFocusedWindow()
+      const r = await dialog.showOpenDialog(win!, {
+        title: '选择库外照片的导入目标文件夹',
+        properties: ['openDirectory', 'createDirectory']
+      })
+      if (r.canceled) {
+        skipped += external.length
+      } else {
+        const dest = r.filePaths[0]
+        await fs.promises.mkdir(dest, { recursive: true })
+        const used = new Set<string>()
+        const copiedPaths: string[] = []
+        for (const src of external) {
+          try {
+            const ext = path.extname(src).toLowerCase().slice(1)
+            const base = path.basename(src, path.extname(src))
+            const { outPath } = pickName(dest, base, ext, used)
+            await fs.promises.copyFile(src, outPath)
+            used.add(outPath.toLowerCase())
+            copiedPaths.push(outPath)
+          } catch (err) {
+            logError('importFiles', err)
+          }
+        }
+        copied = copiedPaths.length
+        skipped += external.length - copied
+        if (copiedPaths.length) {
+          // 目标已在某资料库内则逐文件入库，避免把子目录注册成嵌套根；否则按新文件夹导入并监听
+          const owner = findOwnerFolder(dest, listFolders())
+          if (owner) {
+            for (const op of copiedPaths) trackNewFile(owner.id, op)
+          } else {
+            const res = await importFolder(dest)
+            await startWatcher(res.folderId, dest)
+          }
+        }
+      }
+    }
+    for (const f of internal) trackNewFile(f.folderId, f.path)
+    return { indexed: internal.length, copied, skipped }
   })
 
   ipcMain.handle('library:rescan', async (_e, folderId: number) => {
@@ -374,6 +444,22 @@ export function registerIpc(): void {
 }
 
 /* ---------- helpers ---------- */
+
+/** 找到包含该路径的资料库根文件夹（最长前缀匹配，Windows 路径大小写不敏感） */
+function findOwnerFolder(filePath: string, folders: FolderInfo[]): FolderInfo | null {
+  const rp = path.resolve(filePath).toLowerCase()
+  let best: FolderInfo | null = null
+  let bestLen = -1
+  for (const f of folders) {
+    const r = path.resolve(f.path).toLowerCase()
+    const prefix = r.endsWith(path.sep) ? r : r + path.sep
+    if ((rp === r || rp.startsWith(prefix)) && r.length > bestLen) {
+      best = f
+      bestLen = r.length
+    }
+  }
+  return best
+}
 
 /** EXIF 解析结果 LRU 缓存（键 path|mtime，重复查看同一照片免重复解析大文件） */
 const EXIF_CACHE_MAX = 200

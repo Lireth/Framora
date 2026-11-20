@@ -334,14 +334,18 @@ export function addFolder(folderPath: string, name: string): number {
 
 export function removeFolderRows(folderId: number): PhotoLite[] {
   const rows = stmt('SELECT * FROM photos WHERE folder_id = ?').all(folderId) as PhotoLite[]
-  stmt(
-    `DELETE FROM photo_tags WHERE photo_id IN (SELECT id FROM photos WHERE folder_id = ?)`
-  ).run(folderId)
-  stmt(
-    `DELETE FROM album_photos WHERE photo_id IN (SELECT id FROM photos WHERE folder_id = ?)`
-  ).run(folderId)
-  stmt('DELETE FROM photos WHERE folder_id = ?').run(folderId)
-  stmt('DELETE FROM folders WHERE id = ?').run(folderId)
+  const run = db.transaction(() => {
+    stmt(
+      `DELETE FROM photo_tags WHERE photo_id IN (SELECT id FROM photos WHERE folder_id = ?)`
+    ).run(folderId)
+    stmt(
+      `DELETE FROM album_photos WHERE photo_id IN (SELECT id FROM photos WHERE folder_id = ?)`
+    ).run(folderId)
+    stmt('DELETE FROM photos WHERE folder_id = ?').run(folderId)
+    stmt('DELETE FROM folders WHERE id = ?').run(folderId)
+  })
+  run()
+  markPhashDirty()
   return rows
 }
 
@@ -469,6 +473,8 @@ export function updatePhotoFileFields(
   }
   if (!sets.length) return
   stmt(`UPDATE photos SET ${sets.join(', ')} WHERE id = @id`).run(params)
+  // 缺失状态影响重复簇成员，需使聚类缓存失效
+  if (fields.missing !== undefined) markPhashDirty()
 }
 
 /** 批量重命名后更新索引中的路径与文件名，并重算搜索文本 */
@@ -561,6 +567,7 @@ export function deletePhotoRows(ids: number[]): void {
     }
   })
   run()
+  markPhashDirty()
 }
 
 /** 将 PhotoQuery 组装为 WHERE 子句与参数（queryPhotos / queryPhotoIds 共用） */
@@ -874,7 +881,7 @@ export function listPhotosForPhash(): { id: number; path: string }[] {
 
 export function listPhashes(): { id: number; lo: number; hi: number }[] {
   return stmt(
-    'SELECT id, phash_lo AS lo, phash_hi AS hi FROM photos WHERE phash_lo IS NOT NULL'
+    'SELECT id, phash_lo AS lo, phash_hi AS hi FROM photos WHERE phash_lo IS NOT NULL AND missing = 0'
   ).all() as { id: number; lo: number; hi: number }[]
 }
 

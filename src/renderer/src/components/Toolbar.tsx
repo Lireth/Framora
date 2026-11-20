@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { Clock, FolderPlus, Info, LayoutGrid, Search, SlidersHorizontal, Trash2, X } from 'lucide-react'
+import { Clock, FilePlus, FolderPlus, Info, LayoutGrid, Search, SlidersHorizontal, Trash2, X } from 'lucide-react'
 import { useStore, type SortKey } from '../store'
-import { importFolderAction } from '../lib/actions'
+import { importFilesAction, importFolderAction } from '../lib/actions'
 import { cn, IconButton, StarRating, useOutsideClose } from './ui'
 
 function useScopeLabel(): string {
@@ -256,8 +256,16 @@ export function Toolbar(): React.JSX.Element {
       />
 
       <button
+        onClick={() => void importFilesAction()}
+        className="ml-1 flex h-8 items-center gap-1.5 rounded-md border border-line px-3 text-[12.5px] font-medium text-ink2 transition-colors hover:bg-hover hover:text-ink"
+      >
+        <FilePlus size={14} />
+        导入文件
+      </button>
+
+      <button
         onClick={() => importFolderAction()}
-        className="ml-1 flex h-8 items-center gap-1.5 rounded-md bg-[var(--c-accent)] px-3 text-[12.5px] font-medium text-[#171310] transition-colors hover:bg-[var(--c-accent-hover)]"
+        className="flex h-8 items-center gap-1.5 rounded-md bg-[var(--c-accent)] px-3 text-[12.5px] font-medium text-[#171310] transition-colors hover:bg-[var(--c-accent-hover)]"
       >
         <FolderPlus size={14} />
         导入文件夹

@@ -22,6 +22,29 @@ export async function importFolderAction(): Promise<void> {
   }
 }
 
+/** 选择单张/多张照片导入（库内直接入库，库外复制入目标文件夹） */
+export async function importFilesAction(): Promise<void> {
+  const s = useStore.getState()
+  try {
+    const paths = await api.pickFiles()
+    if (!paths || !paths.length) return
+    const r = await api.importFiles(paths)
+    const parts: string[] = []
+    if (r.indexed) parts.push(`入库 ${r.indexed} 张`)
+    if (r.copied) parts.push(`复制导入 ${r.copied} 张`)
+    if (r.skipped) parts.push(`跳过 ${r.skipped} 张`)
+    if (parts.length) {
+      s.toast('success', `导入文件：${parts.join('，')}`)
+    } else {
+      s.toast('info', '导入文件：没有新增照片')
+    }
+    await s.refreshLibrary()
+    s.refreshPhotos()
+  } catch (e) {
+    useStore.getState().toast('error', e instanceof Error ? e.message : '导入文件失败')
+  }
+}
+
 /** 删除（移入回收站）所选照片 */
 export async function deletePhotosAction(ids: number[]): Promise<void> {
   if (!ids.length) return

@@ -29,6 +29,13 @@ import {
 import { suppressTracking } from './scanner'
 import { logsDir, logError } from './log'
 import { listFolders } from './db'
+import {
+  cancelUpdateDownload,
+  checkForUpdates,
+  downloadUpdate,
+  getUpdateState,
+  installUpdate
+} from './updater'
 import type {
   EditSpec,
   ExportOptions,
@@ -540,6 +547,13 @@ export function registerIpc(): void {
     }
     win.webContents.startDrag({ file: row.path, files: [row.path], icon })
   })
+
+  /* ---------- update（手动检查，隐私优先） ---------- */
+  ipcMain.handle('update:check', () => checkForUpdates())
+  ipcMain.handle('update:download', () => downloadUpdate())
+  ipcMain.handle('update:cancelDownload', () => cancelUpdateDownload())
+  ipcMain.handle('update:install', () => installUpdate())
+  ipcMain.handle('update:getState', () => getUpdateState())
 }
 
 /* ---------- helpers ---------- */

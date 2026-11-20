@@ -63,7 +63,12 @@ const CALLABLE = new Set([
   'app:openThumbsDir',
   'app:clearBackups',
   'app:openLogsDir',
-  'app:dragOutPhotos'
+  'app:dragOutPhotos',
+  'update:check',
+  'update:download',
+  'update:cancelDownload',
+  'update:install',
+  'update:getState'
 ])
 
 const EVENTS = new Set([
@@ -72,6 +77,7 @@ const EVENTS = new Set([
   'evt:watch',
   'evt:library',
   'evt:export',
+  'evt:update',
   'evt:maximize'
 ])
 

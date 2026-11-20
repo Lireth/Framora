@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useEffect, useState } from 'react'
 import {
   Database,
   Download,
@@ -12,9 +12,41 @@ import {
   Upload
 } from 'lucide-react'
 import { useStore } from '../store'
-import { api } from '../lib/api'
+import { api, onEvent } from '../lib/api'
 import { cn, ConfirmDialog, Modal, PrimaryButton } from './ui'
-import { useState } from 'react'
+import type { UpdateState } from '@shared/types'
+
+/** 更新流程 UI 状态机（主进程事件流驱动） */
+type UpdateUi =
+  | { kind: 'idle' }
+  | { kind: 'checking' }
+  | { kind: 'uptodate' }
+  | { kind: 'available'; version: string }
+  | { kind: 'downloading'; percent: number }
+  | { kind: 'downloaded'; version: string }
+  | { kind: 'error'; message: string }
+
+function mapUpdateState(s: UpdateState): UpdateUi {
+  switch (s.phase) {
+    case 'available':
+      return { kind: 'available', version: s.version ?? '' }
+    case 'up-to-date':
+      return { kind: 'uptodate' }
+    case 'downloading':
+      return { kind: 'downloading', percent: s.percent ?? 0 }
+    case 'downloaded':
+      return { kind: 'downloaded', version: s.version ?? '' }
+    case 'error':
+      return { kind: 'error', message: s.message ?? '' }
+    default:
+      return { kind: 'idle' }
+  }
+}
+
+const UPD_BTN_NEUTRAL =
+  'rounded-md border border-line px-2.5 py-1 text-[11.5px] text-ink2 transition-colors hover:bg-hover hover:text-ink'
+const UPD_BTN_ACCENT =
+  'rounded-md bg-[var(--c-accent)] px-2.5 py-1 text-[11.5px] font-medium text-[#171310] transition-colors hover:bg-[var(--c-accent-hover)]'
 
 export function SettingsModal(): React.JSX.Element | null {
   const open = useStore((s) => s.settingsOpen)
@@ -25,6 +57,47 @@ export function SettingsModal(): React.JSX.Element | null {
   const [rebuildOpen, setRebuildOpen] = useState(false)
   const [clearBackupsOpen, setClearBackupsOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
+  const [upd, setUpd] = useState<UpdateUi>({ kind: 'idle' })
+
+  // 更新流程事件 → UI 状态机
+  useEffect(() => onEvent('evt:update', (d) => setUpd(mapUpdateState(d as UpdateState))), [])
+
+  // 打开设置时恢复进行中的更新状态（如下载进度）
+  useEffect(() => {
+    if (!open) return
+    api
+      .getUpdateState()
+      .then((s) => setUpd(mapUpdateState(s)))
+      .catch(() => undefined)
+  }, [open])
+
+  const runCheck = async (): Promise<void> => {
+    setUpd({ kind: 'checking' })
+    try {
+      const r = await api.checkForUpdate()
+      if (r.status === 'dev') {
+        setUpd({ kind: 'idle' })
+        useStore.getState().toast('info', '开发模式不支持检查更新')
+      } else if (r.status === 'available' && r.version) {
+        setUpd({ kind: 'available', version: r.version })
+      } else if (r.status === 'up-to-date') {
+        setUpd({ kind: 'uptodate' })
+      } else {
+        setUpd({ kind: 'error', message: r.error ?? '检查失败' })
+      }
+    } catch (e) {
+      setUpd({ kind: 'error', message: e instanceof Error ? e.message : '检查失败' })
+    }
+  }
+
+  const runDownload = async (): Promise<void> => {
+    try {
+      // 成功/进度由 evt:update 事件流推进到 downloaded
+      await api.downloadUpdate()
+    } catch (e) {
+      setUpd({ kind: 'error', message: e instanceof Error ? e.message : '下载失败' })
+    }
+  }
 
   return (
     <>
@@ -150,8 +223,64 @@ export function SettingsModal(): React.JSX.Element | null {
               <p className="font-semibold text-ink">拾帧 Framora {appVersion || ''}</p>
               <p>Windows 本地写真照片管理 · Electron + React + SQLite + sharp</p>
               <p className="text-[11px] text-ink3">
-                所有数据均保存在本机，不上传任何内容到网络。
+                所有数据均保存在本机，不主动联网；仅在手动检查更新时访问 GitHub。
               </p>
+              <div className="mt-2.5 flex min-h-[26px] flex-wrap items-center gap-2">
+                {(upd.kind === 'idle' || upd.kind === 'uptodate' || upd.kind === 'error') && (
+                  <>
+                    <button className={UPD_BTN_NEUTRAL} onClick={() => void runCheck()}>
+                      检查更新
+                    </button>
+                    {upd.kind === 'uptodate' && (
+                      <span className="text-[11px] text-ink3">已是最新版本</span>
+                    )}
+                    {upd.kind === 'error' && (
+                      <span className="truncate text-[11px] text-red-400" title={upd.message}>
+                        检查失败：{upd.message}
+                      </span>
+                    )}
+                  </>
+                )}
+                {upd.kind === 'checking' && (
+                  <span className="text-[11px] text-ink3">正在检查…</span>
+                )}
+                {upd.kind === 'available' && (
+                  <>
+                    <span className="text-[11.5px] text-ink2">发现新版本 v{upd.version}</span>
+                    <button className={UPD_BTN_ACCENT} onClick={() => void runDownload()}>
+                      下载更新
+                    </button>
+                  </>
+                )}
+                {upd.kind === 'downloading' && (
+                  <>
+                    <div className="h-1 min-w-[80px] flex-1 overflow-hidden rounded bg-line">
+                      <div
+                        className="h-full bg-[var(--c-accent)] transition-all"
+                        style={{ width: `${upd.percent}%` }}
+                      />
+                    </div>
+                    <span className="text-[11px] text-ink3">{upd.percent}%</span>
+                    <button
+                      className={UPD_BTN_NEUTRAL}
+                      onClick={() => void api.cancelUpdateDownload().catch(() => undefined)}
+                    >
+                      取消
+                    </button>
+                  </>
+                )}
+                {upd.kind === 'downloaded' && (
+                  <>
+                    <span className="text-[11.5px] text-ink2">更新已就绪 v{upd.version}</span>
+                    <button
+                      className={UPD_BTN_ACCENT}
+                      onClick={() => void api.installUpdate().catch(() => undefined)}
+                    >
+                      安装并重启
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
           </div>
         </div>

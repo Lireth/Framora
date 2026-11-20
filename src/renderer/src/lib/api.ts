@@ -13,6 +13,8 @@ import type {
   LibraryStats,
   PhotoQuery,
   PhotoRecord,
+  UpdateCheckResult,
+  UpdateState,
   QueryResult,
   SmartAlbumInfo,
   SmartAlbumQuery,
@@ -119,7 +121,13 @@ export const api = {
   openThumbsDir: (): Promise<void> => call('app:openThumbsDir'),
   clearBackups: (): Promise<number> => call('app:clearBackups'),
   openLogsDir: (): Promise<void> => call('app:openLogsDir'),
-  dragOutPhotos: (ids: number[]): Promise<void> => call('app:dragOutPhotos', ids)
+  dragOutPhotos: (ids: number[]): Promise<void> => call('app:dragOutPhotos', ids),
+
+  checkForUpdate: (): Promise<UpdateCheckResult> => call('update:check'),
+  downloadUpdate: (): Promise<void> => call('update:download'),
+  cancelUpdateDownload: (): Promise<void> => call('update:cancelDownload'),
+  installUpdate: (): Promise<void> => call('update:install'),
+  getUpdateState: (): Promise<UpdateState> => call('update:getState')
 }
 
 export type EventChannel =
@@ -128,6 +136,7 @@ export type EventChannel =
   | 'evt:watch'
   | 'evt:library'
   | 'evt:export'
+  | 'evt:update'
   | 'evt:maximize'
 export const onEvent = (channel: EventChannel, cb: (data: never) => void): (() => void) =>
   window.framora.on(channel, cb as (data: unknown) => void)

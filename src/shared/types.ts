@@ -214,3 +214,29 @@ export interface AppInfo {
 }
 
 export type ThemeMode = 'dark' | 'light'
+
+/** 手动检查更新的结果 */
+export interface UpdateCheckResult {
+  /** dev：开发模式无更新配置；up-to-date：已是最新；available：有新版本；error：检查失败 */
+  status: 'dev' | 'up-to-date' | 'available' | 'error'
+  /** 新版本号（available 时） */
+  version?: string
+  error?: string
+}
+
+/** 更新流程事件（下载进度等） */
+export interface UpdateEvent {
+  phase: 'available' | 'up-to-date' | 'downloading' | 'downloaded' | 'error'
+  version?: string
+  /** 下载进度 0-100 */
+  percent?: number
+  message?: string
+}
+
+/** 更新流程状态快照（主进程持有，供设置页重开时恢复） */
+export interface UpdateState {
+  phase: 'idle' | 'available' | 'up-to-date' | 'downloading' | 'downloaded' | 'error'
+  version?: string
+  percent?: number
+  message?: string
+}

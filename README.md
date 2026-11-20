@@ -62,6 +62,8 @@ npm run dist       # 打包 NSIS 安装包到 release/
 
 打包产物：`release/Framora-<版本>-setup.exe`（NSIS 安装程序，支持自选目录 / 桌面与开始菜单快捷方式）。
 
+发布与更新：推送 `v*` 标签后 CI 自动构建并创建 GitHub Release（含安装包、`latest.yml` 与 blockmap）；应用内「设置 → 关于 → 检查更新」手动检查、下载（带进度/可取消）并安装重启，应用不主动联网。
+
 ### 安装脚本与原生模块说明
 
 项目依赖 `better-sqlite3` 与 `sharp` 两个原生模块：

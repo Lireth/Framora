@@ -4,6 +4,9 @@ on:
   push:
     tags: ['v*']
 
+permissions:
+  contents: write
+
 jobs:
   dist:
     runs-on: windows-latest
@@ -27,8 +30,11 @@ jobs:
       - name: Build installer
         run: npm run dist
 
-      - name: Upload installer
-        uses: actions/upload-artifact@v4
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: framora-windows-installer
-          path: release/*.exe
+          generate_release_notes: true
+          files: |
+            release/*.exe
+            release/latest.yml
+            release/*.blockmap

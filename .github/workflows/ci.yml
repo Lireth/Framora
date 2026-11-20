@@ -31,3 +31,25 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      - name: UI smoke test
+        shell: pwsh
+        run: |
+          node scripts/gen-testdata.mjs 300
+          $env:FRAMORA_USER_DATA = Join-Path $env:RUNNER_TEMP 'framora-ui-test-data'
+          $proc = Start-Process -FilePath "$PWD\node_modules\.bin\electron.cmd" `
+            -ArgumentList '.', '--remote-debugging-port=9222' -PassThru
+          $ready = $false
+          for ($i = 0; $i -lt 30; $i++) {
+            Start-Sleep -Seconds 2
+            try { Invoke-RestMethod 'http://127.0.0.1:9222/json/version' | Out-Null; $ready = $true; break } catch {}
+          }
+          if (-not $ready) {
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+            Write-Error 'Electron CDP 端口未就绪'
+            exit 1
+          }
+          node scripts/ui-test.mjs 9222
+          $code = $LASTEXITCODE
+          Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+          exit $code

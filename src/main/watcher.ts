@@ -1,9 +1,9 @@
 import path from 'node:path'
-import chokidar from 'chokidar'
+import chokidar, { type FSWatcher } from 'chokidar'
 import { IMAGE_EXTS, trackChangedFile, trackDeletedFile, trackNewFile } from './scanner'
 import { logError } from './log'
 
-const watchers = new Map<number, chokidar.FSWatcher>()
+const watchers = new Map<number, FSWatcher>()
 
 export async function startWatcher(folderId: number, root: string): Promise<void> {
   if (watchers.has(folderId)) return

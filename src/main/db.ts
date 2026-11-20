@@ -111,14 +111,18 @@ const MIGRATIONS: ((db: Database.Database) => void)[] = [
         search_text, content='photos', content_rowid='id', tokenize='trigram'
       );
       CREATE TRIGGER IF NOT EXISTS photos_fts_insert AFTER INSERT ON photos BEGIN
-        INSERT INTO photos_fts(rowid, search_text) VALUES (new.id, new.search_text);
+        INSERT INTO photos_fts(rowid, search_text)
+          SELECT new.id, new.search_text WHERE new.search_text <> '';
       END;
       CREATE TRIGGER IF NOT EXISTS photos_fts_delete AFTER DELETE ON photos BEGIN
-        INSERT INTO photos_fts(photos_fts, rowid, search_text) VALUES ('delete', old.id, old.search_text);
+        INSERT INTO photos_fts(photos_fts, rowid, search_text)
+          SELECT 'delete', old.id, old.search_text WHERE old.search_text <> '';
       END;
       CREATE TRIGGER IF NOT EXISTS photos_fts_update AFTER UPDATE OF search_text ON photos BEGIN
-        INSERT INTO photos_fts(photos_fts, rowid, search_text) VALUES ('delete', old.id, old.search_text);
-        INSERT INTO photos_fts(rowid, search_text) VALUES (new.id, new.search_text);
+        INSERT INTO photos_fts(photos_fts, rowid, search_text)
+          SELECT 'delete', old.id, old.search_text WHERE old.search_text <> '';
+        INSERT INTO photos_fts(rowid, search_text)
+          SELECT new.id, new.search_text WHERE new.search_text <> '';
       END;
       CREATE TRIGGER IF NOT EXISTS photos_search_insert AFTER INSERT ON photos BEGIN
         UPDATE photos SET search_text =
@@ -129,6 +133,39 @@ const MIGRATIONS: ((db: Database.Database) => void)[] = [
       END;
     `)
     // 从内容表全量重建 FTS 索引
+    db.exec(`INSERT INTO photos_fts(photos_fts) VALUES ('rebuild');`)
+  },
+  // v3: 修复 FTS 触发器 —— 外部内容表的 'delete' 命令禁止作用于从未索引的空文档，
+  //     否则静默损坏索引（表现为后续写入报 "database disk image is malformed"）。
+  //     空值不入索引、空值不发 delete；并对已迁移的存量库重建索引。
+  (db) => {
+    db.exec(`
+      DROP TRIGGER IF EXISTS photos_fts_insert;
+      DROP TRIGGER IF EXISTS photos_fts_delete;
+      DROP TRIGGER IF EXISTS photos_fts_update;
+      DROP TRIGGER IF EXISTS photos_search_insert;
+      CREATE TRIGGER photos_fts_insert AFTER INSERT ON photos BEGIN
+        INSERT INTO photos_fts(rowid, search_text)
+          SELECT new.id, new.search_text WHERE new.search_text <> '';
+      END;
+      CREATE TRIGGER photos_fts_delete AFTER DELETE ON photos BEGIN
+        INSERT INTO photos_fts(photos_fts, rowid, search_text)
+          SELECT 'delete', old.id, old.search_text WHERE old.search_text <> '';
+      END;
+      CREATE TRIGGER photos_fts_update AFTER UPDATE OF search_text ON photos BEGIN
+        INSERT INTO photos_fts(photos_fts, rowid, search_text)
+          SELECT 'delete', old.id, old.search_text WHERE old.search_text <> '';
+        INSERT INTO photos_fts(rowid, search_text)
+          SELECT new.id, new.search_text WHERE new.search_text <> '';
+      END;
+      CREATE TRIGGER photos_search_insert AFTER INSERT ON photos BEGIN
+        UPDATE photos SET search_text =
+          name || ' ' || IFNULL(title, '') || ' ' || IFNULL(description, '') || ' ' ||
+          IFNULL((SELECT group_concat(t.name, ' ') FROM photo_tags pt JOIN tags t ON t.id = pt.tag_id
+                  WHERE pt.photo_id = photos.id), '')
+        WHERE id = new.id;
+      END;
+    `)
     db.exec(`INSERT INTO photos_fts(photos_fts) VALUES ('rebuild');`)
   }
 ]

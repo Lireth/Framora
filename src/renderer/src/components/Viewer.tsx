@@ -363,14 +363,20 @@ export function Viewer(): React.JSX.Element {
     return () => window.removeEventListener('keydown', handler)
   }, [zoomTo, resetZoom])
 
-  const onWheel = (e: React.WheelEvent): void => {
-    e.preventDefault()
-    const rect = containerRef.current?.getBoundingClientRect()
-    if (!rect) return
-    const cx = e.clientX - rect.left - rect.width / 2
-    const cy = e.clientY - rect.top - rect.height / 2
-    zoomTo(e.deltaY < 0 ? 1.16 : 1 / 1.16, cx, cy)
-  }
+  // 滚轮缩放使用原生非被动监听：React 的 onWheel 为 passive，preventDefault 无效
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const handler = (e: WheelEvent): void => {
+      e.preventDefault()
+      const rect = el.getBoundingClientRect()
+      const cx = e.clientX - rect.left - rect.width / 2
+      const cy = e.clientY - rect.top - rect.height / 2
+      zoomTo(e.deltaY < 0 ? 1.16 : 1 / 1.16, cx, cy)
+    }
+    el.addEventListener('wheel', handler, { passive: false })
+    return () => el.removeEventListener('wheel', handler)
+  }, [zoomTo])
 
   const onPointerDown = (e: React.PointerEvent): void => {
     if (e.button !== 0) return
@@ -451,7 +457,6 @@ export function Viewer(): React.JSX.Element {
         ref={containerRef}
         className="absolute bottom-[74px] left-0 top-11 flex items-center justify-center overflow-hidden"
         style={{ right: editOpen ? 248 : 0 }}
-        onWheel={onWheel}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}

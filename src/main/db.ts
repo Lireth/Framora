@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3'
 import path from 'node:path'
 import fs from 'node:fs'
-import { app } from 'electron'
+import { app, dialog } from 'electron'
 import type {
   AlbumInfo,
   FolderInfo,
@@ -148,13 +148,47 @@ export async function initDb(): Promise<void> {
   const userData = app.getPath('userData')
   fs.mkdirSync(path.join(userData, 'thumbs'), { recursive: true })
   fs.mkdirSync(path.join(userData, 'backups'), { recursive: true })
-  db = new Database(path.join(userData, 'framora.db'))
+  try {
+    await openAndMigrate()
+  } catch (err) {
+    // 兜底：隔离损坏库文件并重建空库，照片文件本体不受影响
+    quarantineCorruptDb()
+    dialog.showMessageBoxSync({
+      type: 'warning',
+      title: '拾帧 Framora',
+      message: '照片索引库损坏，已自动备份损坏文件并重建空库。',
+      detail: `照片文件不受影响，请重新导入文件夹恢复索引。\n\n错误信息：${err instanceof Error ? err.message : String(err)}`
+    })
+    await openAndMigrate()
+  }
+}
+
+async function openAndMigrate(): Promise<void> {
+  db = new Database(path.join(app.getPath('userData'), 'framora.db'))
   stmtCache.clear()
   db.pragma('journal_mode = WAL')
   db.pragma('synchronous = NORMAL')
   // 迁移前先备份当前库，升级失败可回滚
   await backupDatabase()
   migrate()
+}
+
+/** 关闭句柄并将损坏的库文件（含 wal/shm）改名留存 */
+function quarantineCorruptDb(): void {
+  try {
+    db?.close()
+  } catch {
+    /* ignore */
+  }
+  const stamp = Date.now()
+  for (const suffix of ['', '-wal', '-shm']) {
+    const src = path.join(app.getPath('userData'), `framora.db${suffix}`)
+    try {
+      if (fs.existsSync(src)) fs.renameSync(src, `${src}.corrupt-${stamp}`)
+    } catch {
+      /* ignore */
+    }
+  }
 }
 
 /**

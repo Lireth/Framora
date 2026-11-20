@@ -1,6 +1,6 @@
 import path from 'node:path'
 import fs from 'node:fs'
-import { BrowserWindow, Menu, app, net, protocol, screen } from 'electron'
+import { BrowserWindow, Menu, app, dialog, net, protocol, screen } from 'electron'
 import { pathToFileURL } from 'node:url'
 import { initDb, closeDb, getSetting, setSetting, listFolders, listFolderPaths, listPhotoIdsPendingThumb } from './db'
 import { registerIpc } from './ipc'
@@ -186,7 +186,19 @@ if (!gotLock) {
   Menu.setApplicationMenu(null)
 
   app.whenReady().then(async () => {
-    await initDb()
+    try {
+      await initDb()
+    } catch (err) {
+      // 兜底重试仍失败：提示后退出，避免带病运行
+      dialog.showMessageBoxSync({
+        type: 'error',
+        title: '拾帧 Framora',
+        message: '索引库初始化失败，应用即将退出。',
+        detail: err instanceof Error ? err.message : String(err)
+      })
+      app.quit()
+      return
+    }
     registerProtocols()
     registerIpc()
     createWindow()

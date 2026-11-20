@@ -8,6 +8,7 @@ import { isImagePath } from './scanner'
 import { startWatcher, stopAllWatchers } from './watcher'
 import { thumbsDir, enqueueThumb } from './thumbs'
 import { initLogging, logError } from './log'
+import { resumePhash } from './phash'
 
 const isDev = !app.isPackaged
 
@@ -220,6 +221,8 @@ if (!gotLock) {
     for (const id of listPhotoIdsPendingThumb()) {
       enqueueThumb(id)
     }
+    // 为缺少感知哈希的存量照片补算（相似检测）
+    resumePhash()
   })
 
   app.on('window-all-closed', () => {

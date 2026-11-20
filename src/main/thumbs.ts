@@ -5,6 +5,7 @@ import sharp from 'sharp'
 import exifr from 'exifr'
 import { BrowserWindow, app } from 'electron'
 import { getPhotoRow, listAllPhotoIds, listPhotoIdsForRebuild, setPhotoDimsAndDate, setThumbStatus } from './db'
+import { enqueuePhash } from './phash'
 import { logError } from './log'
 import type { ThumbEvent } from '@shared/types'
 
@@ -98,6 +99,7 @@ async function run(id: number): Promise<void> {
       .toFile(thumbPath(id))
     setPhotoDimsAndDate(id, meta.width ?? null, meta.height ?? null, takenAt)
     setThumbStatus(id, 1)
+    enqueuePhash(id)
     emit({ id, status: 'ok' })
   } catch (err) {
     logError('thumb', err)

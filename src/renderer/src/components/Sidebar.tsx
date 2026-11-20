@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   BookmarkPlus,
   Clock,
+  Copy,
   Folder,
   FolderPlus,
   Image,
@@ -322,6 +323,12 @@ export function Sidebar(): React.JSX.Element {
         count={stats.missing}
         active={scope === 'missing'}
         onClick={() => setScope('missing')}
+      />
+      <NavRow
+        icon={<Copy size={15} />}
+        label="疑似重复"
+        active={scope === 'duplicates'}
+        onClick={() => setScope('duplicates')}
       />
 
       <SectionHeader

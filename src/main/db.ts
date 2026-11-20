@@ -2,6 +2,7 @@ import Database from 'better-sqlite3'
 import path from 'node:path'
 import fs from 'node:fs'
 import { app, dialog } from 'electron'
+import { clusterPhashes } from './phashCore'
 import type {
   AlbumInfo,
   FolderInfo,
@@ -180,6 +181,13 @@ const MIGRATIONS: ((db: Database.Database) => void)[] = [
         query TEXT NOT NULL,
         created_at INTEGER NOT NULL
       );
+    `)
+  },
+  // v5: 感知哈希列（相似照片检测）
+  (db) => {
+    db.exec(`
+      ALTER TABLE photos ADD COLUMN phash_lo INTEGER;
+      ALTER TABLE photos ADD COLUMN phash_hi INTEGER;
     `)
   }
 ]
@@ -831,6 +839,55 @@ export function listPhotoIdsPendingThumb(): number[] {
 export function listAllPhotoIds(): number[] {
   const rows = stmt('SELECT id FROM photos').all() as { id: number }[]
   return rows.map((r) => r.id)
+}
+
+/* ---------- 感知哈希（相似照片检测） ---------- */
+
+export function setPhotoPhash(id: number, lo: number, hi: number): void {
+  stmt('UPDATE photos SET phash_lo = ?, phash_hi = ? WHERE id = ?').run(lo, hi, id)
+}
+
+export function listPhotosForPhash(): { id: number; path: string }[] {
+  return stmt('SELECT id, path FROM photos WHERE phash_lo IS NULL AND missing = 0').all() as {
+    id: number
+    path: string
+  }[]
+}
+
+export function listPhashes(): { id: number; lo: number; hi: number }[] {
+  return stmt(
+    'SELECT id, phash_lo AS lo, phash_hi AS hi FROM photos WHERE phash_lo IS NOT NULL'
+  ).all() as { id: number; lo: number; hi: number }[]
+}
+
+/** 聚类结果缓存：哈希变化后置脏，下次查询重算 */
+let dupCache: number[] | null = null
+
+export function markPhashDirty(): void {
+  dupCache = null
+}
+
+/** 疑似重复照片 id（按簇顺序排列，仅含成员数 ≥ 2 的簇） */
+export function duplicatePhotoIds(): number[] {
+  if (dupCache) return dupCache
+  const rows = listPhashes().sort((a, b) => a.id - b.id)
+  dupCache = clusterPhashes(rows).flat()
+  return dupCache
+}
+
+/** 按簇顺序查询疑似重复照片（支持分页） */
+export function queryDuplicates(q: { limit?: number; offset?: number }): QueryResult {
+  const ids = duplicatePhotoIds()
+  const limit = Math.min(q.limit ?? 50000, 100000)
+  const offset = Math.max(0, Math.floor(q.offset ?? 0))
+  const slice = ids.slice(offset, offset + limit)
+  if (!slice.length) return { items: [], total: ids.length }
+  const ph = slice.map(() => '?').join(', ')
+  const caseWhen = slice.map((id, i) => `WHEN ${id} THEN ${i}`).join(' ')
+  const items = stmt(
+    `SELECT ${PHOTO_LITE_COLS} FROM photos p WHERE p.id IN (${ph}) ORDER BY CASE p.id ${caseWhen} END`
+  ).all(...slice) as PhotoLite[]
+  return { items, total: ids.length }
 }
 
 export function libraryStats(): { total: number; missing: number; untagged: number } {

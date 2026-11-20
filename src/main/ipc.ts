@@ -80,8 +80,12 @@ export function registerIpc(): void {
   ipcMain.handle('library:stats', () => db.libraryStats())
 
   /* ---------- photos ---------- */
-  ipcMain.handle('photos:query', (_e, q: PhotoQuery) => db.queryPhotos(q))
-  ipcMain.handle('photos:queryIds', (_e, q: PhotoQuery) => db.queryPhotoIds(q))
+  ipcMain.handle('photos:query', (_e, q: PhotoQuery) =>
+    q.scope === 'duplicates' ? db.queryDuplicates(q) : db.queryPhotos(q)
+  )
+  ipcMain.handle('photos:queryIds', (_e, q: PhotoQuery) =>
+    q.scope === 'duplicates' ? db.duplicatePhotoIds() : db.queryPhotoIds(q)
+  )
   ipcMain.handle('photos:get', (_e, id: number) => db.getPhotoRecord(id))
 
   ipcMain.handle(

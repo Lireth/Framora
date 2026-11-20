@@ -240,9 +240,10 @@ export function PhotoGrid(): React.JSX.Element {
   const cols = Math.max(2, Math.floor((width + GAP) / (tileH + GAP)))
   const tileW = Math.floor((width - (cols - 1) * GAP) / cols)
 
-  /* 行模型：按拍摄/导入月份分组的头部行 + 瓦片行（时间线视图） */
+  /* 行模型：按拍摄/导入月份分组的头部行 + 瓦片行（时间线视图）；疑似重复视图按簇排列不分月 */
   const { rows, rowIndexOfPhoto } = useMemo(() => {
-    const groupable = scope === 'recent' || sort === 'taken' || sort === 'imported'
+    const groupable =
+      scope !== 'duplicates' && (scope === 'recent' || sort === 'taken' || sort === 'imported')
     const monthKey = (p: PhotoLite): [number, number] => {
       const ts = scope === 'recent' || sort === 'imported' ? p.imported_at : (p.taken_at ?? p.imported_at)
       const d = new Date(ts)

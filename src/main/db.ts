@@ -703,7 +703,8 @@ export function deleteSmartAlbum(id: number): void {
 export function listTags(): TagInfo[] {
   return stmt(
     `SELECT t.id, t.name, t.color,
-      (SELECT COUNT(*) FROM photo_tags pt WHERE pt.tag_id = t.id) AS count
+      (SELECT COUNT(*) FROM photo_tags pt JOIN photos p ON p.id = pt.photo_id
+        WHERE pt.tag_id = t.id AND p.missing = 0) AS count
      FROM tags t ORDER BY t.name COLLATE NOCASE`
   ).all() as TagInfo[]
 }
@@ -782,8 +783,10 @@ export function batchRate(ids: number[], rating: number): void {
 export function listAlbums(): AlbumInfo[] {
   return stmt(
     `SELECT a.id, a.name, a.color, a.created_at,
-      (SELECT COUNT(*) FROM album_photos ap WHERE ap.album_id = a.id) AS count,
-      (SELECT ap.photo_id FROM album_photos ap WHERE ap.album_id = a.id LIMIT 1) AS cover_id
+      (SELECT COUNT(*) FROM album_photos ap JOIN photos p ON p.id = ap.photo_id
+        WHERE ap.album_id = a.id AND p.missing = 0) AS count,
+      (SELECT ap.photo_id FROM album_photos ap JOIN photos p ON p.id = ap.photo_id
+        WHERE ap.album_id = a.id AND p.missing = 0 LIMIT 1) AS cover_id
      FROM albums a ORDER BY a.created_at ASC`
   ).all() as AlbumInfo[]
 }

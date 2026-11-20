@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import {
   ChevronLeft,
@@ -425,7 +425,18 @@ export function Viewer(): React.JSX.Element {
   const detailOpen = useStore((s) => s.detailOpen)
   const toggleDetail = useStore((s) => s.toggleDetail)
 
-  const photo = photos.find((p) => p.id === activeId) ?? photos[0]
+  /* id → 下标索引：拖拽平移/缩放每帧渲染时 O(1) 定位当前照片
+     （此前 photos.find/findIndex 在每帧对万级数组做最多 3 次线性扫描） */
+  const indexById = useMemo(() => {
+    const m = new Map<number, number>()
+    for (let i = 0; i < photos.length; i++) m.set(photos[i].id, i)
+    return m
+  }, [photos])
+  const activeIdx = activeId !== null ? (indexById.get(activeId) ?? -1) : -1
+  // activeId 失效（过滤刷新移除等）时回退首张，与既有行为一致
+  const photo = activeIdx >= 0 ? photos[activeIdx] : photos[0]
+  /** 显示照片的真实下标（回退首张时为 0），供页码与前后导航判定 */
+  const idx = photo ? Math.max(0, activeIdx) : -1
 
   const [zoom, setZoom] = useState(1)
   const [offset, setOffset] = useState({ x: 0, y: 0 })
@@ -492,7 +503,7 @@ export function Viewer(): React.JSX.Element {
   // 预取相邻原图（±2），翻页时即时呈现
   useEffect(() => {
     if (!photo) return
-    const idx = photos.findIndex((p) => p.id === photo.id)
+    const idx = indexById.get(photo.id) ?? -1
     for (const d of [-1, 1, -2, 2]) {
       const p = photos[idx + d]
       if (!p || p.missing) continue
@@ -639,7 +650,6 @@ export function Viewer(): React.JSX.Element {
   ]
     .filter(Boolean)
     .join(' ')
-  const idx = photos.findIndex((p) => p.id === photo.id)
 
   return (
     <div className="fixed inset-0 z-40 animate-fadeIn bg-black/95">

@@ -189,6 +189,13 @@ const MIGRATIONS: ((db: Database.Database) => void)[] = [
       ALTER TABLE photos ADD COLUMN phash_lo INTEGER;
       ALTER TABLE photos ADD COLUMN phash_hi INTEGER;
     `)
+  },
+  // v6: 高频排序列补索引（导入时间 / 文件名大小写无关），避免大库排序全表扫描
+  (db) => {
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_photos_imported ON photos(imported_at);
+      CREATE INDEX IF NOT EXISTS idx_photos_name ON photos(name COLLATE NOCASE);
+    `)
   }
 ]
 

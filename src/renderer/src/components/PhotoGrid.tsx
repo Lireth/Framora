@@ -20,7 +20,12 @@ interface GridRow {
   items?: PhotoLite[]
 }
 
-function Tile({
+/**
+ * 瓦片单元：memo 化后仅在自身 photo 引用 / 尺寸变化时重渲。
+ * photos 数组被整体替换（patchPhoto/缩略图回填）时，未变更项引用不变，可跳过渲染；
+ * 选择态经由 selection.has(id) 细粒度订阅，不依赖父级重渲。
+ */
+const Tile = React.memo(function Tile({
   p,
   tileW,
   tileH
@@ -156,7 +161,7 @@ function Tile({
       )}
     </div>
   )
-}
+})
 
 function EmptyState(): React.JSX.Element {
   const folders = useStore((s) => s.folders)

@@ -29,77 +29,109 @@ export function applyTemplate(
   return out || 'photo'
 }
 
+interface ExportTask {
+  src: string
+  outPath: string
+  /** 原格式无变换：直接复制，跳过编码管线 */
+  noTransform: boolean
+  orientation: number
+  flipH: boolean
+  flipV: boolean
+  /** 输出格式（noTransform 时无意义） */
+  fmt: string
+  srcExt: string
+  quality: number
+  maxSide?: number
+}
+
+/** 导出重编码并发数：与 libvips 内部线程池配合，重叠 I/O 等待 */
+const EXPORT_CONCURRENCY = 3
+
 export async function exportPhotos(
   ids: number[],
   destDir: string,
   opts: ExportOptions
 ): Promise<{ exported: number; failed: number }> {
   await fs.promises.mkdir(destDir, { recursive: true })
+  const fmt = opts.format ?? 'original'
+  const total = ids.length
+
+  // 1. 顺序预分配输出路径：重名判定依赖会话内 used 集合，保持单线程避免并发撞名
+  const tasks: ExportTask[] = []
+  const used = new Set<string>()
   let exported = 0
   let failed = 0
-  const used = new Set<string>()
+  let done = 0
   for (let i = 0; i < ids.length; i++) {
-    const id = ids[i]
-    const row = getPhotoRow(id)
+    const row = getPhotoRow(ids[i])
     if (!row || row.missing || !fs.existsSync(row.path)) {
       failed++
-      broadcastExport({ done: i + 1, total: ids.length })
+      broadcastExport({ done: ++done, total })
       continue
     }
-    try {
-      const fmt = opts.format ?? 'original'
-      const base = applyTemplate(opts.nameTemplate ?? '{name}', row, i)
-      let outPath = ''
-      let pipe: sharp.Sharp | null = null
-      let ext = row.ext
-
-      const noTransform =
-        fmt === 'original' && !opts.maxSide && !row.orientation && !row.flip_h && !row.flip_v
-      if (noTransform) {
-        ext = row.ext
-        ;({ outPath } = pickName(destDir, base, ext, used))
-        await fs.promises.copyFile(row.path, outPath)
-        used.add(outPath.toLowerCase())
-        exported++
-        continue
-      }
-
-      pipe = sharp(row.path, { failOn: 'none' }).rotate()
-      if (row.orientation) pipe = pipe.rotate(row.orientation)
-      if (row.flip_h) pipe = pipe.flop()
-      if (row.flip_v) pipe = pipe.flip()
-      if (opts.maxSide) {
-        pipe = pipe.resize(opts.maxSide, opts.maxSide, { fit: 'inside', withoutEnlargement: true })
-      }
-      if (fmt === 'jpeg') {
-        pipe = pipe.jpeg({ quality: clamp(opts.quality ?? 90, 10, 100) })
-        ext = 'jpg'
-      } else if (fmt === 'webp') {
-        pipe = pipe.webp({ quality: clamp(opts.quality ?? 90, 10, 100) })
-        ext = 'webp'
-      } else if (fmt === 'avif') {
-        pipe = pipe.avif({ quality: clamp(opts.quality ?? 90, 10, 100) })
-        ext = 'avif'
-      } else if (fmt === 'png') {
-        pipe = pipe.png()
-        ext = 'png'
-      } else {
-        // original 格式但带变换：按源格式重编码
-        if (row.ext === 'jpg' || row.ext === 'jpeg') pipe = pipe.jpeg({ quality: 92 })
-        else if (row.ext === 'webp') pipe = pipe.webp({ quality: 90 })
-        else if (row.ext === 'png') pipe = pipe.png()
-        else pipe = pipe.jpeg({ quality: 92 })
-      }
-      ;({ outPath } = pickName(destDir, base, ext, used))
-      await pipe.toFile(outPath)
-      used.add(outPath.toLowerCase())
-      exported++
-    } catch (err) {
-      logError('export', err)
-      failed++
+    const base = applyTemplate(opts.nameTemplate ?? '{name}', row, i)
+    const noTransform =
+      fmt === 'original' && !opts.maxSide && !row.orientation && !row.flip_h && !row.flip_v
+    let ext = row.ext
+    if (!noTransform) {
+      if (fmt === 'jpeg') ext = 'jpg'
+      else if (fmt === 'webp') ext = 'webp'
+      else if (fmt === 'avif') ext = 'avif'
+      else if (fmt === 'png') ext = 'png'
     }
-    broadcastExport({ done: i + 1, total: ids.length })
+    const { outPath } = pickName(destDir, base, ext, used)
+    used.add(outPath.toLowerCase())
+    tasks.push({
+      src: row.path,
+      outPath,
+      noTransform,
+      orientation: row.orientation,
+      flipH: !!row.flip_h,
+      flipV: !!row.flip_v,
+      fmt,
+      srcExt: row.ext,
+      quality: opts.quality ?? 90,
+      maxSide: opts.maxSide
+    })
   }
+
+  // 2. 小并发池执行复制/重编码
+  let cursor = 0
+  const worker = async (): Promise<void> => {
+    while (cursor < tasks.length) {
+      const t = tasks[cursor++]
+      try {
+        if (t.noTransform) {
+          await fs.promises.copyFile(t.src, t.outPath)
+        } else {
+          let pipe = sharp(t.src, { failOn: 'none' }).rotate()
+          if (t.orientation) pipe = pipe.rotate(t.orientation)
+          if (t.flipH) pipe = pipe.flop()
+          if (t.flipV) pipe = pipe.flip()
+          if (t.maxSide) {
+            pipe = pipe.resize(t.maxSide, t.maxSide, { fit: 'inside', withoutEnlargement: true })
+          }
+          const q = clamp(t.quality, 10, 100)
+          if (t.fmt === 'jpeg') pipe = pipe.jpeg({ quality: q })
+          else if (t.fmt === 'webp') pipe = pipe.webp({ quality: q })
+          else if (t.fmt === 'avif') pipe = pipe.avif({ quality: q })
+          else if (t.fmt === 'png') pipe = pipe.png()
+          else if (t.srcExt === 'webp') pipe = pipe.webp({ quality: 90 })
+          else if (t.srcExt === 'png') pipe = pipe.png()
+          else pipe = pipe.jpeg({ quality: 92 })
+          await pipe.toFile(t.outPath)
+        }
+        exported++
+      } catch (err) {
+        logError('export', err)
+        failed++
+      }
+      broadcastExport({ done: ++done, total })
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.max(1, Math.min(EXPORT_CONCURRENCY, tasks.length)) }, worker)
+  )
   return { exported, failed }
 }
 

@@ -88,11 +88,10 @@ async function run(id: number): Promise<void> {
   if (!row || row.missing) return
   try {
     if (!fs.existsSync(row.path)) throw new Error('file missing')
-    const [meta, takenAt] = await Promise.all([
-      sharp(row.path, { failOn: 'none' }).metadata(),
-      readTakenAt(row.path)
-    ])
-    await sharp(row.path, { failOn: 'none' })
+    // 同一实例先读头部元数据再生成缩略图，避免重复解析文件头
+    const img = sharp(row.path, { failOn: 'none' })
+    const [meta, takenAt] = await Promise.all([img.metadata(), readTakenAt(row.path)])
+    await img
       .rotate()
       .resize(512, 512, { fit: 'inside', withoutEnlargement: true })
       .webp({ quality: 80 })

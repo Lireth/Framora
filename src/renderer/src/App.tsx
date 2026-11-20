@@ -32,6 +32,8 @@ export default function App(): React.JSX.Element {
         const s = useStore.getState()
         if (e.phase === 'start') {
           s.setScan({ active: true, label: '正在扫描文件夹…' })
+        } else if (e.phase === 'progress') {
+          s.setScan({ active: true, label: `正在扫描… 已处理 ${e.processed ?? 0} 张` })
         } else {
           s.setScan({ active: false, label: '' })
           if (e.phase === 'done') {
@@ -47,6 +49,7 @@ export default function App(): React.JSX.Element {
         }
       }),
       onEvent('evt:thumb', (d) => pushThumbEvent(d as ThumbEvent)),
+      onEvent('evt:export', (d) => useStore.getState().setExportProgress(d as { done: number; total: number })),
       onEvent('evt:watch', (d) => {
         const e = d as WatchEvent
         scheduleLibraryRefresh(500)

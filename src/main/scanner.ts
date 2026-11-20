@@ -12,7 +12,7 @@ import {
   updatePhotoFilesBatch
 } from './db'
 import { enqueueThumb } from './thumbs'
-import type { ImportResult, ScanEvent, WatchEvent } from '@shared/types'
+import type { ExportEvent, ImportResult, ScanEvent, WatchEvent } from '@shared/types'
 
 export const IMAGE_EXTS = new Set([
   '.jpg',
@@ -44,6 +44,10 @@ export function broadcastLibraryChanged(): void {
   for (const w of BrowserWindow.getAllWindows()) w.webContents.send('evt:library', {})
 }
 
+export function broadcastExport(e: ExportEvent): void {
+  for (const w of BrowserWindow.getAllWindows()) w.webContents.send('evt:export', e)
+}
+
 async function* walk(dir: string): AsyncGenerator<string> {
   let entries: fs.Dirent[]
   try {
@@ -69,14 +73,21 @@ interface FileStat {
 }
 
 /** 限制并发的批量 stat，避免万级文件逐个 await 串行等待 IO */
-async function statAll(files: string[], concurrency: number): Promise<FileStat[]> {
+async function statAll(
+  files: string[],
+  concurrency: number,
+  onProgress?: (processed: number) => void
+): Promise<FileStat[]> {
   const out: (FileStat | null)[] = new Array(files.length).fill(null)
   let cursor = 0
+  let done = 0
   const worker = async (): Promise<void> => {
     while (cursor < files.length) {
       const i = cursor++
       const s = await fs.promises.stat(files[i]).catch(() => null)
       if (s) out[i] = { path: files[i], size: s.size, mtime: Math.round(s.mtimeMs) }
+      done++
+      if (onProgress && (done % 200 === 0 || done === files.length)) onProgress(done)
     }
   }
   await Promise.all(Array.from({ length: Math.max(1, Math.min(concurrency, files.length)) }, worker))
@@ -104,7 +115,9 @@ export async function importFolder(folderPath: string): Promise<ImportResult> {
     for (const r of listPhotoRowsByFolder(folderId)) {
       known.set(r.path.toLowerCase(), r)
     }
-    const stats = await statAll(files, 8)
+    const stats = await statAll(files, 8, (processed) => {
+      broadcastScan({ phase: 'progress', folderId, processed })
+    })
     const inserts: {
       folder_id: number
       path: string

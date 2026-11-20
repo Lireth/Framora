@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import sharp from 'sharp'
 import { getPhotoRow, updatePhotoFileFields, updatePhotoMeta } from './db'
 import { backupsDir, enqueueThumb } from './thumbs'
+import { broadcastExport } from './scanner'
 import type { ExportOptions } from '@shared/types'
 
 function clamp(v: number, min: number, max: number): number {
@@ -18,10 +19,12 @@ export async function exportPhotos(
   let exported = 0
   let failed = 0
   const used = new Set<string>()
-  for (const id of ids) {
+  for (let i = 0; i < ids.length; i++) {
+    const id = ids[i]
     const row = getPhotoRow(id)
     if (!row || row.missing || !fs.existsSync(row.path)) {
       failed++
+      broadcastExport({ done: i + 1, total: ids.length })
       continue
     }
     try {
@@ -72,6 +75,7 @@ export async function exportPhotos(
     } catch {
       failed++
     }
+    broadcastExport({ done: i + 1, total: ids.length })
   }
   return { exported, failed }
 }

@@ -57,6 +57,7 @@ interface AppState extends Filters {
   navTick: number
   searchHistory: string[]
   scan: ScanState
+  exportProgress: { done: number; total: number } | null
   toasts: Toast[]
   settingsOpen: boolean
   exportOpen: boolean
@@ -85,6 +86,7 @@ interface AppState extends Filters {
   recordSearch: (term: string) => void
   clearSearchHistory: () => void
   setScan: (s: ScanState) => void
+  setExportProgress: (p: { done: number; total: number } | null) => void
   toast: (type: Toast['type'], text: string) => void
   dismissToast: (id: number) => void
   setSettingsOpen: (v: boolean) => void
@@ -173,6 +175,7 @@ export const useStore = create<AppState>((set, get) => ({
   navTick: 0,
   searchHistory: [],
   scan: { active: false, label: '' },
+  exportProgress: null,
   toasts: [],
   settingsOpen: false,
   exportOpen: false,
@@ -419,6 +422,8 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   setScan: (scan) => set({ scan }),
+
+  setExportProgress: (p) => set({ exportProgress: p }),
 
   toast: (type, text) => {
     const id = toastSeq++

@@ -12,6 +12,8 @@ export function ExportDialog(): React.JSX.Element | null {
   const close = useStore((s) => s.closeExport)
   const exportIds = useStore((s) => s.exportIds)
   const selection = useStore((s) => s.selection)
+  const exportProgress = useStore((s) => s.exportProgress)
+  const setExportProgress = useStore((s) => s.setExportProgress)
 
   const [dir, setDir] = useState('')
   const [fmt, setFmt] = useState<Fmt>('original')
@@ -60,6 +62,7 @@ export function ExportDialog(): React.JSX.Element | null {
       useStore.getState().toast('error', e instanceof Error ? e.message : '导出失败')
     } finally {
       setBusy(false)
+      setExportProgress(null)
     }
   }
 
@@ -89,7 +92,9 @@ export function ExportDialog(): React.JSX.Element | null {
           <PrimaryButton onClick={run} disabled={busy || !dir}>
             <span className="flex items-center gap-1.5">
               {busy && <Loader2 size={13} className="animate-spin" />}
-              开始导出
+              {busy && exportProgress
+                ? `导出中 ${exportProgress.done}/${exportProgress.total}`
+                : '开始导出'}
             </span>
           </PrimaryButton>
         </>

@@ -103,12 +103,18 @@ export interface LibraryStats {
 }
 
 export interface ScanEvent {
-  phase: 'start' | 'done' | 'error'
+  phase: 'start' | 'progress' | 'done' | 'error'
   folderId: number
   found?: number
   added?: number
   updated?: number
+  processed?: number
   message?: string
+}
+
+export interface ExportEvent {
+  done: number
+  total: number
 }
 
 export interface ThumbEvent {

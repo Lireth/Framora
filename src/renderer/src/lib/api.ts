@@ -90,6 +90,6 @@ export const api = {
   clearBackups: (): Promise<number> => call('app:clearBackups')
 }
 
-export type EventChannel = 'evt:scan' | 'evt:thumb' | 'evt:watch' | 'evt:library'
+export type EventChannel = 'evt:scan' | 'evt:thumb' | 'evt:watch' | 'evt:library' | 'evt:export'
 export const onEvent = (channel: EventChannel, cb: (data: never) => void): (() => void) =>
   window.framora.on(channel, cb as (data: unknown) => void)

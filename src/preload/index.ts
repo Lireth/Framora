@@ -44,7 +44,7 @@ const CALLABLE = new Set([
   'app:clearBackups'
 ])
 
-const EVENTS = new Set(['evt:scan', 'evt:thumb', 'evt:watch', 'evt:library'])
+const EVENTS = new Set(['evt:scan', 'evt:thumb', 'evt:watch', 'evt:library', 'evt:export'])
 
 const api = {
   invoke: (channel: string, ...args: unknown[]): Promise<unknown> => {

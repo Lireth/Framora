@@ -55,6 +55,7 @@ interface AppState extends Filters {
   tile: 's' | 'm' | 'l'
   gridCols: number
   navTick: number
+  searchHistory: string[]
   scan: ScanState
   toasts: Toast[]
   settingsOpen: boolean
@@ -81,6 +82,8 @@ interface AppState extends Filters {
   setTile: (t: 's' | 'm' | 'l') => void
   setGridCols: (n: number) => void
   navigateGrid: (dx: number, dy: number) => void
+  recordSearch: (term: string) => void
+  clearSearchHistory: () => void
   setScan: (s: ScanState) => void
   toast: (type: Toast['type'], text: string) => void
   dismissToast: (id: number) => void
@@ -168,6 +171,7 @@ export const useStore = create<AppState>((set, get) => ({
   tile: 'm',
   gridCols: 6,
   navTick: 0,
+  searchHistory: [],
   scan: { active: false, label: '' },
   toasts: [],
   settingsOpen: false,
@@ -185,7 +189,18 @@ export const useStore = create<AppState>((set, get) => ({
     } catch {
       /* ignore */
     }
-    // 恢复上次的视图状态
+    // 恢复上次的视图状态与搜索历史
+    try {
+      const rawHistory = await api.getSetting('searchHistory')
+      if (rawHistory) {
+        const list = JSON.parse(rawHistory) as unknown
+        if (Array.isArray(list)) {
+          set({ searchHistory: list.filter((x): x is string => typeof x === 'string').slice(0, 10) })
+        }
+      }
+    } catch {
+      /* ignore */
+    }
     try {
       const raw = await api.getSetting('viewState')
       if (raw) {
@@ -387,6 +402,20 @@ export const useStore = create<AppState>((set, get) => ({
     if (next === idx) return
     const id = photos[next].id
     set({ anchorId: id, selection: new Set([id]), navTick: navTick + 1 })
+  },
+
+  /** 记录搜索历史（去重、最多 10 条、持久化） */
+  recordSearch: (term) => {
+    const t = term.trim()
+    if (!t) return
+    const next = [t, ...get().searchHistory.filter((x) => x !== t)].slice(0, 10)
+    set({ searchHistory: next })
+    void api.setSetting('searchHistory', JSON.stringify(next)).catch(() => undefined)
+  },
+
+  clearSearchHistory: () => {
+    set({ searchHistory: [] })
+    void api.setSetting('searchHistory', '[]').catch(() => undefined)
   },
 
   setScan: (scan) => set({ scan }),

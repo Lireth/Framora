@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { FolderPlus, Info, LayoutGrid, Search, SlidersHorizontal, X } from 'lucide-react'
+import { Clock, FolderPlus, Info, LayoutGrid, Search, SlidersHorizontal, Trash2, X } from 'lucide-react'
 import { useStore, type SortKey } from '../store'
 import { importFolderAction } from '../lib/actions'
 import { cn, IconButton, StarRating, useOutsideClose } from './ui'
@@ -119,6 +119,7 @@ export function Toolbar(): React.JSX.Element {
   const dateFrom = useStore((s) => s.dateFrom)
   const dateTo = useStore((s) => s.dateTo)
   const minRating = useStore((s) => s.minRating)
+  const searchHistory = useStore((s) => s.searchHistory)
   const setKeyword = useStore((s) => s.setFilter)
   const setTile = useStore((s) => s.setTile)
   const toggleDetail = useStore((s) => s.toggleDetail)
@@ -126,7 +127,11 @@ export function Toolbar(): React.JSX.Element {
 
   const [input, setInput] = useState(keyword)
   const [filterOpen, setFilterOpen] = useState(false)
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const searchRef = useRef<HTMLDivElement>(null)
   const debounced = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useOutsideClose(searchRef, () => setHistoryOpen(false))
 
   // 外部关键词变化（如清除筛选）时同步输入框
   useEffect(() => setInput(keyword), [keyword])
@@ -134,7 +139,16 @@ export function Toolbar(): React.JSX.Element {
   const onSearch = (v: string): void => {
     setInput(v)
     if (debounced.current) clearTimeout(debounced.current)
-    debounced.current = setTimeout(() => setKeyword({ keyword: v }), 250)
+    debounced.current = setTimeout(() => {
+      setKeyword({ keyword: v })
+      if (v.trim()) useStore.getState().recordSearch(v)
+    }, 250)
+  }
+
+  const applyHistory = (term: string): void => {
+    setHistoryOpen(false)
+    setKeyword({ keyword: term })
+    setInput(term)
   }
 
   const activeFilterCount =
@@ -148,11 +162,14 @@ export function Toolbar(): React.JSX.Element {
       </div>
       <div className="flex-1" />
 
-      <div className="relative">
+      <div className="relative" ref={searchRef}>
         <Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-ink3" />
         <input
           value={input}
           onChange={(e) => onSearch(e.target.value)}
+          onFocus={() => {
+            if (!input) setHistoryOpen(true)
+          }}
           placeholder="搜索文件名、标题、标签…"
           className="h-8 w-[220px] rounded-md border border-line bg-panel pl-8 pr-7 text-[12.5px] outline-none transition-colors placeholder:text-ink3 focus:border-[var(--c-accent)] focus:w-[260px]"
         />
@@ -164,6 +181,30 @@ export function Toolbar(): React.JSX.Element {
           >
             <X size={13} />
           </button>
+        )}
+        {historyOpen && searchHistory.length > 0 && (
+          <div className="absolute left-0 top-10 z-40 w-[240px] rounded-lg border border-line bg-raised py-1 shadow-2xl animate-popIn">
+            {searchHistory.map((h) => (
+              <button
+                key={h}
+                onClick={() => applyHistory(h)}
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12.5px] text-ink2 hover:bg-hover hover:text-ink"
+              >
+                <Clock size={12} className="shrink-0 text-ink3" />
+                <span className="flex-1 truncate">{h}</span>
+              </button>
+            ))}
+            <div className="my-1 h-px bg-line" />
+            <button
+              onClick={() => {
+                useStore.getState().clearSearchHistory()
+                setHistoryOpen(false)
+              }}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-ink3 hover:bg-hover hover:text-ink2"
+            >
+              <Trash2 size={12} /> 清空搜索历史
+            </button>
+          </div>
         )}
       </div>
 

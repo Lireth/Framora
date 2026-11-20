@@ -95,6 +95,41 @@ const MIGRATIONS: ((db: Database.Database) => void)[] = [
       value TEXT NOT NULL
     );
   `)
+  },
+  // v2: 全文搜索 —— search_text 冗余列 + FTS5 trigram 外部内容表 + 同步触发器
+  (db) => {
+    db.exec(`ALTER TABLE photos ADD COLUMN search_text TEXT NOT NULL DEFAULT '';`)
+    // 先回填存量数据（此时触发器尚未创建，避免产生无效 delete 条目）
+    db.exec(`
+      UPDATE photos SET search_text =
+        name || ' ' || IFNULL(title, '') || ' ' || IFNULL(description, '') || ' ' ||
+        IFNULL((SELECT group_concat(t.name, ' ') FROM photo_tags pt JOIN tags t ON t.id = pt.tag_id
+                WHERE pt.photo_id = photos.id), '');
+    `)
+    db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS photos_fts USING fts5(
+        search_text, content='photos', content_rowid='id', tokenize='trigram'
+      );
+      CREATE TRIGGER IF NOT EXISTS photos_fts_insert AFTER INSERT ON photos BEGIN
+        INSERT INTO photos_fts(rowid, search_text) VALUES (new.id, new.search_text);
+      END;
+      CREATE TRIGGER IF NOT EXISTS photos_fts_delete AFTER DELETE ON photos BEGIN
+        INSERT INTO photos_fts(photos_fts, rowid, search_text) VALUES ('delete', old.id, old.search_text);
+      END;
+      CREATE TRIGGER IF NOT EXISTS photos_fts_update AFTER UPDATE OF search_text ON photos BEGIN
+        INSERT INTO photos_fts(photos_fts, rowid, search_text) VALUES ('delete', old.id, old.search_text);
+        INSERT INTO photos_fts(rowid, search_text) VALUES (new.id, new.search_text);
+      END;
+      CREATE TRIGGER IF NOT EXISTS photos_search_insert AFTER INSERT ON photos BEGIN
+        UPDATE photos SET search_text =
+          name || ' ' || IFNULL(title, '') || ' ' || IFNULL(description, '') || ' ' ||
+          IFNULL((SELECT group_concat(t.name, ' ') FROM photo_tags pt JOIN tags t ON t.id = pt.tag_id
+                  WHERE pt.photo_id = photos.id), '')
+        WHERE id = new.id;
+      END;
+    `)
+    // 从内容表全量重建 FTS 索引
+    db.exec(`INSERT INTO photos_fts(photos_fts) VALUES ('rebuild');`)
   }
 ]
 
@@ -291,6 +326,21 @@ export function updatePhotoFilesBatch(
   run()
 }
 
+const SEARCH_TEXT_EXPR = `
+  name || ' ' || IFNULL(title, '') || ' ' || IFNULL(description, '') || ' ' ||
+  IFNULL((SELECT group_concat(t.name, ' ') FROM photo_tags pt JOIN tags t ON t.id = pt.tag_id
+          WHERE pt.photo_id = photos.id), '')`
+
+/** 重算照片的搜索文本（名称+标题+描述+标签名），FTS 触发器随之同步索引 */
+export function recomputeSearchText(ids: number[]): void {
+  if (!ids.length) return
+  const run = db.transaction(() => {
+    const up = stmt(`UPDATE photos SET search_text = ${SEARCH_TEXT_EXPR} WHERE id = ?`)
+    for (const id of ids) up.run(id)
+  })
+  run()
+}
+
 export function updatePhotoFileFields(
   id: number,
   fields: { size?: number; mtime?: number; missing?: 0 | 1 }
@@ -371,6 +421,7 @@ export function updatePhotoMeta(
   if (!keys.length) return
   const sets = keys.map((k) => `${k} = @${k}`).join(', ')
   stmt(`UPDATE photos SET ${sets} WHERE id = @id`).run({ id, ...allowed })
+  if (patch.title !== undefined || patch.description !== undefined) recomputeSearchText([id])
 }
 
 export function deletePhotoRows(ids: number[]): void {
@@ -411,13 +462,20 @@ function buildPhotoFilter(q: PhotoQuery): { whereSql: string; params: Record<str
       break
   }
   if (q.keyword && q.keyword.trim()) {
-    const kw = `%${q.keyword.trim()}%`
-    where.push(
-      `(p.name LIKE @kw OR IFNULL(p.title,'') LIKE @kw OR IFNULL(p.description,'') LIKE @kw
-        OR EXISTS (SELECT 1 FROM photo_tags pt JOIN tags t ON t.id = pt.tag_id
-                   WHERE pt.photo_id = p.id AND t.name LIKE @kw))`
-    )
-    params.kw = kw
+    const kw = q.keyword.trim()
+    if (kw.length >= 3) {
+      // trigram 分词支持任意 ≥3 字子串匹配（含中文）；短语包裹防 MATCH 语法注入
+      where.push('p.id IN (SELECT rowid FROM photos_fts WHERE photos_fts MATCH @fts)')
+      params.fts = `"${kw.replace(/"/g, '""')}"`
+    } else {
+      const like = `%${kw}%`
+      where.push(
+        `(p.name LIKE @kw OR IFNULL(p.title,'') LIKE @kw OR IFNULL(p.description,'') LIKE @kw
+          OR EXISTS (SELECT 1 FROM photo_tags pt JOIN tags t ON t.id = pt.tag_id
+                     WHERE pt.photo_id = p.id AND t.name LIKE @kw))`
+      )
+      params.kw = like
+    }
   }
   if (q.dateFrom) {
     where.push('COALESCE(p.taken_at, p.imported_at) >= @dateFrom')
@@ -502,12 +560,20 @@ export function createTag(name: string, color: string | null): TagInfo {
 }
 
 export function renameTag(id: number, name: string): void {
+  const affected = (
+    stmt('SELECT photo_id FROM photo_tags WHERE tag_id = ?').all(id) as { photo_id: number }[]
+  ).map((r) => r.photo_id)
   stmt('UPDATE tags SET name = ? WHERE id = ?').run(name, id)
+  recomputeSearchText(affected)
 }
 
 export function deleteTag(id: number): void {
+  const affected = (
+    stmt('SELECT photo_id FROM photo_tags WHERE tag_id = ?').all(id) as { photo_id: number }[]
+  ).map((r) => r.photo_id)
   stmt('DELETE FROM photo_tags WHERE tag_id = ?').run(id)
   stmt('DELETE FROM tags WHERE id = ?').run(id)
+  recomputeSearchText(affected)
 }
 
 export function setPhotoTags(photoId: number, tagIds: number[]): void {
@@ -517,6 +583,7 @@ export function setPhotoTags(photoId: number, tagIds: number[]): void {
     for (const t of tagIds) ins.run(photoId, t)
   })
   run()
+  recomputeSearchText([photoId])
 }
 
 export function batchTags(
@@ -533,6 +600,7 @@ export function batchTags(
     }
   })
   run()
+  recomputeSearchText(ids)
 }
 
 export function batchRate(ids: number[], rating: number): void {

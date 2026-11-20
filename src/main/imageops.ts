@@ -2,9 +2,10 @@ import path from 'node:path'
 import fs from 'node:fs'
 import sharp from 'sharp'
 import { getPhotoRow, updatePhotoFileFields, updatePhotoMeta } from './db'
-import { backupsDir, enqueueThumb, RAW_EXTS } from './thumbs'
+import { backupsDir, enqueueThumb } from './thumbs'
 import { broadcastExport } from './scanner'
 import { logError } from './log'
+import { isRawExt } from '@shared/formats'
 import type { BackupInfo, ExportOptions } from '@shared/types'
 
 function clamp(v: number, min: number, max: number): number {
@@ -218,7 +219,7 @@ export async function saveEdits(
   const row = getPhotoRow(id)
   if (!row) throw new Error('照片不存在')
   if (!fs.existsSync(row.path)) throw new Error('源文件已丢失，无法编辑')
-  if (RAW_EXTS.has(row.ext)) throw new Error('RAW 文件不支持写回编辑，请使用导出转换格式')
+  if (isRawExt(row.ext)) throw new Error('RAW 文件不支持写回编辑，请使用导出转换格式')
   const backupName = `${id}-${Date.now()}${path.extname(row.path)}`
   const backupPath = path.join(backupsDir(), backupName)
   await fs.promises.copyFile(row.path, backupPath)

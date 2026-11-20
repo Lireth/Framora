@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { IMAGE_EXTS, RAW_EXTS, isRawExt } from '@shared/formats'
 import { formatBytes, formatCount, formatDate, formatDateTime, mediaUrl, thumbUrl } from '../src/renderer/src/lib/format'
 
 describe('formatBytes', () => {
@@ -35,5 +36,17 @@ describe('mediaUrl / thumbUrl', () => {
     expect(url).toContain('media://img/?p=')
     expect(url).toContain('v=42')
     expect(thumbUrl({ id: 7, thumb_ts: 99 })).toBe('thumb://t/7.webp?v=99')
+  })
+})
+
+describe('shared formats（RAW 单一事实源不变量）', () => {
+  it('全部 RAW 扩展名均包含于 IMAGE_EXTS，新增 RAW 无需多处同步', () => {
+    for (const ext of RAW_EXTS) expect(IMAGE_EXTS).toContain(ext)
+  })
+  it('isRawExt 兼容带点/大小写输入', () => {
+    expect(isRawExt('cr2')).toBe(true)
+    expect(isRawExt('.CR3')).toBe(true)
+    expect(isRawExt('jpg')).toBe(false)
+    expect(isRawExt('')).toBe(false)
   })
 })

@@ -13,35 +13,12 @@ import {
 } from './db'
 import { enqueueThumb } from './thumbs'
 import { logError } from './log'
+import { IMAGE_EXT_SET, normalizeExt } from '@shared/formats'
 import type { ExportEvent, ImportResult, ScanEvent, WatchEvent } from '@shared/types'
 
-export const IMAGE_EXTS = new Set([
-  '.jpg',
-  '.jpeg',
-  '.png',
-  '.webp',
-  '.gif',
-  '.bmp',
-  '.avif',
-  '.tif',
-  '.tiff',
-  '.heic',
-  '.heif',
-  // RAW（TIFF/ISO-BMFF 容器）：元数据走 exifr，显示像素取嵌入预览
-  '.cr2',
-  '.cr3',
-  '.nef',
-  '.nrw',
-  '.arw',
-  '.raf',
-  '.dng',
-  '.rw2',
-  '.orf',
-  '.pef'
-])
-
+/** 扩展名集合单一事实源见 @shared/formats；此处仅做完整路径 → 扩展名的解析判断 */
 export function isImagePath(p: string): boolean {
-  return IMAGE_EXTS.has(path.extname(p).toLowerCase())
+  return IMAGE_EXT_SET.has(normalizeExt(path.extname(p)))
 }
 
 export function broadcastScan(e: ScanEvent): void {

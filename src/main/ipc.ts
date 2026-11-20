@@ -4,7 +4,8 @@ import exifr from 'exifr'
 import sharp from 'sharp'
 import { BrowserWindow, dialog, ipcMain, shell, app } from 'electron'
 import * as db from './db'
-import { IMAGE_EXTS, importFolder, isImagePath, trackNewFile } from './scanner'
+import { IMAGE_EXTS, formatBytes, formatDateTime } from '@shared/formats'
+import { importFolder, isImagePath, trackNewFile } from './scanner'
 import {
   cleanupOrphanThumbs,
   enqueueThumb,
@@ -73,7 +74,7 @@ export function registerIpc(): void {
     const r = await dialog.showOpenDialog(win!, {
       title: '选择要导入的照片',
       properties: ['openFile', 'multiSelections'],
-      filters: [{ name: '图片', extensions: [...IMAGE_EXTS].map((e) => e.slice(1)) }]
+      filters: [{ name: '图片', extensions: [...IMAGE_EXTS] }]
     })
     return r.canceled ? null : r.filePaths
   })
@@ -261,9 +262,9 @@ export function registerIpc(): void {
       { label: '文件名', value: row.name },
       { label: '格式', value: row.ext.toUpperCase() },
       { label: '尺寸', value: row.width && row.height ? `${row.width} × ${row.height}` : '未知' },
-      { label: '大小', value: formatSize(row.size) },
-      { label: '拍摄时间', value: row.taken_at ? formatDate(row.taken_at) : '未知' },
-      { label: '导入时间', value: formatDate(row.imported_at) },
+      { label: '大小', value: formatBytes(row.size) },
+      { label: '拍摄时间', value: row.taken_at ? formatDateTime(row.taken_at) : '未知' },
+      { label: '导入时间', value: formatDateTime(row.imported_at) },
       { label: '路径', value: row.path }
     ]
     let src = row.path
@@ -576,19 +577,6 @@ function exifCachePut(key: string, pairs: MetaPair[]): void {
 function pushPair(pairs: MetaPair[], label: string, value: unknown): void {
   if (value === undefined || value === null || value === '') return
   pairs.push({ label, value: String(value) })
-}
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`
-}
-
-function formatDate(ts: number): string {
-  const d = new Date(ts)
-  const p = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
 
 function formatShutter(sec: number): string {

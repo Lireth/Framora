@@ -1,27 +1,7 @@
-export function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
-  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`
-  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`
-}
+// 数值/日期展示格式化单一事实源在 @shared/formats，此处转发保持既有导入路径稳定
+export { formatBytes, formatCount, formatDate, formatDateTime } from '@shared/formats'
 
-const pad = (v: number): string => String(v).padStart(2, '0')
-
-export function formatDate(ts: number | null | undefined): string {
-  if (!ts) return '—'
-  const d = new Date(ts)
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
-}
-
-export function formatDateTime(ts: number | null | undefined): string {
-  if (!ts) return '—'
-  const d = new Date(ts)
-  return `${formatDate(ts)} ${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
-
-export function formatCount(n: number): string {
-  return n >= 10000 ? `${(n / 10000).toFixed(1)} 万` : String(n)
-}
+import { isRawExt } from '@shared/formats'
 
 export function debounce<T extends (...args: any[]) => void>(fn: T, ms: number): T {
   let timer: ReturnType<typeof setTimeout> | null = null
@@ -43,13 +23,6 @@ export function thumbUrl(p: { id: number; thumb_ts: number }): string {
   return `thumb://t/${p.id}.webp?v=${p.thumb_ts}`
 }
 
-/** RAW 扩展名：浏览器无法直接渲染，查看器改用提取的嵌入预览 */
-const RAW_EXTS = new Set(['cr2', 'cr3', 'nef', 'nrw', 'arw', 'raf', 'dng', 'rw2', 'orf', 'pef'])
-
-export function isRawPhoto(p: { ext: string }): boolean {
-  return RAW_EXTS.has(p.ext.toLowerCase())
-}
-
 export function previewUrl(p: { id: number; thumb_ts: number }): string {
   return `thumb://t/${p.id}.preview.jpg?v=${p.thumb_ts}`
 }
@@ -62,5 +35,5 @@ export function displayUrl(p: {
   thumb_ts: number
   ext: string
 }): string {
-  return isRawPhoto(p) ? previewUrl(p) : mediaUrl(p)
+  return isRawExt(p.ext) ? previewUrl(p) : mediaUrl(p)
 }

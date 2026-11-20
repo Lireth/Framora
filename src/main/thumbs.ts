@@ -7,12 +7,10 @@ import { BrowserWindow, app } from 'electron'
 import { getPhotoRow, listAllPhotoIds, listPhotoIdsForRebuild, setPhotoDimsAndDate, setThumbStatus } from './db'
 import { enqueuePhash } from './phash'
 import { logError } from './log'
+import { isRawExt } from '@shared/formats'
 import type { ThumbEvent } from '@shared/types'
 
 const CONCURRENCY = Math.max(2, Math.min(6, os.cpus().length - 1))
-
-/** RAW 扩展名（不含点）：sharp 预编译 libvips 不含 libraw，只能取嵌入预览 */
-export const RAW_EXTS = new Set(['cr2', 'cr3', 'nef', 'nrw', 'arw', 'raf', 'dng', 'rw2', 'orf', 'pef'])
 
 const queue: number[] = []
 const queued = new Set<number>()
@@ -98,7 +96,7 @@ async function run(id: number): Promise<void> {
     if (!fs.existsSync(row.path)) throw new Error('file missing')
     // RAW：提取嵌入预览 JPEG 作为像素源（无预览则标记失败），同时落盘供查看器使用
     let input: string | Uint8Array = row.path
-    if (RAW_EXTS.has(row.ext)) {
+    if (isRawExt(row.ext)) {
       const preview = await exifr.thumbnail(row.path)
       if (!preview || !preview.length) throw new Error('RAW 文件无可提取的嵌入预览')
       input = preview

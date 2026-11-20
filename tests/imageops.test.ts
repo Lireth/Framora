@@ -16,11 +16,7 @@ vi.mock('../src/main/db', () => ({
   updatePhotoFileFields: vi.fn(),
   updatePhotoMeta: vi.fn()
 }))
-vi.mock('../src/main/thumbs', () => ({
-  backupsDir: () => tmpdir(),
-  enqueueThumb: vi.fn(),
-  RAW_EXTS: new Set(['cr2', 'cr3', 'nef', 'nrw', 'arw', 'raf', 'dng', 'rw2', 'orf', 'pef'])
-}))
+vi.mock('../src/main/thumbs', () => ({ backupsDir: () => tmpdir(), enqueueThumb: vi.fn() }))
 vi.mock('../src/main/scanner', () => ({
   broadcastExport: (e: { done: number; total: number }) => broadcasts.push(e)
 }))

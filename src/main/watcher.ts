@@ -1,6 +1,5 @@
-import path from 'node:path'
 import chokidar, { type FSWatcher } from 'chokidar'
-import { IMAGE_EXTS, trackChangedFile, trackDeletedFile, trackNewFile } from './scanner'
+import { isImagePath, trackChangedFile, trackDeletedFile, trackNewFile } from './scanner'
 import { logError } from './log'
 
 const watchers = new Map<number, FSWatcher>()
@@ -16,7 +15,7 @@ export async function startWatcher(folderId: number, root: string): Promise<void
       pollInterval: 120
     }
   })
-  const isImage = (p: string) => IMAGE_EXTS.has(path.extname(p).toLowerCase())
+  const isImage = isImagePath
   watcher
     .on('add', (p) => {
       if (isImage(p)) trackNewFile(folderId, p)

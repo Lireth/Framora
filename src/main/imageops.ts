@@ -256,7 +256,17 @@ export async function revertEdits(id: number): Promise<void> {
   if (!files.length) throw new Error('没有可恢复的编辑备份')
   files.sort((a, b) => b.localeCompare(a))
   const latest = path.join(backupsDir(), files[0])
-  await fs.promises.copyFile(latest, row.path)
+  // 与 saveEdits 相同的 tmp+rm+rename 落盘方式：直接覆盖已存在文件在 Windows 上
+  // 可能因目标被占用而报 UNKNOWN
+  const tmp = `${row.path}.framora-revert-tmp${path.extname(row.path)}`
+  try {
+    await fs.promises.copyFile(latest, tmp)
+    await fs.promises.rm(row.path, { force: true })
+    await fs.promises.rename(tmp, row.path)
+  } catch (err) {
+    await fs.promises.rm(tmp, { force: true }).catch(() => undefined)
+    throw err
+  }
   const st = await fs.promises.stat(row.path)
   updatePhotoFileFields(id, { size: st.size, mtime: Math.round(st.mtimeMs), missing: 0 })
   updatePhotoMeta(id, { orientation: 0, flip_h: 0, flip_v: 0 })

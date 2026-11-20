@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import sharp from 'sharp'
 import exifr from 'exifr'
 import { BrowserWindow, app } from 'electron'
-import { getPhotoRow, listPhotoIdsForRebuild, setPhotoDimsAndDate, setThumbStatus } from './db'
+import { getPhotoRow, listAllPhotoIds, listPhotoIdsForRebuild, setPhotoDimsAndDate, setThumbStatus } from './db'
 import type { ThumbEvent } from '@shared/types'
 
 const CONCURRENCY = Math.max(2, Math.min(6, os.cpus().length - 1))
@@ -110,4 +110,28 @@ export async function rebuildAllThumbs(): Promise<void> {
     setThumbStatus(id, 0)
     enqueueThumb(id)
   }
+}
+
+/** 清理索引库中不存在照片的孤儿缩略图文件，返回删除数量 */
+export function cleanupOrphanThumbs(): number {
+  const ids = new Set(listAllPhotoIds())
+  const dir = thumbsDir()
+  let removed = 0
+  let names: string[]
+  try {
+    names = fs.readdirSync(dir)
+  } catch {
+    return 0
+  }
+  for (const name of names) {
+    const m = /^(\d+)\.webp$/.exec(name)
+    if (!m || ids.has(Number(m[1]))) continue
+    try {
+      fs.rmSync(path.join(dir, name), { force: true })
+      removed++
+    } catch {
+      /* 单个文件删除失败忽略 */
+    }
+  }
+  return removed
 }

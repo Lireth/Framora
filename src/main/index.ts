@@ -159,8 +159,8 @@ if (!gotLock) {
   app.setAppUserModelId('com.framora.desktop')
   Menu.setApplicationMenu(null)
 
-  app.whenReady().then(() => {
-    initDb()
+  app.whenReady().then(async () => {
+    await initDb()
     registerProtocols()
     registerIpc()
     createWindow()

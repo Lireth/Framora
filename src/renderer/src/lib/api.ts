@@ -58,6 +58,7 @@ export const api = {
   openInExplorer: (id: number): Promise<void> => call('photos:openInExplorer', id),
   regenerateThumb: (id: number): Promise<void> => call('photos:regenerateThumb', id),
   rebuildThumbs: (): Promise<void> => call('thumbs:rebuildAll'),
+  cleanupOrphanThumbs: (): Promise<number> => call('thumbs:cleanupOrphans'),
 
   setTags: (photoId: number, tagIds: number[]): Promise<void> =>
     call('photos:setTags', photoId, tagIds),

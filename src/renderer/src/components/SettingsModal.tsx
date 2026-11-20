@@ -1,5 +1,5 @@
 import React from 'react'
-import { Database, FileClock, HardDrive, Images, Moon, Sun } from 'lucide-react'
+import { Database, Eraser, FileClock, HardDrive, Images, Moon, Sun } from 'lucide-react'
 import { useStore } from '../store'
 import { api } from '../lib/api'
 import { cn, ConfirmDialog, Modal, PrimaryButton } from './ui'
@@ -52,6 +52,21 @@ export function SettingsModal(): React.JSX.Element | null {
                 className="flex items-center gap-1.5 rounded-md border border-line px-3 py-1.5 text-[12px] text-ink2 hover:bg-hover hover:text-ink"
               >
                 <Images size={13} /> 重建全部缩略图
+              </button>
+              <button
+                onClick={() =>
+                  api
+                    .cleanupOrphanThumbs()
+                    .then((n) =>
+                      useStore
+                        .getState()
+                        .toast(n ? 'success' : 'info', n ? `已清理 ${n} 个孤儿缩略图` : '没有需要清理的缩略图')
+                    )
+                    .catch(() => useStore.getState().toast('error', '清理失败'))
+                }
+                className="flex items-center gap-1.5 rounded-md border border-line px-3 py-1.5 text-[12px] text-ink2 hover:bg-hover hover:text-ink"
+              >
+                <Eraser size={13} /> 清理孤儿缩略图
               </button>
               <button
                 onClick={() => api.openThumbsDir().catch(() => undefined)}

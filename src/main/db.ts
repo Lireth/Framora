@@ -27,15 +27,14 @@ function stmt(sql: string): Database.Statement {
   return s
 }
 
-export function initDb(): void {
-  const userData = app.getPath('userData')
-  fs.mkdirSync(path.join(userData, 'thumbs'), { recursive: true })
-  fs.mkdirSync(path.join(userData, 'backups'), { recursive: true })
-  db = new Database(path.join(userData, 'framora.db'))
-  stmtCache.clear()
-  db.pragma('journal_mode = WAL')
-  db.pragma('synchronous = NORMAL')
-  db.exec(`
+/**
+ * Schema 迁移列表：索引即目标 user_version。
+ * - v1 为初始 schema，全部使用 IF NOT EXISTS，对已存在的旧库幂等。
+ * - 后续 schema 变更一律追加新迁移函数，禁止修改历史迁移。
+ */
+const MIGRATIONS: ((db: Database.Database) => void)[] = [
+  (db) => {
+    db.exec(`
     CREATE TABLE IF NOT EXISTS folders (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       path TEXT UNIQUE NOT NULL,
@@ -96,6 +95,61 @@ export function initDb(): void {
       value TEXT NOT NULL
     );
   `)
+  }
+]
+
+function migrate(): void {
+  const current = db.pragma('user_version', { simple: true }) as number
+  for (let v = current; v < MIGRATIONS.length; v++) {
+    const step = db.transaction(() => {
+      MIGRATIONS[v](db)
+      db.pragma(`user_version = ${v + 1}`)
+    })
+    step()
+  }
+}
+
+export async function initDb(): Promise<void> {
+  const userData = app.getPath('userData')
+  fs.mkdirSync(path.join(userData, 'thumbs'), { recursive: true })
+  fs.mkdirSync(path.join(userData, 'backups'), { recursive: true })
+  db = new Database(path.join(userData, 'framora.db'))
+  stmtCache.clear()
+  db.pragma('journal_mode = WAL')
+  db.pragma('synchronous = NORMAL')
+  // 迁移前先备份当前库，升级失败可回滚
+  await backupDatabase()
+  migrate()
+}
+
+/**
+ * 索引库滚动备份（迁移前调用），保留最近 DB_BACKUP_KEEP 份。
+ * 使用 better-sqlite3 内置 backup API，对 WAL 库安全。
+ */
+const DB_BACKUP_KEEP = 3
+
+export async function backupDatabase(): Promise<string | null> {
+  const dir = path.join(app.getPath('userData'), 'db-backups')
+  fs.mkdirSync(dir, { recursive: true })
+  const version = db.pragma('user_version', { simple: true }) as number
+  const file = path.join(dir, `framora-v${version}-${Date.now()}.db`)
+  try {
+    await db.backup(file)
+  } catch {
+    return null // 备份失败不阻塞启动
+  }
+  try {
+    const names = fs
+      .readdirSync(dir)
+      .filter((n) => n.startsWith('framora-'))
+      .sort((a, b) => b.localeCompare(a))
+    for (const n of names.slice(DB_BACKUP_KEEP)) {
+      fs.rmSync(path.join(dir, n), { force: true })
+    }
+  } catch {
+    /* 清理失败忽略 */
+  }
+  return file
 }
 
 export function closeDb(): void {
@@ -471,6 +525,12 @@ export function listPhotoIdsForRebuild(): number[] {
 export function listPhotoIdsPendingThumb(): number[] {
   const rows = stmt('SELECT id FROM photos WHERE thumb_status = 0 AND missing = 0')
     .all() as { id: number }[]
+  return rows.map((r) => r.id)
+}
+
+/** 全量照片 id（孤儿缩略图清理用） */
+export function listAllPhotoIds(): number[] {
+  const rows = stmt('SELECT id FROM photos').all() as { id: number }[]
   return rows.map((r) => r.id)
 }
 

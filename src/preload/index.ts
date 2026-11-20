@@ -27,6 +27,7 @@ const CALLABLE = new Set([
   'photos:batchAlbum',
   'photos:removeAlbum',
   'thumbs:rebuildAll',
+  'thumbs:cleanupOrphans',
   'tags:list',
   'tags:create',
   'tags:rename',

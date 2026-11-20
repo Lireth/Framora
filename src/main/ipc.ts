@@ -4,7 +4,7 @@ import exifr from 'exifr'
 import { BrowserWindow, dialog, ipcMain, shell, app } from 'electron'
 import * as db from './db'
 import { importFolder } from './scanner'
-import { enqueueThumb, rebuildAllThumbs, thumbPath, thumbsDir } from './thumbs'
+import { cleanupOrphanThumbs, enqueueThumb, rebuildAllThumbs, thumbPath, thumbsDir } from './thumbs'
 import { startWatcher, stopWatcher } from './watcher'
 import { clearAllBackups, exportPhotos, revertEdits, saveEdits } from './imageops'
 import { listFolders } from './db'
@@ -198,6 +198,8 @@ export function registerIpc(): void {
   })
 
   ipcMain.handle('thumbs:rebuildAll', () => rebuildAllThumbs())
+
+  ipcMain.handle('thumbs:cleanupOrphans', () => cleanupOrphanThumbs())
 
   /* ---------- tags ---------- */
   ipcMain.handle('tags:list', () => db.listTags())

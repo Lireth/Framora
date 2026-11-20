@@ -1,4 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import sharp from 'sharp'
 
 vi.mock('electron', () => ({ BrowserWindow: { getAllWindows: () => [] } }))
 vi.mock('../src/main/db', () => ({
@@ -6,14 +10,16 @@ vi.mock('../src/main/db', () => ({
   findPhotoByPath: vi.fn(),
   getFolderByPath: vi.fn(),
   insertPhoto: vi.fn(),
+  insertPhotosBatch: vi.fn(() => [10]),
   listPhotoRowsByFolder: vi.fn(() => []),
-  updatePhotoFileFields: vi.fn()
+  updatePhotoFileFields: vi.fn(),
+  updatePhotoFilesBatch: vi.fn()
 }))
 vi.mock('../src/main/thumbs', () => ({ enqueueThumb: vi.fn() }))
 
 import { IMAGE_EXTS } from '@shared/formats'
-import { isImagePath, trackDeletedFile } from '../src/main/scanner'
-import { findPhotoByPath, updatePhotoFileFields } from '../src/main/db'
+import { importFolder, isImagePath, trackDeletedFile } from '../src/main/scanner'
+import { addFolder, findPhotoByPath, getFolderByPath, insertPhotosBatch, updatePhotoFileFields } from '../src/main/db'
 
 describe('isImagePath', () => {
   it('识别全部支持的扩展名（大小写不敏感）', () => {
@@ -45,5 +51,28 @@ describe('trackDeletedFile', () => {
     vi.mocked(findPhotoByPath).mockReturnValue(undefined)
     trackDeletedFile(1, 'C:\\pic\\ghost.jpg')
     expect(updatePhotoFileFields).not.toHaveBeenCalled()
+  })
+})
+
+describe('importFolder 已知不支持格式计数', () => {
+  beforeEach(() => {
+    vi.mocked(getFolderByPath).mockReturnValue(undefined)
+    vi.mocked(addFolder).mockReturnValue(7)
+    vi.mocked(insertPhotosBatch).mockClear()
+  })
+
+  it('JPG 正常入库，HEIC 计入 unsupported 且不入库', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'framora-scan-'))
+    await sharp({ create: { width: 8, height: 8, channels: 3, background: '#fff' } })
+      .jpeg()
+      .toFile(path.join(dir, 'a.jpg'))
+    writeFileSync(path.join(dir, 'b.heic'), 'fake')
+    writeFileSync(path.join(dir, 'notes.txt'), 'x')
+
+    const r = await importFolder(dir)
+    expect(r).toEqual({ folderId: 7, found: 1, added: 1, updated: 0, unsupported: 1 })
+    const inserted = vi.mocked(insertPhotosBatch).mock.calls[0][0]
+    expect(inserted).toHaveLength(1)
+    expect(inserted[0].ext).toBe('jpg')
   })
 })

@@ -13,7 +13,7 @@ import {
 } from './db'
 import { enqueueThumb } from './thumbs'
 import { logError } from './log'
-import { IMAGE_EXT_SET, normalizeExt } from '@shared/formats'
+import { IMAGE_EXT_SET, KNOWN_UNSUPPORTED_EXT_SET, normalizeExt } from '@shared/formats'
 import type { ExportEvent, ImportResult, ScanEvent, WatchEvent } from '@shared/types'
 
 /** 扩展名集合单一事实源见 @shared/formats；此处仅做完整路径 → 扩展名的解析判断 */
@@ -37,7 +37,10 @@ export function broadcastExport(e: ExportEvent): void {
   for (const w of BrowserWindow.getAllWindows()) w.webContents.send('evt:export', e)
 }
 
-async function* walk(dir: string): AsyncGenerator<string> {
+async function* walk(
+  dir: string,
+  onKnownUnsupported?: (p: string) => void
+): AsyncGenerator<string> {
   let entries: fs.Dirent[]
   try {
     entries = await fs.promises.readdir(dir, { withFileTypes: true })
@@ -48,9 +51,12 @@ async function* walk(dir: string): AsyncGenerator<string> {
     if (e.name.startsWith('.')) continue
     const full = path.join(dir, e.name)
     if (e.isDirectory()) {
-      yield* walk(full)
-    } else if (e.isFile() && isImagePath(full)) {
-      yield full
+      yield* walk(full, onKnownUnsupported)
+    } else if (e.isFile()) {
+      if (isImagePath(full)) yield full
+      else if (KNOWN_UNSUPPORTED_EXT_SET.has(normalizeExt(path.extname(full)))) {
+        onKnownUnsupported?.(full)
+      }
     }
   }
 }
@@ -92,11 +98,12 @@ export async function importFolder(folderPath: string): Promise<ImportResult> {
   let found: number
   let added: number
   let updated: number
+  let unsupported = 0
   const now = Date.now()
   try {
-    // 1. 收集全部图片文件路径
+    // 1. 收集全部图片文件路径，同时统计已知不支持的格式（如 HEIC）用于明确提示
     const files: string[] = []
-    for await (const file of walk(folderPath)) files.push(file)
+    for await (const file of walk(folderPath, () => unsupported++)) files.push(file)
     found = files.length
 
     // 2. 并发 stat 后在内存中 diff
@@ -154,7 +161,7 @@ export async function importFolder(folderPath: string): Promise<ImportResult> {
     for (const id of newIds) enqueueThumb(id)
     for (const u of updates) enqueueThumb(u.id)
 
-    broadcastScan({ phase: 'done', folderId, found, added, updated })
+    broadcastScan({ phase: 'done', folderId, found, added, updated, unsupported })
   } catch (err) {
     broadcastScan({
       phase: 'error',
@@ -164,7 +171,7 @@ export async function importFolder(folderPath: string): Promise<ImportResult> {
     throw err
   }
   broadcastLibraryChanged()
-  return { folderId, found, added, updated }
+  return { folderId, found, added, updated, unsupported }
 }
 
 /** 批量重命名等操作期间按路径抑制监听事件（unlink/add 会在改名后异步到达） */

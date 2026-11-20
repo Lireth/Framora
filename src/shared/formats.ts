@@ -19,12 +19,22 @@ export const IMAGE_EXTS = [
   'avif',
   'tif',
   'tiff',
-  'heic',
-  'heif',
   ...RAW_EXTS
 ] as const
 
+/**
+ * 已识别、但当前构建无法解码的照片格式：
+ * 实测 sharp 0.33.5 Windows 预编译产物（libvips 8.15.3 + libheif 1.18.2）可解析 HEIF
+ * 容器，但未捆绑 HEVC 解码插件（libvips-42.dll 中无 libde265 符号），对 hvc1 条目
+ * 解码不报错而是返回未初始化内存（实测合成 hvc1 容器像素转储为堆指针数据）。
+ * 若保留导入会产生噪声缩略图的「成功」假象，故在扫描/监听/导入对话框层面排除。
+ * 待引入解码路径（如 libheif-js / Windows.Graphics.Imaging）后可重新加入 IMAGE_EXTS。
+ */
+export const KNOWN_UNSUPPORTED_EXTS = ['heic', 'heif'] as const
+
 export const IMAGE_EXT_SET: ReadonlySet<string> = new Set(IMAGE_EXTS)
+
+export const KNOWN_UNSUPPORTED_EXT_SET: ReadonlySet<string> = new Set(KNOWN_UNSUPPORTED_EXTS)
 
 const RAW_EXT_SET: ReadonlySet<string> = new Set(RAW_EXTS)
 

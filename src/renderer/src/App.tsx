@@ -39,7 +39,9 @@ export default function App(): React.JSX.Element {
           if (e.phase === 'done') {
             s.toast(
               'success',
-              `扫描完成：发现 ${e.found ?? 0} 张，新增 ${e.added ?? 0} 张，更新 ${e.updated ?? 0} 张`
+              `扫描完成：发现 ${e.found ?? 0} 张，新增 ${e.added ?? 0} 张，更新 ${e.updated ?? 0} 张${
+                e.unsupported ? `，另有 ${e.unsupported} 个无法解码的照片未导入` : ''
+              }`
             )
           } else {
             s.toast('error', e.message ?? '扫描失败')

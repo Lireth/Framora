@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { IMAGE_EXTS, RAW_EXTS, isRawExt } from '@shared/formats'
+import { IMAGE_EXTS, KNOWN_UNSUPPORTED_EXTS, RAW_EXTS, isRawExt } from '@shared/formats'
 import { formatBytes, formatCount, formatDate, formatDateTime, mediaUrl, thumbUrl } from '../src/renderer/src/lib/format'
 
 describe('formatBytes', () => {
@@ -48,5 +48,11 @@ describe('shared formats（RAW 单一事实源不变量）', () => {
     expect(isRawExt('.CR3')).toBe(true)
     expect(isRawExt('jpg')).toBe(false)
     expect(isRawExt('')).toBe(false)
+  })
+  it('HEIC/HEIF 登记为已知不支持格式，且未混入支持集合', () => {
+    for (const ext of KNOWN_UNSUPPORTED_EXTS) {
+      expect(IMAGE_EXTS).not.toContain(ext)
+    }
+    expect(KNOWN_UNSUPPORTED_EXTS).toEqual(['heic', 'heif'])
   })
 })

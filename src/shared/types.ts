@@ -144,6 +144,8 @@ export interface ScanEvent {
   added?: number
   updated?: number
   processed?: number
+  /** 已识别但当前构建无法解码的格式数量（如 HEIC），用于导入完成提示 */
+  unsupported?: number
   message?: string
 }
 
@@ -174,6 +176,8 @@ export interface ImportResult {
   added: number
   updated: number
   found: number
+  /** 已识别但当前构建无法解码的格式数量（如 HEIC） */
+  unsupported?: number
 }
 
 /** 单张照片的编辑备份条目（按时间倒序） */

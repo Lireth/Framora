@@ -8,6 +8,7 @@ import { getPhotoRow, listAllPhotoIds, listPhotoIdsForRebuild, setPhotoDimsAndDa
 import { enqueuePhash } from './phash'
 import { logError } from './log'
 import { isRawExt } from '@shared/formats'
+import { extractRawPreview } from './rawPreview'
 import type { ThumbEvent } from '@shared/types'
 
 const CONCURRENCY = Math.max(2, Math.min(6, os.cpus().length - 1))
@@ -102,10 +103,10 @@ async function run(id: number): Promise<void> {
   if (!row || row.missing) return
   try {
     if (!fs.existsSync(row.path)) throw new Error('file missing')
-    // RAW：提取嵌入预览 JPEG 作为像素源（无预览则标记失败），同时落盘供查看器使用
+    // RAW：优先提取最大嵌入预览（全尺寸 JPEG），缩略图兜底；落盘供查看器使用
     let input: string | Uint8Array = row.path
     if (isRawExt(row.ext)) {
-      const preview = await exifr.thumbnail(row.path)
+      const preview = await extractRawPreview(row.path)
       if (!preview || !preview.length) throw new Error('RAW 文件无可提取的嵌入预览')
       input = preview
       await fs.promises.writeFile(previewPath(id), preview)

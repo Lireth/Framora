@@ -8,6 +8,8 @@
  */
 import { describe, expect, it } from 'vitest'
 import exifr from 'exifr'
+import sharp from 'sharp'
+import { findLargestJpeg } from '../src/main/rawPreview'
 
 /** 构造最小合法 TIFF：II 字节序，IFD0{Make, Model, ExifIFDPointer} → ExifIFD{DateTimeOriginal} */
 function buildTiff(): Uint8Array {
@@ -78,5 +80,90 @@ describe('RAW spike: exifr 对 TIFF 系容器的解析能力', () => {
   it('无嵌入缩略图时 thumbnail 优雅返回空值', async () => {
     const thumb = await exifr.thumbnail(buildTiff())
     expect(thumb == null).toBe(true)
+  })
+})
+
+/** 构造带 IFD1 缩略图与独立大预览的合成 TIFF：II 字节序 */
+async function buildTiffWithPreview(): Promise<{ buf: Buffer; thumb: Buffer; preview: Buffer }> {
+  const thumb = await sharp({ create: { width: 64, height: 64, channels: 3, background: '#336699' } })
+    .jpeg({ quality: 30 })
+    .toBuffer()
+  const preview = await sharp({ create: { width: 512, height: 512, channels: 3, background: '#cc7733' } })
+    .jpeg({ quality: 80 })
+    .toBuffer()
+  expect(preview.length).toBeGreaterThan(thumb.length)
+
+  const ifd0 = 8
+  const ifd1 = ifd0 + 2 + 12 + 4 // IFD0: 1 条目
+  const thumbOff = ifd1 + 2 + 24 + 4 // IFD1: 2 条目
+  const total = thumbOff + thumb.length + preview.length
+  const buf = Buffer.alloc(total)
+  buf.write('II', 0, 'ascii')
+  buf.writeUInt16LE(42, 2)
+  buf.writeUInt32LE(ifd0, 4)
+
+  // IFD0：1 条目（ImageWidth），next 指向 IFD1
+  buf.writeUInt16LE(1, ifd0)
+  buf.writeUInt16LE(0x0100, ifd0 + 2)
+  buf.writeUInt16LE(3, ifd0 + 4) // SHORT
+  buf.writeUInt32LE(1, ifd0 + 6)
+  buf.writeUInt16LE(512, ifd0 + 10)
+  buf.writeUInt32LE(ifd1, ifd0 + 14)
+
+  // IFD1：ThumbnailOffset + ThumbnailLength，next = 0
+  buf.writeUInt16LE(2, ifd1)
+  buf.writeUInt16LE(0x0201, ifd1 + 2)
+  buf.writeUInt16LE(4, ifd1 + 4) // LONG
+  buf.writeUInt32LE(1, ifd1 + 6)
+  buf.writeUInt32LE(thumbOff, ifd1 + 10)
+  buf.writeUInt16LE(0x0202, ifd1 + 14)
+  buf.writeUInt16LE(4, ifd1 + 16)
+  buf.writeUInt32LE(1, ifd1 + 18)
+  buf.writeUInt32LE(thumb.length, ifd1 + 22)
+  buf.writeUInt32LE(0, ifd1 + 26)
+
+  thumb.copy(buf, thumbOff)
+  preview.copy(buf, thumbOff + thumb.length)
+  return { buf, thumb, preview }
+}
+
+describe('RAW 全尺寸预览扫描（findLargestJpeg）', () => {
+  it('多个嵌入 JPEG 时取最大者：全尺寸预览优先于 IFD1 缩略图', async () => {
+    const { buf, thumb, preview } = await buildTiffWithPreview()
+    // 旧行为对照：exifr.thumbnail 仅返回小缩略图
+    const old = await exifr.thumbnail(buf)
+    expect(old).toBeDefined()
+    expect(old!.length).toBe(thumb.length)
+    expect(old!.length).toBeLessThan(preview.length)
+
+    // 新实现取最大嵌入段（即全尺寸预览），且段完整可被 sharp 解码
+    const found = findLargestJpeg(buf)
+    expect(found).not.toBeNull()
+    expect(found!.length).toBe(preview.length)
+    const meta = await sharp(found!).metadata()
+    expect(meta.width).toBe(512)
+  })
+
+  it('跳过预览 EXIF 段内嵌缩略图，取完整外层 JPEG', async () => {
+    const inner = await sharp({ create: { width: 64, height: 64, channels: 3, background: '#336699' } })
+      .jpeg()
+      .toBuffer()
+    // 填充使外层超过 MIN_PREVIEW_BYTES 阈值（纯色压缩率极高，需注意合成尺寸）
+    const filler = Buffer.alloc(1500, 0x55)
+    const pad = Buffer.alloc(200, 0x33)
+    const outer = Buffer.concat([
+      Buffer.from([0xff, 0xd8, 0xff, 0xe1, 0x00, 0x08, 0x00, 0x00]),
+      inner,
+      filler,
+      Buffer.from([0xff, 0xd9])
+    ])
+    const found = findLargestJpeg(Buffer.concat([pad, outer, pad]))
+    expect(found?.length).toBe(outer.length)
+    expect(found!.length).toBeGreaterThan(inner.length)
+  })
+
+  it('无 JPEG 数据或过小的伪标记段返回 null', () => {
+    expect(findLargestJpeg(Buffer.alloc(4096, 0x33))).toBeNull()
+    expect(findLargestJpeg(Buffer.from([0xff, 0xd8, 0xff, 0xd9]))).toBeNull()
   })
 })

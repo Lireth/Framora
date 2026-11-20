@@ -5,7 +5,14 @@ import sharp from 'sharp'
 import { BrowserWindow, dialog, ipcMain, shell, app } from 'electron'
 import * as db from './db'
 import { IMAGE_EXTS, formatBytes, formatDateTime } from '@shared/formats'
-import { cancelScan, importFolder, isImagePath, trackNewFile } from './scanner'
+import {
+  broadcastLibraryChanged,
+  cancelScan,
+  importFolder,
+  isImagePath,
+  suppressTracking,
+  trackNewFile
+} from './scanner'
 import {
   cleanupOrphanThumbs,
   clearThumbQueue,
@@ -26,7 +33,6 @@ import {
   revertEdits,
   saveEdits
 } from './imageops'
-import { suppressTracking } from './scanner'
 import { logsDir, logError } from './log'
 import { listFolders } from './db'
 import {
@@ -37,6 +43,7 @@ import {
   installUpdate
 } from './updater'
 import type {
+  DeleteResult,
   EditSpec,
   ExportOptions,
   FolderInfo,
@@ -327,17 +334,21 @@ export function registerIpc(): void {
   })
 
   ipcMain.handle('photos:delete', async (_e, ids: number[]) => {
+    // 软删除：索引移入回收站视图，磁盘文件保留在原位置，可随时还原或彻底删除
+    const n = db.softDeletePhotos(ids)
+    broadcastLibraryChanged()
+    return { deleted: n, failed: ids.length - n }
+  })
+
+  /** 彻底删除：磁盘文件移入系统回收站，索引行与缩略图一并清除（不可在应用内还原） */
+  async function purgePhotoRows(rows: { id: number; path: string }[]): Promise<DeleteResult> {
     let failed = 0
-    // 索引中不存在的直接计为失败
-    const trashing = db.getPhotoRows(ids)
-    failed += ids.length - trashing.length
-    // 回收站操作限并发并行执行
     const okIds: number[] = []
     let cursor = 0
     const CONCURRENCY = 4
     const worker = async (): Promise<void> => {
-      while (cursor < trashing.length) {
-        const row = trashing[cursor++]
+      while (cursor < rows.length) {
+        const row = rows[cursor++]
         try {
           if (fs.existsSync(row.path)) {
             await shell.trashItem(row.path)
@@ -348,18 +359,32 @@ export function registerIpc(): void {
         }
       }
     }
-    await Promise.all(Array.from({ length: Math.max(1, Math.min(CONCURRENCY, trashing.length)) }, worker))
-    // 单事务批量清理索引行
+    await Promise.all(
+      Array.from({ length: Math.max(1, Math.min(CONCURRENCY, rows.length)) }, worker)
+    )
     db.deletePhotoRows(okIds)
-    // 并行清理缩略图与 RAW 预览文件
     await Promise.all(
       okIds.flatMap((id) => [
         fs.promises.rm(thumbPath(id), { force: true }).catch(() => undefined),
         fs.promises.rm(previewPath(id), { force: true }).catch(() => undefined)
       ])
     )
+    broadcastLibraryChanged()
     return { deleted: okIds.length, failed }
+  }
+
+  ipcMain.handle('photos:restore', (_e, ids: number[]) => {
+    const restored = db.restorePhotos(ids)
+    broadcastLibraryChanged()
+    return { restored }
   })
+
+  ipcMain.handle('photos:purge', async (_e, ids: number[]) => {
+    // 仅允许彻底删除已在回收站中的照片（安全过滤）
+    return purgePhotoRows(await db.listDeletedRows(ids))
+  })
+
+  ipcMain.handle('photos:emptyTrash', async () => purgePhotoRows(db.listAllDeletedRows()))
 
   ipcMain.handle(
     'photos:export',

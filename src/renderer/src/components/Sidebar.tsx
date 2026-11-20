@@ -341,6 +341,13 @@ export function Sidebar(): React.JSX.Element {
         active={scope === 'duplicates'}
         onClick={() => setScope('duplicates')}
       />
+      <NavRow
+        icon={<Trash2 size={15} />}
+        label="回收站"
+        count={stats.trash}
+        active={scope === 'trash'}
+        onClick={() => setScope('trash')}
+      />
 
       <SectionHeader
         title="文件夹"

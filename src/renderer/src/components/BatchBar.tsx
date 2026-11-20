@@ -1,13 +1,15 @@
 import React, { useState } from 'react'
-import { Download, Images, Pencil, Star, Tag, Trash2, X } from 'lucide-react'
+import { ArchiveRestore, Download, Images, Pencil, Star, Tag, Trash2, X } from 'lucide-react'
 import { useStore } from '../store'
 import { api } from '../lib/api'
-import { deletePhotosAction } from '../lib/actions'
+import { deletePhotosAction, purgePhotosAction, restorePhotosAction } from '../lib/actions'
 import { ConfirmDialog, ContextMenu, InputDialog, type MenuItem } from './ui'
 import { TagPicker } from './TagPicker'
 
 export function BatchBar(): React.JSX.Element {
   const selection = useStore((s) => s.selection)
+  const scope = useStore((s) => s.scope)
+  const inTrash = scope === 'trash'
   const clearSelection = useStore((s) => s.clearSelection)
   const openExport = useStore((s) => s.openExport)
   const confirmDeleteOpen = useStore((s) => s.confirmDeleteOpen)
@@ -69,17 +71,35 @@ export function BatchBar(): React.JSX.Element {
               已选 <b className="text-ink">{selection.size}</b> 项
             </span>
             <span className="mx-1 h-5 w-px bg-line" />
-            <BarBtn icon={<Star size={14} />} label="设置星级" onClick={openRateMenu} />
-            <BarBtn icon={<Tag size={14} />} label="添加标签" onClick={() => setTagPicker(!tagPicker)} />
-            <BarBtn icon={<Images size={14} />} label="加入相册" onClick={openAlbumMenu} />
-            <BarBtn icon={<Pencil size={14} />} label="批量重命名" onClick={() => setRenameOpen(true)} />
-            <BarBtn icon={<Download size={14} />} label="批量导出" onClick={() => openExport(ids)} />
-            <BarBtn
-              icon={<Trash2 size={14} />}
-              label="批量删除"
-              danger
-              onClick={() => setConfirmDeleteOpen(true)}
-            />
+            {inTrash ? (
+              <>
+                <BarBtn
+                  icon={<ArchiveRestore size={14} />}
+                  label="还原到原位置"
+                  onClick={() => void restorePhotosAction(ids)}
+                />
+                <BarBtn
+                  icon={<Trash2 size={14} />}
+                  label="彻底删除"
+                  danger
+                  onClick={() => setConfirmDeleteOpen(true)}
+                />
+              </>
+            ) : (
+              <>
+                <BarBtn icon={<Star size={14} />} label="设置星级" onClick={openRateMenu} />
+                <BarBtn icon={<Tag size={14} />} label="添加标签" onClick={() => setTagPicker(!tagPicker)} />
+                <BarBtn icon={<Images size={14} />} label="加入相册" onClick={openAlbumMenu} />
+                <BarBtn icon={<Pencil size={14} />} label="批量重命名" onClick={() => setRenameOpen(true)} />
+                <BarBtn icon={<Download size={14} />} label="批量导出" onClick={() => openExport(ids)} />
+                <BarBtn
+                  icon={<Trash2 size={14} />}
+                  label="批量删除"
+                  danger
+                  onClick={() => setConfirmDeleteOpen(true)}
+                />
+              </>
+            )}
             <span className="mx-1 h-5 w-px bg-line" />
             <BarBtn icon={<X size={14} />} label="取消选择" onClick={clearSelection} />
           </div>
@@ -145,20 +165,28 @@ function BarBtn({
   )
 }
 
-/** 全局删除确认（网格 Delete 键 / 批量栏 / 右键菜单共用） */
+/** 全局删除确认（网格 Delete 键 / 批量栏 / 右键菜单共用）；回收站作用域下为彻底删除 */
 function ConfirmHost(): React.JSX.Element {
   const open = useStore((s) => s.confirmDeleteOpen)
   const setOpen = useStore((s) => s.setConfirmDeleteOpen)
   const selection = useStore((s) => s.selection)
+  const scope = useStore((s) => s.scope)
+  const inTrash = scope === 'trash'
   return (
     <ConfirmDialog
       open={open}
-      title="删除照片"
-      message={`将把选中的 ${selection.size} 张照片移入系统回收站（不会立即从磁盘抹除）。确定继续吗？`}
-      confirmText="移入回收站"
+      title={inTrash ? '彻底删除照片' : '删除照片'}
+      message={
+        inTrash
+          ? `将把选中的 ${selection.size} 张照片移入系统回收站并从索引中移除（无法在应用内还原）。确定继续吗？`
+          : `将把选中的 ${selection.size} 张照片移入应用内回收站（文件保留在原位置，可随时还原或彻底删除）。确定继续吗？`
+      }
+      confirmText={inTrash ? '彻底删除' : '移入回收站'}
       danger
       onClose={() => setOpen(false)}
-      onConfirm={() => deletePhotosAction([...selection])}
+      onConfirm={() =>
+        inTrash ? purgePhotosAction([...selection]) : deletePhotosAction([...selection])
+      }
     />
   )
 }

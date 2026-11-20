@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Clock, FilePlus, FolderPlus, Grid3x3, Info, LayoutGrid, Search, SlidersHorizontal, Square, Trash2, X } from 'lucide-react'
 import { useStore, type SortKey } from '../store'
-import { importFilesAction, importFolderAction, selectRedundantAction } from '../lib/actions'
-import { cn, IconButton, StarRating, useOutsideClose } from './ui'
+import { emptyTrashAction, importFilesAction, importFolderAction, selectRedundantAction } from '../lib/actions'
+import { cn, ConfirmDialog, IconButton, StarRating, useOutsideClose } from './ui'
 
 function useScopeLabel(): string {
   const scope = useStore((s) => s.scope)
@@ -20,6 +20,8 @@ function useScopeLabel(): string {
       return '未加标签'
     case 'missing':
       return '缺失文件'
+    case 'trash':
+      return '回收站'
     case 'folder':
       return folders.find((f) => f.id === scopeId)?.name ?? '文件夹'
     case 'album':
@@ -124,6 +126,7 @@ export function Toolbar(): React.JSX.Element {
   const dateTo = useStore((s) => s.dateTo)
   const minRating = useStore((s) => s.minRating)
   const searchHistory = useStore((s) => s.searchHistory)
+  const stats = useStore((s) => s.stats)
   const setKeyword = useStore((s) => s.setFilter)
   const setTile = useStore((s) => s.setTile)
   const toggleDetail = useStore((s) => s.toggleDetail)
@@ -132,6 +135,7 @@ export function Toolbar(): React.JSX.Element {
   const [input, setInput] = useState(keyword)
   const [filterOpen, setFilterOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [emptyTrashOpen, setEmptyTrashOpen] = useState(false)
   const searchRef = useRef<HTMLDivElement>(null)
   const debounced = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -251,6 +255,16 @@ export function Toolbar(): React.JSX.Element {
         </div>
       )}
 
+      {scope === 'trash' && stats.trash > 0 && (
+        <button
+          onClick={() => setEmptyTrashOpen(true)}
+          title="彻底删除回收站中的全部照片（移入系统回收站，无法在应用内还原）"
+          className="flex h-8 items-center gap-1.5 rounded-md border border-line px-2.5 text-[12px] text-ink2 transition-colors hover:bg-hover hover:text-ink"
+        >
+          <Trash2 size={13} /> 清空回收站
+        </button>
+      )}
+
       <div className="mx-1 h-5 w-px bg-line" />
 
       <div className="flex items-center rounded-md border border-line">
@@ -297,6 +311,19 @@ export function Toolbar(): React.JSX.Element {
         <FolderPlus size={14} />
         导入文件夹
       </button>
+
+      <ConfirmDialog
+        open={emptyTrashOpen}
+        title="清空回收站"
+        message={`将把回收站中的 ${stats.trash} 张照片移入系统回收站并从索引中移除（无法在应用内还原）。确定继续吗？`}
+        confirmText="全部彻底删除"
+        danger
+        onClose={() => setEmptyTrashOpen(false)}
+        onConfirm={() => {
+          setEmptyTrashOpen(false)
+          void emptyTrashAction()
+        }}
+      />
     </div>
   )
 }

@@ -5,7 +5,7 @@ import { useStore } from '../store'
 import { thumbUrl } from '../lib/format'
 import { cn, ContextMenu, StarRating, type MenuItem } from './ui'
 import { api } from '../lib/api'
-import { importFolderAction } from '../lib/actions'
+import { importFolderAction, restorePhotosAction } from '../lib/actions'
 import { TagPicker } from './TagPicker'
 import type { PhotoLite } from '@shared/types'
 
@@ -35,6 +35,7 @@ const Tile = React.memo(function Tile({
   tileH: number
 }): React.JSX.Element {
   const selected = useStore((s) => s.selection.has(p.id))
+  const scope = useStore((s) => s.scope)
   const toggleSelect = useStore((s) => s.toggleSelect)
   const openViewer = useStore((s) => s.openViewer)
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null)
@@ -49,28 +50,47 @@ const Tile = React.memo(function Tile({
       onClick: () => toggleSelect(p.id, { additive: true })
     },
     { separator: true },
-    {
-      label: '添加标签…',
-      onClick: () => setTagPickerOpen(true)
-    },
-    {
-      label: '导出…',
-      onClick: () => useStore.getState().openExport([p.id])
-    },
-    { separator: true },
-    {
-      label: '在资源管理器中显示',
-      onClick: () => api.openInExplorer(p.id).catch(() => undefined)
-    },
-    {
-      label: '删除（移入回收站）',
-      danger: true,
-      onClick: () => {
-        useStore.getState().clearSelection()
-        useStore.getState().toggleSelect(p.id)
-        useStore.getState().setConfirmDeleteOpen(true)
-      }
-    }
+    ...(scope === 'trash'
+      ? [
+          {
+            label: '还原到原位置',
+            onClick: () => void restorePhotosAction([p.id])
+          },
+          {
+            label: '彻底删除（移入系统回收站）',
+            danger: true,
+            onClick: () => {
+              useStore.getState().clearSelection()
+              useStore.getState().toggleSelect(p.id)
+              useStore.getState().setConfirmDeleteOpen(true)
+            }
+          }
+        ] as MenuItem[]
+      : ([
+          {
+            label: '添加标签…',
+            onClick: () => setTagPickerOpen(true)
+          },
+          {
+            label: '导出…',
+            onClick: () => useStore.getState().openExport([p.id])
+          },
+          { separator: true },
+          {
+            label: '在资源管理器中显示',
+            onClick: () => api.openInExplorer(p.id).catch(() => undefined)
+          },
+          {
+            label: '删除（移入回收站）',
+            danger: true,
+            onClick: () => {
+              useStore.getState().clearSelection()
+              useStore.getState().toggleSelect(p.id)
+              useStore.getState().setConfirmDeleteOpen(true)
+            }
+          }
+        ] as MenuItem[])
+    )
   ]
 
   return (
@@ -245,10 +265,13 @@ export function PhotoGrid(): React.JSX.Element {
   const cols = Math.max(2, Math.floor((width + GAP) / (tileH + GAP)))
   const tileW = Math.floor((width - (cols - 1) * GAP) / cols)
 
-  /* 行模型：按拍摄/导入月份分组的头部行 + 瓦片行（时间线视图）；疑似重复视图按簇排列不分月 */
+  /* 行模型：按拍摄/导入月份分组的头部行 + 瓦片行（时间线视图）；
+     疑似重复按簇排列、回收站按删除时间倒序，两者均不做分月分组 */
   const { rows, rowIndexOfPhoto } = useMemo(() => {
     const groupable =
-      scope !== 'duplicates' && (scope === 'recent' || sort === 'taken' || sort === 'imported')
+      scope !== 'duplicates' &&
+      scope !== 'trash' &&
+      (scope === 'recent' || sort === 'taken' || sort === 'imported')
     const monthKey = (p: PhotoLite): [number, number] => {
       const ts = scope === 'recent' || sort === 'imported' ? p.imported_at : (p.taken_at ?? p.imported_at)
       const d = new Date(ts)

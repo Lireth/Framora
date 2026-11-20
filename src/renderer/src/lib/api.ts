@@ -64,6 +64,9 @@ export const api = {
   ): Promise<PhotoRecord> => call('photos:updateMeta', id, patch),
   metadata: (id: number): Promise<ExifData> => call('photos:metadata', id),
   deletePhotos: (ids: number[]): Promise<DeleteResult> => call('photos:delete', ids),
+  restorePhotos: (ids: number[]): Promise<{ restored: number }> => call('photos:restore', ids),
+  purgePhotos: (ids: number[]): Promise<DeleteResult> => call('photos:purge', ids),
+  emptyTrash: (): Promise<DeleteResult> => call('photos:emptyTrash'),
   exportPhotos: (ids: number[], dir: string, opts: ExportOptions): Promise<ExportResult> =>
     call('photos:export', ids, dir, opts),
   cancelExport: (): Promise<void> => call('photos:cancelExport'),

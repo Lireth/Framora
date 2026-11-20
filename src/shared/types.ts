@@ -54,7 +54,17 @@ export interface AlbumInfo {
   cover_id?: number | null
 }
 
-export type PhotoScope = 'all' | 'recent' | 'missing' | 'folder' | 'album' | 'tag' | 'untagged' | 'smart' | 'duplicates'
+export type PhotoScope =
+  | 'all'
+  | 'recent'
+  | 'missing'
+  | 'folder'
+  | 'album'
+  | 'tag'
+  | 'untagged'
+  | 'smart'
+  | 'duplicates'
+  | 'trash'
 
 export interface PhotoQuery {
   scope: PhotoScope
@@ -135,6 +145,8 @@ export interface LibraryStats {
   total: number
   missing: number
   untagged: number
+  /** 回收站中的照片数（软删除） */
+  trash: number
 }
 
 export interface ScanEvent {

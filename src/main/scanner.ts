@@ -3,11 +3,13 @@ import fs from 'node:fs'
 import { BrowserWindow } from 'electron'
 import {
   addFolder,
+  findDeletedPhotoId,
   findPhotoByPath,
   getFolderByPath,
   insertPhoto,
   insertPhotosBatch,
   listPhotoRowsByFolder,
+  restorePhotos,
   updatePhotoFileFields,
   updatePhotoFilesBatch
 } from './db'
@@ -228,6 +230,13 @@ function isSuppressed(p: string): boolean {
 /** 单文件新增（来自文件监听） */
 export function trackNewFile(folderId: number, filePath: string): void {
   if (isSuppressed(filePath)) return
+  // 回收站中的照片文件重新出现（用户从系统回收站放回等）：自动还原
+  const deletedId = findDeletedPhotoId(filePath)
+  if (deletedId !== null) {
+    restorePhotos([deletedId])
+    broadcastWatch({ type: 'add', folderId })
+    return
+  }
   if (findPhotoByPath(filePath)) return
   fs.promises
     .stat(filePath)

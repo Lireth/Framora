@@ -137,7 +137,8 @@ const VALID_SCOPES: PhotoScope[] = [
   'tag',
   'untagged',
   'smart',
-  'duplicates'
+  'duplicates',
+  'trash'
 ]
 const VALID_TILES = ['s', 'm', 'l'] as const
 const VALID_SORTS: SortKey[] = ['taken', 'imported', 'name', 'rating', 'size']
@@ -172,7 +173,7 @@ export const useStore = create<AppState>((set, get) => ({
   tags: [],
   albums: [],
   smartAlbums: [],
-  stats: { total: 0, missing: 0, untagged: 0 },
+  stats: { total: 0, missing: 0, untagged: 0, trash: 0 },
   photos: [],
   total: 0,
   loading: false,

@@ -67,7 +67,7 @@ export async function selectRedundantAction(mode: 'best' | 'oldest'): Promise<vo
   }
 }
 
-/** 删除（移入回收站）所选照片 */
+/** 删除（移入应用内回收站，文件保留在原位置，可还原）所选照片 */
 export async function deletePhotosAction(ids: number[]): Promise<void> {
   if (!ids.length) return
   const s = useStore.getState()
@@ -76,7 +76,7 @@ export async function deletePhotosAction(ids: number[]): Promise<void> {
     if (r.failed > 0) {
       s.toast('error', `已删除 ${r.deleted} 张，${r.failed} 张删除失败`)
     } else {
-      s.toast('success', `已将 ${r.deleted} 张照片移入回收站`)
+      s.toast('success', `已将 ${r.deleted} 张照片移入回收站（可在回收站视图还原）`)
     }
     s.clearSelection()
     if (s.viewerOpen) s.closeViewer()
@@ -84,5 +84,58 @@ export async function deletePhotosAction(ids: number[]): Promise<void> {
     s.refreshPhotos()
   } catch (e) {
     s.toast('error', e instanceof Error ? e.message : '删除失败')
+  }
+}
+
+/** 从回收站还原所选照片 */
+export async function restorePhotosAction(ids: number[]): Promise<void> {
+  if (!ids.length) return
+  const s = useStore.getState()
+  try {
+    const r = await api.restorePhotos(ids)
+    s.toast('success', `已还原 ${r.restored} 张照片`)
+    s.clearSelection()
+    await s.refreshLibrary()
+    s.refreshPhotos()
+  } catch (e) {
+    s.toast('error', e instanceof Error ? e.message : '还原失败')
+  }
+}
+
+/** 彻底删除（移入系统回收站并从索引移除，不可在应用内还原） */
+export async function purgePhotosAction(ids: number[]): Promise<void> {
+  if (!ids.length) return
+  const s = useStore.getState()
+  try {
+    const r = await api.purgePhotos(ids)
+    if (r.failed > 0) {
+      s.toast('error', `已彻底删除 ${r.deleted} 张，${r.failed} 张失败`)
+    } else {
+      s.toast('success', `已彻底删除 ${r.deleted} 张照片`)
+    }
+    s.clearSelection()
+    if (s.viewerOpen) s.closeViewer()
+    await s.refreshLibrary()
+    s.refreshPhotos()
+  } catch (e) {
+    s.toast('error', e instanceof Error ? e.message : '彻底删除失败')
+  }
+}
+
+/** 清空回收站 */
+export async function emptyTrashAction(): Promise<void> {
+  const s = useStore.getState()
+  try {
+    const r = await api.emptyTrash()
+    if (r.failed > 0) {
+      s.toast('error', `已清空 ${r.deleted} 张，${r.failed} 张失败`)
+    } else {
+      s.toast('success', `已清空回收站（${r.deleted} 张）`)
+    }
+    s.clearSelection()
+    await s.refreshLibrary()
+    s.refreshPhotos()
+  } catch (e) {
+    s.toast('error', e instanceof Error ? e.message : '清空回收站失败')
   }
 }

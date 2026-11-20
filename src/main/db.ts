@@ -196,6 +196,13 @@ const MIGRATIONS: ((db: Database.Database) => void)[] = [
       CREATE INDEX IF NOT EXISTS idx_photos_imported ON photos(imported_at);
       CREATE INDEX IF NOT EXISTS idx_photos_name ON photos(name COLLATE NOCASE);
     `)
+  },
+  // v7: 软删除回收站（deleted_at 为空表示未删除）；部分索引仅为回收站视图加速
+  (db) => {
+    db.exec(`
+      ALTER TABLE photos ADD COLUMN deleted_at INTEGER;
+      CREATE INDEX IF NOT EXISTS idx_photos_trash ON photos(deleted_at) WHERE deleted_at IS NOT NULL;
+    `)
   }
 ]
 
@@ -350,7 +357,7 @@ export function setSetting(key: string, value: string): void {
 export function listFolders(): FolderInfo[] {
   return stmt(
     `SELECT f.id, f.path, f.name, f.added_at,
-      (SELECT COUNT(*) FROM photos p WHERE p.folder_id = f.id AND p.missing = 0) AS count
+      (SELECT COUNT(*) FROM photos p WHERE p.folder_id = f.id AND p.missing = 0 AND p.deleted_at IS NULL) AS count
      FROM folders f ORDER BY f.added_at ASC`
   ).all() as FolderInfo[]
 }
@@ -638,6 +645,12 @@ function buildPhotoFilter(q: PhotoQuery): { whereSql: string; params: Record<str
     default:
       break
   }
+  // 软删除过滤：回收站视图只看已删行，其余所有作用域一律排除已删行
+  if (q.scope === 'trash') {
+    where.push('p.deleted_at IS NOT NULL')
+  } else {
+    where.push('p.deleted_at IS NULL')
+  }
   if (q.keyword && q.keyword.trim()) {
     const kw = q.keyword.trim()
     if (kw.length >= 3) {
@@ -671,6 +684,8 @@ function buildPhotoFilter(q: PhotoQuery): { whereSql: string; params: Record<str
 
 function buildOrderSql(q: PhotoQuery): string {
   const dir = q.dir === 'asc' ? 'ASC' : 'DESC'
+  // 回收站按删除时间倒序（最新删除在前），不做时间线分组
+  if (q.scope === 'trash') return 'ORDER BY p.deleted_at DESC, p.id DESC'
   if (q.scope === 'recent') return 'ORDER BY p.imported_at DESC, p.id DESC'
   switch (q.sort) {
     case 'name':
@@ -768,7 +783,7 @@ export function listTags(): TagInfo[] {
   return stmt(
     `SELECT t.id, t.name, t.color,
       (SELECT COUNT(*) FROM photo_tags pt JOIN photos p ON p.id = pt.photo_id
-        WHERE pt.tag_id = t.id AND p.missing = 0) AS count
+        WHERE pt.tag_id = t.id AND p.missing = 0 AND p.deleted_at IS NULL) AS count
      FROM tags t ORDER BY t.name COLLATE NOCASE`
   ).all() as TagInfo[]
 }
@@ -848,9 +863,9 @@ export function listAlbums(): AlbumInfo[] {
   return stmt(
     `SELECT a.id, a.name, a.color, a.created_at,
       (SELECT COUNT(*) FROM album_photos ap JOIN photos p ON p.id = ap.photo_id
-        WHERE ap.album_id = a.id AND p.missing = 0) AS count,
+        WHERE ap.album_id = a.id AND p.missing = 0 AND p.deleted_at IS NULL) AS count,
       (SELECT ap.photo_id FROM album_photos ap JOIN photos p ON p.id = ap.photo_id
-        WHERE ap.album_id = a.id AND p.missing = 0 LIMIT 1) AS cover_id
+        WHERE ap.album_id = a.id AND p.missing = 0 AND p.deleted_at IS NULL LIMIT 1) AS cover_id
      FROM albums a ORDER BY a.created_at ASC`
   ).all() as AlbumInfo[]
 }
@@ -889,20 +904,87 @@ export function removeFromAlbum(photoId: number, albumId: number): void {
 
 /* ---------- stats ---------- */
 
+/* ---------- 回收站（软删除） ---------- */
+
+/** 软删除：索引移入回收站视图，磁盘文件保留在原位置；返回实际更新的行数 */
+export function softDeletePhotos(ids: number[]): number {
+  if (!ids.length) return 0
+  const now = Date.now()
+  let n = 0
+  const run = db.transaction(() => {
+    const up = stmt('UPDATE photos SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL')
+    for (const id of ids) {
+      n += up.run(now, id).changes
+    }
+  })
+  run()
+  // 已删行不再参与相似聚类
+  markPhashDirty()
+  return n
+}
+
+/** 还原：清除 deleted_at，照片立即回到原作用域 */
+export function restorePhotos(ids: number[]): number {
+  if (!ids.length) return 0
+  let n = 0
+  const run = db.transaction(() => {
+    const up = stmt('UPDATE photos SET deleted_at = NULL WHERE id = ? AND deleted_at IS NOT NULL')
+    for (const id of ids) {
+      n += up.run(id).changes
+    }
+  })
+  run()
+  markPhashDirty()
+  return n
+}
+
+/** 按路径查找已在回收站中的照片（watcher 检测到文件重新出现时自动还原用） */
+export function findDeletedPhotoId(photoPath: string): number | null {
+  const row = stmt('SELECT id FROM photos WHERE path = ? AND deleted_at IS NOT NULL').get(
+    photoPath
+  ) as { id: number } | undefined
+  return row?.id ?? null
+}
+
+/** 指定 id 中已在回收站内的行（彻底删除前的安全过滤） */
+export function listDeletedRows(ids: number[]): { id: number; path: string }[] {
+  if (!ids.length) return []
+  const rows: { id: number; path: string }[] = []
+  for (let i = 0; i < ids.length; i += 900) {
+    const chunk = ids.slice(i, i + 900)
+    const ph = chunk.map(() => '?').join(', ')
+    const part = stmt(
+      `SELECT id, path FROM photos WHERE deleted_at IS NOT NULL AND id IN (${ph})`
+    ).all(...chunk) as { id: number; path: string }[]
+    rows.push(...part)
+  }
+  return rows
+}
+
+/** 回收站全部行（清空回收站用） */
+export function listAllDeletedRows(): { id: number; path: string }[] {
+  return stmt('SELECT id, path FROM photos WHERE deleted_at IS NOT NULL').all() as {
+    id: number
+    path: string
+  }[]
+}
+
+/* ---------- stats ---------- */
+
 export function listPhotoIdsForRebuild(): number[] {
-  const rows = stmt('SELECT id FROM photos WHERE missing = 0')
+  const rows = stmt('SELECT id FROM photos WHERE missing = 0 AND deleted_at IS NULL')
     .all() as { id: number }[]
   return rows.map((r) => r.id)
 }
 
 /** 上次退出时未完成缩略图生成的照片（用于启动续跑） */
 export function listPhotoIdsPendingThumb(): number[] {
-  const rows = stmt('SELECT id FROM photos WHERE thumb_status = 0 AND missing = 0')
+  const rows = stmt('SELECT id FROM photos WHERE thumb_status = 0 AND missing = 0 AND deleted_at IS NULL')
     .all() as { id: number }[]
   return rows.map((r) => r.id)
 }
 
-/** 全量照片 id（孤儿缩略图清理用） */
+/** 全量照片 id（孤儿缩略图清理用；含回收站照片——还原时缩略图需即时可用） */
 export function listAllPhotoIds(): number[] {
   const rows = stmt('SELECT id FROM photos').all() as { id: number }[]
   return rows.map((r) => r.id)
@@ -915,7 +997,9 @@ export function setPhotoPhash(id: number, lo: number, hi: number): void {
 }
 
 export function listPhotosForPhash(): { id: number; path: string }[] {
-  return stmt('SELECT id, path FROM photos WHERE phash_lo IS NULL AND missing = 0').all() as {
+  return stmt(
+    'SELECT id, path FROM photos WHERE phash_lo IS NULL AND missing = 0 AND deleted_at IS NULL'
+  ).all() as {
     id: number
     path: string
   }[]
@@ -923,7 +1007,7 @@ export function listPhotosForPhash(): { id: number; path: string }[] {
 
 export function listPhashes(): { id: number; lo: number; hi: number }[] {
   return stmt(
-    'SELECT id, phash_lo AS lo, phash_hi AS hi FROM photos WHERE phash_lo IS NOT NULL AND missing = 0'
+    'SELECT id, phash_lo AS lo, phash_hi AS hi FROM photos WHERE phash_lo IS NOT NULL AND missing = 0 AND deleted_at IS NULL'
   ).all() as { id: number; lo: number; hi: number }[]
 }
 
@@ -983,13 +1067,24 @@ export async function queryDuplicates(q: { limit?: number; offset?: number }): P
   return { items, total: ids.length }
 }
 
-export function libraryStats(): { total: number; missing: number; untagged: number } {
-  const total = (stmt('SELECT COUNT(*) AS c FROM photos WHERE missing = 0').get() as { c: number }).c
-  const missing = (stmt('SELECT COUNT(*) AS c FROM photos WHERE missing = 1').get() as { c: number }).c
+export function libraryStats(): { total: number; missing: number; untagged: number; trash: number } {
+  const total = (
+    stmt('SELECT COUNT(*) AS c FROM photos WHERE missing = 0 AND deleted_at IS NULL').get() as {
+      c: number
+    }
+  ).c
+  const missing = (
+    stmt('SELECT COUNT(*) AS c FROM photos WHERE missing = 1 AND deleted_at IS NULL').get() as {
+      c: number
+    }
+  ).c
   const untagged = (
     stmt(
-      'SELECT COUNT(*) AS c FROM photos p WHERE p.missing = 0 AND NOT EXISTS (SELECT 1 FROM photo_tags pt WHERE pt.photo_id = p.id)'
+      'SELECT COUNT(*) AS c FROM photos p WHERE p.missing = 0 AND p.deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM photo_tags pt WHERE pt.photo_id = p.id)'
     ).get() as { c: number }
   ).c
-  return { total, missing, untagged }
+  const trash = (
+    stmt('SELECT COUNT(*) AS c FROM photos WHERE deleted_at IS NOT NULL').get() as { c: number }
+  ).c
+  return { total, missing, untagged, trash }
 }

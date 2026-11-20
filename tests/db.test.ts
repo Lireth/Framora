@@ -274,3 +274,89 @@ describe('dupCache 失效语义（第一批修复回归）', () => {
     expect([a, b]).toContain(r.items[0].id)
   })
 })
+
+describe('回收站（软删除）语义', () => {
+  it('软删除后所有常规视图不可见，回收站可见；还原后回到原位', () => {
+    const f = newFolder('C:\\pics')
+    const a = seed(f, 'del-1', { takenAt: Date.parse('2026-03-01') })
+    const b = seed(f, 'keep-1', { takenAt: Date.parse('2026-03-02') })
+
+    expect(db.softDeletePhotos([a])).toBe(1)
+    // 常规视图排除已删行
+    expect(db.queryPhotos({ scope: 'all' }).total).toBe(1)
+    expect(db.queryPhotoIds({ scope: 'all' })).toEqual([b])
+    expect(db.queryPhotos({ scope: 'folder', scopeId: f }).total).toBe(1)
+    // 回收站视图只含已删行，按删除时间倒序
+    const trash = db.queryPhotos({ scope: 'trash' })
+    expect(trash.total).toBe(1)
+    expect(trash.items[0].id).toBe(a)
+    // 统计口径
+    const stats = db.libraryStats()
+    expect(stats.total).toBe(1)
+    expect(stats.trash).toBe(1)
+
+    // 还原后回到原作用域
+    expect(db.restorePhotos([a])).toBe(1)
+    expect(db.queryPhotos({ scope: 'all' }).total).toBe(2)
+    expect(db.libraryStats().trash).toBe(0)
+  })
+
+  it('重复软删除幂等，还原未删除项计 0', () => {
+    const f = newFolder('C:\\pics')
+    const a = seed(f, 'del-2')
+    expect(db.softDeletePhotos([a])).toBe(1)
+    expect(db.softDeletePhotos([a])).toBe(0)
+    expect(db.restorePhotos([a])).toBe(1)
+    expect(db.restorePhotos([a])).toBe(0)
+  })
+
+  it('已删行不参与相似聚类与缩略图重建，孤儿清理仍保留其缩略图', () => {
+    const f = newFolder('C:\\pics')
+    const a = seed(f, 'dup-soft-a')
+    const b = seed(f, 'dup-soft-b')
+    const c = seed(f, 'dup-soft-c')
+    db.setPhotoPhash(a, 123, 0)
+    db.setPhotoPhash(b, 123, 0)
+    db.setPhotoPhash(c, 123, 0)
+
+    db.softDeletePhotos([a])
+    return db.duplicatePhotoIds().then((ids) => {
+      // 剩余 b/c 仍构成一簇，已删的 a 不参与
+      expect(ids.sort()).toEqual([b, c].sort())
+      // 重建与续跑排除已删行
+      expect(db.listPhotoIdsForRebuild().sort()).toEqual([b, c].sort())
+      expect(db.listPhotoIdsPendingThumb().sort()).toEqual([b, c].sort())
+      // 孤儿清理的全量 id 集合包含已删行（其缩略图在还原时需可用）
+      expect(db.listAllPhotoIds()).toHaveLength(3)
+    })
+  })
+
+  it('listDeletedRows / findDeletedPhotoId 安全过滤', () => {
+    const f = newFolder('C:\\pics')
+    const a = seed(f, 'del-3')
+    const b = seed(f, 'del-4')
+    db.softDeletePhotos([a])
+
+    expect(db.findDeletedPhotoId('C:\\pics\\del-3.jpg')).toBe(a)
+    expect(db.findDeletedPhotoId('C:\\pics\\del-4.jpg')).toBeNull()
+    // purge 安全过滤：只返回已删行
+    expect(db.listDeletedRows([a, b]).map((r) => r.id)).toEqual([a])
+    expect(db.listAllDeletedRows()).toHaveLength(1)
+  })
+
+  it('文件夹/相册/标签计数排除已删行', () => {
+    const f = newFolder('C:\\pics')
+    const a = seed(f, 'cnt-1')
+    seed(f, 'cnt-2')
+    const tag = db.createTag('计数标签', null)
+    db.setPhotoTags(a, [tag.id])
+    const album = db.createAlbum('计数相册', null)
+    db.batchAlbum([a], album)
+
+    db.softDeletePhotos([a])
+    expect(db.listFolders()[0].count).toBe(1)
+    expect(db.listTags()[0].count).toBe(0)
+    expect(db.listAlbums()[0].count).toBe(0)
+    expect(db.listAlbums()[0].cover_id == null).toBe(true)
+  })
+})

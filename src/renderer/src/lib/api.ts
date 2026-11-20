@@ -82,7 +82,8 @@ export const api = {
 
   setTheme: (mode: ThemeMode): Promise<void> => call('window:setTheme', mode),
   openDataDir: (): Promise<void> => call('app:openDataDir'),
-  openThumbsDir: (): Promise<void> => call('app:openThumbsDir')
+  openThumbsDir: (): Promise<void> => call('app:openThumbsDir'),
+  clearBackups: (): Promise<number> => call('app:clearBackups')
 }
 
 export type EventChannel = 'evt:scan' | 'evt:thumb' | 'evt:watch' | 'evt:library'

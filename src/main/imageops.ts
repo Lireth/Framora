@@ -97,6 +97,39 @@ function pickName(
 
 /* ---------- 基础编辑（写入源文件，先备份） ---------- */
 
+/** 每张照片保留的编辑备份上限，超出自动清理最旧的 */
+const BACKUP_KEEP = 5
+
+/** 清理指定照片超出保留数量的旧备份（按时间戳文件名倒序保留最新 N 份） */
+async function prunePhotoBackups(id: number): Promise<void> {
+  try {
+    const prefix = `${id}-`
+    const names = (await fs.promises.readdir(backupsDir())).filter((n) => n.startsWith(prefix))
+    if (names.length <= BACKUP_KEEP) return
+    names.sort((a, b) => b.localeCompare(a))
+    for (const n of names.slice(BACKUP_KEEP)) {
+      await fs.promises.rm(path.join(backupsDir(), n), { force: true }).catch(() => undefined)
+    }
+  } catch {
+    /* 清理失败不影响保存流程 */
+  }
+}
+
+/** 清理全部编辑备份（设置页维护入口），返回删除数量 */
+export async function clearAllBackups(): Promise<number> {
+  let removed = 0
+  try {
+    const names = await fs.promises.readdir(backupsDir())
+    for (const n of names) {
+      await fs.promises.rm(path.join(backupsDir(), n), { force: true }).catch(() => undefined)
+      removed++
+    }
+  } catch {
+    /* 目录不存在视为无备份 */
+  }
+  return removed
+}
+
 export async function saveEdits(
   id: number,
   edit: {
@@ -114,6 +147,7 @@ export async function saveEdits(
   const backupName = `${id}-${Date.now()}${path.extname(row.path)}`
   const backupPath = path.join(backupsDir(), backupName)
   await fs.promises.copyFile(row.path, backupPath)
+  void prunePhotoBackups(id)
 
   const tmp = `${row.path}.framora-tmp${path.extname(row.path)}`
   try {

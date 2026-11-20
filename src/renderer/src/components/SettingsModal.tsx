@@ -1,5 +1,5 @@
 import React from 'react'
-import { Database, HardDrive, Images, Moon, Sun } from 'lucide-react'
+import { Database, FileClock, HardDrive, Images, Moon, Sun } from 'lucide-react'
 import { useStore } from '../store'
 import { api } from '../lib/api'
 import { cn, ConfirmDialog, Modal, PrimaryButton } from './ui'
@@ -12,6 +12,7 @@ export function SettingsModal(): React.JSX.Element | null {
   const setTheme = useStore((s) => s.setTheme)
   const appVersion = useStore((s) => s.appVersion)
   const [rebuildOpen, setRebuildOpen] = useState(false)
+  const [clearBackupsOpen, setClearBackupsOpen] = useState(false)
 
   return (
     <>
@@ -64,9 +65,16 @@ export function SettingsModal(): React.JSX.Element | null {
               >
                 <Database size={13} /> 打开数据目录
               </button>
+              <button
+                onClick={() => setClearBackupsOpen(true)}
+                className="flex items-center gap-1.5 rounded-md border border-line px-3 py-1.5 text-[12px] text-ink2 hover:bg-hover hover:text-ink"
+              >
+                <FileClock size={13} /> 清理编辑备份
+              </button>
             </div>
             <p className="mt-1.5 text-[11px] text-ink3">
               数据（索引库与缩略图）保存在应用数据目录，删除数据目录即完全重置。
+              编辑备份每张照片自动保留最近 5 份。
             </p>
           </div>
 
@@ -97,6 +105,21 @@ export function SettingsModal(): React.JSX.Element | null {
             .rebuildThumbs()
             .then(() => useStore.getState().toast('success', '已开始重建缩略图'))
             .catch(() => useStore.getState().toast('error', '重建失败'))
+        }}
+      />
+
+      <ConfirmDialog
+        open={clearBackupsOpen}
+        title="清理编辑备份"
+        message="将删除全部编辑备份文件，清理后将无法撤销已保存的编辑，照片文件本身不受影响。继续吗？"
+        confirmText="清理备份"
+        danger
+        onClose={() => setClearBackupsOpen(false)}
+        onConfirm={() => {
+          api
+            .clearBackups()
+            .then((n) => useStore.getState().toast('success', `已清理 ${n} 个备份文件`))
+            .catch(() => useStore.getState().toast('error', '清理失败'))
         }}
       />
     </>

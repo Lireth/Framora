@@ -37,7 +37,8 @@ const CALLABLE = new Set([
   'albums:delete',
   'window:setTheme',
   'app:openDataDir',
-  'app:openThumbsDir'
+  'app:openThumbsDir',
+  'app:clearBackups'
 ])
 
 const EVENTS = new Set(['evt:scan', 'evt:thumb', 'evt:watch', 'evt:library'])

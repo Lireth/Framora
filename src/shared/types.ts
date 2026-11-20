@@ -54,7 +54,7 @@ export interface AlbumInfo {
   cover_id?: number | null
 }
 
-export type PhotoScope = 'all' | 'recent' | 'missing' | 'folder' | 'album' | 'tag' | 'untagged'
+export type PhotoScope = 'all' | 'recent' | 'missing' | 'folder' | 'album' | 'tag' | 'untagged' | 'smart' | 'duplicates'
 
 export interface PhotoQuery {
   scope: PhotoScope
@@ -89,6 +89,21 @@ export interface ExportOptions {
   format?: 'original' | 'jpeg' | 'webp' | 'png' | 'avif'
   /** 文件名模板，支持 {name} 原文件名、{date} 拍摄日期、{index} 三位序号 */
   nameTemplate?: string
+}
+
+export interface SmartAlbumInfo {
+  id: number
+  name: string
+  color: string | null
+  created_at: number
+}
+
+/** 智能相册保存的筛选条件 */
+export interface SmartAlbumQuery {
+  keyword?: string
+  dateFrom?: string
+  dateTo?: string
+  minRating?: number
 }
 
 export interface MetaPair {

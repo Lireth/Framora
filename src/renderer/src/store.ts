@@ -7,6 +7,7 @@ import type {
   PhotoLite,
   PhotoQuery,
   PhotoScope,
+  SmartAlbumInfo,
   TagInfo,
   ThemeMode
 } from '@shared/types'
@@ -40,6 +41,7 @@ interface AppState extends Filters {
   folders: FolderInfo[]
   tags: TagInfo[]
   albums: AlbumInfo[]
+  smartAlbums: SmartAlbumInfo[]
   stats: LibraryStats
   photos: PhotoLite[]
   total: number
@@ -125,7 +127,17 @@ function persistViewState(): void {
   }, 400)
 }
 
-const VALID_SCOPES: PhotoScope[] = ['all', 'recent', 'missing', 'folder', 'album', 'tag', 'untagged']
+const VALID_SCOPES: PhotoScope[] = [
+  'all',
+  'recent',
+  'missing',
+  'folder',
+  'album',
+  'tag',
+  'untagged',
+  'smart',
+  'duplicates'
+]
 const VALID_TILES = ['s', 'm', 'l'] as const
 const VALID_SORTS: SortKey[] = ['taken', 'imported', 'name', 'rating', 'size']
 
@@ -158,6 +170,7 @@ export const useStore = create<AppState>((set, get) => ({
   folders: [],
   tags: [],
   albums: [],
+  smartAlbums: [],
   stats: { total: 0, missing: 0, untagged: 0 },
   photos: [],
   total: 0,
@@ -215,7 +228,7 @@ export const useStore = create<AppState>((set, get) => ({
           dir: 'asc' | 'desc'
         }>
         const scope = VALID_SCOPES.includes(v.scope as PhotoScope) ? (v.scope as PhotoScope) : 'all'
-        const needsId = scope === 'folder' || scope === 'album' || scope === 'tag'
+        const needsId = scope === 'folder' || scope === 'album' || scope === 'tag' || scope === 'smart'
         set({
           scope,
           scopeId: needsId && typeof v.scopeId === 'number' ? v.scopeId : undefined,
@@ -233,7 +246,8 @@ export const useStore = create<AppState>((set, get) => ({
     const scopeGone =
       (st.scope === 'folder' && !st.folders.some((f) => f.id === st.scopeId)) ||
       (st.scope === 'album' && !st.albums.some((a) => a.id === st.scopeId)) ||
-      (st.scope === 'tag' && !st.tags.some((t) => t.id === st.scopeId))
+      (st.scope === 'tag' && !st.tags.some((t) => t.id === st.scopeId)) ||
+      (st.scope === 'smart' && !st.smartAlbums.some((a) => a.id === st.scopeId))
     if (scopeGone) set({ scope: 'all', scopeId: undefined })
     get().refreshPhotos()
     api
@@ -262,13 +276,14 @@ export const useStore = create<AppState>((set, get) => ({
 
   refreshLibrary: async () => {
     try {
-      const [folders, tags, albums, stats] = await Promise.all([
+      const [folders, tags, albums, smartAlbums, stats] = await Promise.all([
         api.listFolders(),
         api.listTags(),
         api.listAlbums(),
+        api.listSmartAlbums(),
         api.stats()
       ])
-      set({ folders, tags, albums, stats })
+      set({ folders, tags, albums, smartAlbums, stats })
     } catch {
       /* ignore */
     }

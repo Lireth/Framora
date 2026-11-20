@@ -11,6 +11,8 @@ import type {
   PhotoQuery,
   PhotoRecord,
   QueryResult,
+  SmartAlbumInfo,
+  SmartAlbumQuery,
   TagInfo,
   ThemeMode
 } from '@shared/types'
@@ -85,6 +87,13 @@ export const api = {
   setAlbumColor: (id: number, color: string | null): Promise<void> =>
     call('albums:setColor', id, color),
   deleteAlbum: (id: number): Promise<void> => call('albums:delete', id),
+
+  listSmartAlbums: (): Promise<SmartAlbumInfo[]> => call('smartAlbums:list'),
+  createSmartAlbum: (name: string, query: SmartAlbumQuery): Promise<number> =>
+    call('smartAlbums:create', name, query),
+  renameSmartAlbum: (id: number, name: string): Promise<void> =>
+    call('smartAlbums:rename', id, name),
+  deleteSmartAlbum: (id: number): Promise<void> => call('smartAlbums:delete', id),
 
   setTheme: (mode: ThemeMode): Promise<void> => call('window:setTheme', mode),
   toggleFullscreen: (): Promise<void> => call('window:toggleFullscreen'),

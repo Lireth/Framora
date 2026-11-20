@@ -15,6 +15,7 @@ import type {
   ExportOptions,
   MetaPair,
   PhotoQuery,
+  SmartAlbumQuery,
   ThemeMode
 } from '@shared/types'
 
@@ -260,6 +261,16 @@ export function registerIpc(): void {
     db.setAlbumColor(id, color)
   )
   ipcMain.handle('albums:delete', (_e, id: number) => db.deleteAlbum(id))
+
+  /* ---------- smart albums ---------- */
+  ipcMain.handle('smartAlbums:list', () => db.listSmartAlbums())
+  ipcMain.handle('smartAlbums:create', (_e, name: string, query: SmartAlbumQuery) =>
+    db.createSmartAlbum(name.trim(), query)
+  )
+  ipcMain.handle('smartAlbums:rename', (_e, id: number, name: string) =>
+    db.renameSmartAlbum(id, name.trim())
+  )
+  ipcMain.handle('smartAlbums:delete', (_e, id: number) => db.deleteSmartAlbum(id))
 
   /* ---------- window / theme ---------- */
   ipcMain.handle('window:setTheme', (_e, mode: ThemeMode) => {

@@ -9,6 +9,7 @@ function useScopeLabel(): string {
   const scopeId = useStore((s) => s.scopeId)
   const folders = useStore((s) => s.folders)
   const albums = useStore((s) => s.albums)
+  const smartAlbums = useStore((s) => s.smartAlbums)
   const tags = useStore((s) => s.tags)
   switch (scope) {
     case 'all':
@@ -23,6 +24,8 @@ function useScopeLabel(): string {
       return folders.find((f) => f.id === scopeId)?.name ?? '文件夹'
     case 'album':
       return albums.find((a) => a.id === scopeId)?.name ?? '相册'
+    case 'smart':
+      return smartAlbums.find((a) => a.id === scopeId)?.name ?? '智能相册'
     case 'tag':
       return `# ${tags.find((t) => t.id === scopeId)?.name ?? '标签'}`
     default:

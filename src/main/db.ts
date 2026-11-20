@@ -9,6 +9,8 @@ import type {
   PhotoQuery,
   PhotoRecord,
   QueryResult,
+  SmartAlbumInfo,
+  SmartAlbumQuery,
   TagInfo,
   TagRef
 } from '@shared/types'
@@ -167,6 +169,18 @@ const MIGRATIONS: ((db: Database.Database) => void)[] = [
       END;
     `)
     db.exec(`INSERT INTO photos_fts(photos_fts) VALUES ('rebuild');`)
+  },
+  // v4: 智能相册（保存的搜索条件）
+  (db) => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS smart_albums (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        color TEXT,
+        query TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+    `)
   }
 ]
 
@@ -601,7 +615,7 @@ function buildOrderSql(q: PhotoQuery): string {
 }
 
 export function queryPhotos(q: PhotoQuery): QueryResult {
-  const { whereSql, params } = buildPhotoFilter(q)
+  const { whereSql, params } = buildPhotoFilter(resolveSmartFilters(q))
   const orderSql = buildOrderSql(q)
   const limit = Math.min(q.limit ?? 50000, 100000)
   const offset = Math.max(0, Math.floor(q.offset ?? 0))
@@ -624,11 +638,56 @@ export function queryPhotos(q: PhotoQuery): QueryResult {
 
 /** 返回匹配查询条件的全部照片 id（“全选”等批量操作用，不受分页限制） */
 export function queryPhotoIds(q: PhotoQuery): number[] {
-  const { whereSql, params } = buildPhotoFilter(q)
+  const { whereSql, params } = buildPhotoFilter(resolveSmartFilters(q))
   const rows = stmt(`SELECT p.id FROM photos p ${whereSql} LIMIT 200000`).all(params) as {
     id: number
   }[]
   return rows.map((r) => r.id)
+}
+
+/** 智能相册 scope：以保存的筛选条件覆盖查询条件 */
+function resolveSmartFilters(q: PhotoQuery): PhotoQuery {
+  if (q.scope === 'smart' && q.scopeId) {
+    const saved = getSmartAlbumQuery(q.scopeId)
+    if (saved) {
+      return { ...q, keyword: saved.keyword, dateFrom: saved.dateFrom, dateTo: saved.dateTo, minRating: saved.minRating }
+    }
+  }
+  return q
+}
+
+/* ---------- smart albums ---------- */
+
+export function listSmartAlbums(): SmartAlbumInfo[] {
+  return stmt('SELECT id, name, color, created_at FROM smart_albums ORDER BY created_at ASC').all() as SmartAlbumInfo[]
+}
+
+export function getSmartAlbumQuery(id: number): SmartAlbumQuery | undefined {
+  const row = stmt('SELECT query FROM smart_albums WHERE id = ?').get(id) as
+    | { query: string }
+    | undefined
+  if (!row) return undefined
+  try {
+    const q = JSON.parse(row.query) as SmartAlbumQuery
+    return typeof q === 'object' && q !== null ? q : undefined
+  } catch {
+    return undefined
+  }
+}
+
+export function createSmartAlbum(name: string, query: SmartAlbumQuery): number {
+  const info = stmt(
+    'INSERT INTO smart_albums (name, color, query, created_at) VALUES (?, NULL, ?, ?)'
+  ).run(name, JSON.stringify(query), Date.now())
+  return Number(info.lastInsertRowid)
+}
+
+export function renameSmartAlbum(id: number, name: string): void {
+  stmt('UPDATE smart_albums SET name = ? WHERE id = ?').run(name, id)
+}
+
+export function deleteSmartAlbum(id: number): void {
+  stmt('DELETE FROM smart_albums WHERE id = ?').run(id)
 }
 
 /* ---------- tags ---------- */

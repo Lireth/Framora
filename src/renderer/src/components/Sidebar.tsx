@@ -1,6 +1,7 @@
 import React from 'react'
 import {
   AlertTriangle,
+  BookmarkPlus,
   Clock,
   Folder,
   FolderPlus,
@@ -9,6 +10,7 @@ import {
   Palette,
   Pencil,
   RefreshCw,
+  SlidersHorizontal,
   Tag,
   Trash2
 } from 'lucide-react'
@@ -137,9 +139,11 @@ export function Sidebar(): React.JSX.Element {
   const setScope = useStore((s) => s.setScope)
 
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null)
-  const [rename, setRename] = useState<{ kind: 'album' | 'tag'; id: number; name: string } | null>(
-    null
-  )
+  const [rename, setRename] = useState<{
+    kind: 'album' | 'tag' | 'smart'
+    id: number
+    name: string
+  } | null>(null)
   const [renameValue, setRenameValue] = useState('')
 
   const folderMenu = (id: number): MenuItem[] => [
@@ -249,6 +253,45 @@ export function Sidebar(): React.JSX.Element {
       }
     }
   ]
+
+  const smartAlbums = useStore((s) => s.smartAlbums)
+
+  const smartMenu = (id: number, name: string): MenuItem[] => [
+    {
+      label: '重命名',
+      icon: <Pencil size={13} />,
+      onClick: () => {
+        setRename({ kind: 'smart', id, name })
+        setRenameValue(name)
+      }
+    },
+    { separator: true },
+    {
+      label: '删除智能相册',
+      icon: <Trash2 size={13} />,
+      danger: true,
+      onClick: async () => {
+        await api.deleteSmartAlbum(id).catch(() => undefined)
+        useStore.getState().toast('success', '智能相册已删除')
+        if (useStore.getState().scope === 'smart' && useStore.getState().scopeId === id) {
+          useStore.getState().setScope('all')
+        }
+        useStore.getState().refreshLibrary()
+        useStore.getState().refreshPhotos()
+      }
+    }
+  ]
+
+  /** 把工具栏当前的筛选条件保存为智能相册 */
+  const saveCurrentFiltersAsSmart = (): void => {
+    const s = useStore.getState()
+    if (!s.keyword && !s.dateFrom && !s.dateTo && !s.minRating) {
+      s.toast('info', '请先在工具栏设置筛选条件（关键词 / 日期 / 星级）')
+      return
+    }
+    setRename({ kind: 'smart', id: -1, name: '' })
+    setRenameValue('')
+  }
 
   return (
     <aside className="flex w-[216px] shrink-0 flex-col overflow-y-auto border-r border-line bg-panel pb-3">
@@ -366,6 +409,37 @@ export function Sidebar(): React.JSX.Element {
       ))}
 
       <SectionHeader
+        title="智能相册"
+        action={
+          <button
+            className="grid h-5 w-5 place-items-center rounded text-ink3 hover:bg-hover hover:text-ink"
+            title="保存当前筛选为智能相册"
+            onClick={saveCurrentFiltersAsSmart}
+          >
+            <BookmarkPlus size={13} />
+          </button>
+        }
+      />
+      {smartAlbums.length === 0 && (
+        <p className="px-4 py-1 text-[11.5px] leading-relaxed text-ink3">
+          把当前搜索与筛选条件保存为动态相册
+        </p>
+      )}
+      {smartAlbums.map((sa) => (
+        <NavRow
+          key={sa.id}
+          icon={<SlidersHorizontal size={15} />}
+          label={sa.name}
+          active={scope === 'smart' && scopeId === sa.id}
+          onClick={() => setScope('smart', sa.id)}
+          onContextMenu={(e) => {
+            e.preventDefault()
+            setMenu({ x: e.clientX, y: e.clientY, items: smartMenu(sa.id, sa.name) })
+          }}
+        />
+      ))}
+
+      <SectionHeader
         title="标签"
         action={
           <button
@@ -429,6 +503,19 @@ export function Sidebar(): React.JSX.Element {
               if (rename.kind === 'album') {
                 if (rename.id === -1) await api.createAlbum(name, null)
                 else await api.renameAlbum(rename.id, name)
+              } else if (rename.kind === 'smart') {
+                if (rename.id === -1) {
+                  const s = useStore.getState()
+                  await api.createSmartAlbum(name, {
+                    keyword: s.keyword || undefined,
+                    dateFrom: s.dateFrom || undefined,
+                    dateTo: s.dateTo || undefined,
+                    minRating: s.minRating || undefined
+                  })
+                  useStore.getState().toast('success', '智能相册已保存')
+                } else {
+                  await api.renameSmartAlbum(rename.id, name)
+                }
               } else {
                 if (rename.id === -1) await api.createTag(name, null)
                 else await api.renameTag(rename.id, name)
@@ -452,7 +539,7 @@ function RenameDialog({
   close,
   confirm
 }: {
-  kind: 'album' | 'tag'
+  kind: 'album' | 'tag' | 'smart'
   isNew: boolean
   value: string
   setValue: (v: string) => void
@@ -463,7 +550,18 @@ function RenameDialog({
   React.useEffect(() => {
     setTimeout(() => inputRef.current?.focus(), 30)
   }, [])
-  const title = kind === 'album' ? (isNew ? '新建相册' : '重命名相册') : isNew ? '新建标签' : '重命名标签'
+  const title =
+    kind === 'album'
+      ? isNew
+        ? '新建相册'
+        : '重命名相册'
+      : kind === 'smart'
+        ? isNew
+          ? '保存当前筛选为智能相册'
+          : '重命名智能相册'
+        : isNew
+          ? '新建标签'
+          : '重命名标签'
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 animate-fadeIn"
@@ -484,7 +582,9 @@ function RenameDialog({
             }
             if (e.key === 'Escape') close()
           }}
-          placeholder={kind === 'album' ? '例如：胶片风人像' : '例如：室外'}
+          placeholder={
+            kind === 'album' ? '例如：胶片风人像' : kind === 'smart' ? '例如：上个月的五星精选' : '例如：室外'
+          }
           className="w-full rounded-md border border-line bg-panel px-3 py-2 text-sm outline-none focus:border-[var(--c-accent)]"
         />
         <div className="mt-4 flex justify-end gap-2">

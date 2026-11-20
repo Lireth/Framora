@@ -15,11 +15,24 @@ import type {
 
 let db: Database.Database
 
+/** 预编译语句缓存：better-sqlite3 不缓存 prepare 结果，热路径重复编译有额外开销 */
+const stmtCache = new Map<string, Database.Statement>()
+
+function stmt(sql: string): Database.Statement {
+  let s = stmtCache.get(sql)
+  if (!s) {
+    s = db.prepare(sql)
+    stmtCache.set(sql, s)
+  }
+  return s
+}
+
 export function initDb(): void {
   const userData = app.getPath('userData')
   fs.mkdirSync(path.join(userData, 'thumbs'), { recursive: true })
   fs.mkdirSync(path.join(userData, 'backups'), { recursive: true })
   db = new Database(path.join(userData, 'framora.db'))
+  stmtCache.clear()
   db.pragma('journal_mode = WAL')
   db.pragma('synchronous = NORMAL')
   db.exec(`
@@ -96,14 +109,14 @@ export function closeDb(): void {
 /* ---------- settings ---------- */
 
 export function getSetting(key: string): string | null {
-  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as
+  const row = stmt('SELECT value FROM settings WHERE key = ?').get(key) as
     | { value: string }
     | undefined
   return row?.value ?? null
 }
 
 export function setSetting(key: string, value: string): void {
-  db.prepare(
+  stmt(
     'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
   ).run(key, value)
 }
@@ -111,39 +124,36 @@ export function setSetting(key: string, value: string): void {
 /* ---------- folders ---------- */
 
 export function listFolders(): FolderInfo[] {
-  return db
-    .prepare(
-      `SELECT f.id, f.path, f.name, f.added_at,
-        (SELECT COUNT(*) FROM photos p WHERE p.folder_id = f.id AND p.missing = 0) AS count
-       FROM folders f ORDER BY f.added_at ASC`
-    )
-    .all() as FolderInfo[]
+  return stmt(
+    `SELECT f.id, f.path, f.name, f.added_at,
+      (SELECT COUNT(*) FROM photos p WHERE p.folder_id = f.id AND p.missing = 0) AS count
+     FROM folders f ORDER BY f.added_at ASC`
+  ).all() as FolderInfo[]
 }
 
 export function getFolderByPath(folderPath: string): FolderInfo | undefined {
-  return db.prepare('SELECT * FROM folders WHERE path = ?').get(folderPath) as
+  return stmt('SELECT * FROM folders WHERE path = ?').get(folderPath) as
     | FolderInfo
     | undefined
 }
 
 export function addFolder(folderPath: string, name: string): number {
-  const info = db
-    .prepare('INSERT OR IGNORE INTO folders (path, name, added_at) VALUES (?, ?, ?)')
+  const info = stmt('INSERT OR IGNORE INTO folders (path, name, added_at) VALUES (?, ?, ?)')
     .run(folderPath, name, Date.now())
   if (info.changes > 0) return Number(info.lastInsertRowid)
   return getFolderByPath(folderPath)!.id
 }
 
 export function removeFolderRows(folderId: number): PhotoLite[] {
-  const rows = db.prepare('SELECT * FROM photos WHERE folder_id = ?').all(folderId) as PhotoLite[]
-  db.prepare(
+  const rows = stmt('SELECT * FROM photos WHERE folder_id = ?').all(folderId) as PhotoLite[]
+  stmt(
     `DELETE FROM photo_tags WHERE photo_id IN (SELECT id FROM photos WHERE folder_id = ?)`
   ).run(folderId)
-  db.prepare(
+  stmt(
     `DELETE FROM album_photos WHERE photo_id IN (SELECT id FROM photos WHERE folder_id = ?)`
   ).run(folderId)
-  db.prepare('DELETE FROM photos WHERE folder_id = ?').run(folderId)
-  db.prepare('DELETE FROM folders WHERE id = ?').run(folderId)
+  stmt('DELETE FROM photos WHERE folder_id = ?').run(folderId)
+  stmt('DELETE FROM folders WHERE id = ?').run(folderId)
   return rows
 }
 
@@ -153,22 +163,19 @@ const PHOTO_LITE_COLS = `id, path, name, ext, size, folder_id, rating, width, he
   imported_at, thumb_status, thumb_ts, missing, orientation`
 
 export function getPhotoRow(id: number): PhotoLite & { title: string | null; description: string | null; flip_h: number; flip_v: number; mtime: number } | undefined {
-  return db
-    .prepare(
-      `SELECT ${PHOTO_LITE_COLS}, title, description, flip_h, flip_v, mtime FROM photos WHERE id = ?`
-    )
-    .get(id) as never
+  return stmt(
+    `SELECT ${PHOTO_LITE_COLS}, title, description, flip_h, flip_v, mtime FROM photos WHERE id = ?`
+  ).get(id) as never
 }
 
 export function findPhotoByPath(photoPath: string): PhotoLite | undefined {
-  return db.prepare(`SELECT ${PHOTO_LITE_COLS} FROM photos WHERE path = ?`).get(photoPath) as
+  return stmt(`SELECT ${PHOTO_LITE_COLS} FROM photos WHERE path = ?`).get(photoPath) as
     | PhotoLite
     | undefined
 }
 
 export function listPhotoRowsByFolder(folderId: number): { id: number; path: string; mtime: number; size: number; missing: number }[] {
-  return db
-    .prepare('SELECT id, path, mtime, size, missing FROM photos WHERE folder_id = ?')
+  return stmt('SELECT id, path, mtime, size, missing FROM photos WHERE folder_id = ?')
     .all(folderId) as never
 }
 
@@ -181,12 +188,10 @@ export function insertPhoto(p: {
   mtime: number
   imported_at: number
 }): number {
-  const info = db
-    .prepare(
-      `INSERT INTO photos (folder_id, path, name, ext, size, mtime, imported_at)
-       VALUES (@folder_id, @path, @name, @ext, @size, @mtime, @imported_at)`
-    )
-    .run(p)
+  const info = stmt(
+    `INSERT INTO photos (folder_id, path, name, ext, size, mtime, imported_at)
+     VALUES (@folder_id, @path, @name, @ext, @size, @mtime, @imported_at)`
+  ).run(p)
   return Number(info.lastInsertRowid)
 }
 
@@ -209,7 +214,7 @@ export function updatePhotoFileFields(
     params.missing = fields.missing
   }
   if (!sets.length) return
-  db.prepare(`UPDATE photos SET ${sets.join(', ')} WHERE id = @id`).run(params)
+  stmt(`UPDATE photos SET ${sets.join(', ')} WHERE id = @id`).run(params)
 }
 
 export function setPhotoDimsAndDate(
@@ -218,7 +223,7 @@ export function setPhotoDimsAndDate(
   height: number | null,
   takenAt: number | null
 ): void {
-  db.prepare('UPDATE photos SET width = ?, height = ?, taken_at = ? WHERE id = ?').run(
+  stmt('UPDATE photos SET width = ?, height = ?, taken_at = ? WHERE id = ?').run(
     width,
     height,
     takenAt,
@@ -227,7 +232,7 @@ export function setPhotoDimsAndDate(
 }
 
 export function setThumbStatus(id: number, status: 0 | 1 | 2, ts?: number): void {
-  db.prepare('UPDATE photos SET thumb_status = ?, thumb_ts = ? WHERE id = ?').run(
+  stmt('UPDATE photos SET thumb_status = ?, thumb_ts = ? WHERE id = ?').run(
     status,
     ts ?? Date.now(),
     id
@@ -235,24 +240,19 @@ export function setThumbStatus(id: number, status: 0 | 1 | 2, ts?: number): void
 }
 
 export function getPhotoRecord(id: number): PhotoRecord | undefined {
-  const row = db
-    .prepare(`SELECT ${PHOTO_LITE_COLS}, title, description, flip_h, flip_v, mtime FROM photos WHERE id = ?`)
+  const row = stmt(`SELECT ${PHOTO_LITE_COLS}, title, description, flip_h, flip_v, mtime FROM photos WHERE id = ?`)
     .get(id) as
     | (Omit<PhotoRecord, 'tags' | 'albums'>)
     | undefined
   if (!row) return undefined
-  const tags = db
-    .prepare(
-      `SELECT t.id, t.name FROM photo_tags pt JOIN tags t ON t.id = pt.tag_id
-       WHERE pt.photo_id = ? ORDER BY t.name`
-    )
-    .all(id) as TagRef[]
-  const albums = db
-    .prepare(
-      `SELECT a.id, a.name FROM album_photos ap JOIN albums a ON a.id = ap.album_id
-       WHERE ap.photo_id = ? ORDER BY a.name`
-    )
-    .all(id) as TagRef[]
+  const tags = stmt(
+    `SELECT t.id, t.name FROM photo_tags pt JOIN tags t ON t.id = pt.tag_id
+     WHERE pt.photo_id = ? ORDER BY t.name`
+  ).all(id) as TagRef[]
+  const albums = stmt(
+    `SELECT a.id, a.name FROM album_photos ap JOIN albums a ON a.id = ap.album_id
+     WHERE ap.photo_id = ? ORDER BY a.name`
+  ).all(id) as TagRef[]
   return { ...row, tags, albums }
 }
 
@@ -274,15 +274,15 @@ export function updatePhotoMeta(
   const keys = Object.keys(allowed)
   if (!keys.length) return
   const sets = keys.map((k) => `${k} = @${k}`).join(', ')
-  db.prepare(`UPDATE photos SET ${sets} WHERE id = @id`).run({ id, ...allowed })
+  stmt(`UPDATE photos SET ${sets} WHERE id = @id`).run({ id, ...allowed })
 }
 
 export function deletePhotoRows(ids: number[]): void {
   const del = db.transaction((list: number[]) => {
     for (const id of list) {
-      db.prepare('DELETE FROM photo_tags WHERE photo_id = ?').run(id)
-      db.prepare('DELETE FROM album_photos WHERE photo_id = ?').run(id)
-      db.prepare('DELETE FROM photos WHERE id = ?').run(id)
+      stmt('DELETE FROM photo_tags WHERE photo_id = ?').run(id)
+      stmt('DELETE FROM album_photos WHERE photo_id = ?').run(id)
+      stmt('DELETE FROM photos WHERE id = ?').run(id)
     }
   })
   del(ids)
@@ -349,11 +349,9 @@ export function queryPhotos(q: PhotoQuery): QueryResult {
     orderSql = `ORDER BY p.imported_at ${dir}, p.id ${dir}`
   }
   const limit = Math.min(q.limit ?? 50000, 100000)
-  const items = db
-    .prepare(`SELECT ${PHOTO_LITE_COLS} FROM photos p ${whereSql} ${orderSql} LIMIT ${limit}`)
+  const items = stmt(`SELECT ${PHOTO_LITE_COLS} FROM photos p ${whereSql} ${orderSql} LIMIT ${limit}`)
     .all(params) as PhotoLite[]
-  const totalRow = db
-    .prepare(`SELECT COUNT(*) AS c FROM photos p ${whereSql}`)
+  const totalRow = stmt(`SELECT COUNT(*) AS c FROM photos p ${whereSql}`)
     .get(params) as { c: number }
   return { items, total: totalRow.c }
 }
@@ -361,39 +359,36 @@ export function queryPhotos(q: PhotoQuery): QueryResult {
 /* ---------- tags ---------- */
 
 export function listTags(): TagInfo[] {
-  return db
-    .prepare(
-      `SELECT t.id, t.name, t.color,
-        (SELECT COUNT(*) FROM photo_tags pt WHERE pt.tag_id = t.id) AS count
-       FROM tags t ORDER BY t.name COLLATE NOCASE`
-    )
-    .all() as TagInfo[]
+  return stmt(
+    `SELECT t.id, t.name, t.color,
+      (SELECT COUNT(*) FROM photo_tags pt WHERE pt.tag_id = t.id) AS count
+     FROM tags t ORDER BY t.name COLLATE NOCASE`
+  ).all() as TagInfo[]
 }
 
 export function createTag(name: string, color: string | null): TagInfo {
-  const info = db
-    .prepare('INSERT OR IGNORE INTO tags (name, color) VALUES (?, ?)')
+  const info = stmt('INSERT OR IGNORE INTO tags (name, color) VALUES (?, ?)')
     .run(name, color)
   if (info.changes === 0) {
-    const existed = db.prepare('SELECT id FROM tags WHERE name = ?').get(name) as { id: number }
+    const existed = stmt('SELECT id FROM tags WHERE name = ?').get(name) as { id: number }
     throw new Error(`标签「${name}」已存在`)
   }
   return { id: Number(info.lastInsertRowid), name, color, count: 0 }
 }
 
 export function renameTag(id: number, name: string): void {
-  db.prepare('UPDATE tags SET name = ? WHERE id = ?').run(name, id)
+  stmt('UPDATE tags SET name = ? WHERE id = ?').run(name, id)
 }
 
 export function deleteTag(id: number): void {
-  db.prepare('DELETE FROM photo_tags WHERE tag_id = ?').run(id)
-  db.prepare('DELETE FROM tags WHERE id = ?').run(id)
+  stmt('DELETE FROM photo_tags WHERE tag_id = ?').run(id)
+  stmt('DELETE FROM tags WHERE id = ?').run(id)
 }
 
 export function setPhotoTags(photoId: number, tagIds: number[]): void {
   const run = db.transaction(() => {
-    db.prepare('DELETE FROM photo_tags WHERE photo_id = ?').run(photoId)
-    const ins = db.prepare('INSERT OR IGNORE INTO photo_tags (photo_id, tag_id) VALUES (?, ?)')
+    stmt('DELETE FROM photo_tags WHERE photo_id = ?').run(photoId)
+    const ins = stmt('INSERT OR IGNORE INTO photo_tags (photo_id, tag_id) VALUES (?, ?)')
     for (const t of tagIds) ins.run(photoId, t)
   })
   run()
@@ -405,8 +400,8 @@ export function batchTags(
   removeTagIds: number[]
 ): void {
   const run = db.transaction(() => {
-    const add = db.prepare('INSERT OR IGNORE INTO photo_tags (photo_id, tag_id) VALUES (?, ?)')
-    const del = db.prepare('DELETE FROM photo_tags WHERE photo_id = ? AND tag_id = ?')
+    const add = stmt('INSERT OR IGNORE INTO photo_tags (photo_id, tag_id) VALUES (?, ?)')
+    const del = stmt('DELETE FROM photo_tags WHERE photo_id = ? AND tag_id = ?')
     for (const pid of ids) {
       for (const t of removeTagIds) del.run(pid, t)
       for (const t of addTagIds) add.run(pid, t)
@@ -417,7 +412,7 @@ export function batchTags(
 
 export function batchRate(ids: number[], rating: number): void {
   const run = db.transaction(() => {
-    const up = db.prepare('UPDATE photos SET rating = ? WHERE id = ?')
+    const up = stmt('UPDATE photos SET rating = ? WHERE id = ?')
     for (const id of ids) up.run(rating, id)
   })
   run()
@@ -426,38 +421,35 @@ export function batchRate(ids: number[], rating: number): void {
 /* ---------- albums ---------- */
 
 export function listAlbums(): AlbumInfo[] {
-  return db
-    .prepare(
-      `SELECT a.id, a.name, a.color, a.created_at,
-        (SELECT COUNT(*) FROM album_photos ap WHERE ap.album_id = a.id) AS count
-       FROM albums a ORDER BY a.created_at ASC`
-    )
-    .all() as AlbumInfo[]
+  return stmt(
+    `SELECT a.id, a.name, a.color, a.created_at,
+      (SELECT COUNT(*) FROM album_photos ap WHERE ap.album_id = a.id) AS count
+     FROM albums a ORDER BY a.created_at ASC`
+  ).all() as AlbumInfo[]
 }
 
 export function createAlbum(name: string, color: string | null): number {
-  const info = db
-    .prepare('INSERT INTO albums (name, color, created_at) VALUES (?, ?, ?)')
+  const info = stmt('INSERT INTO albums (name, color, created_at) VALUES (?, ?, ?)')
     .run(name, color, Date.now())
   return Number(info.lastInsertRowid)
 }
 
 export function renameAlbum(id: number, name: string): void {
-  db.prepare('UPDATE albums SET name = ? WHERE id = ?').run(name, id)
+  stmt('UPDATE albums SET name = ? WHERE id = ?').run(name, id)
 }
 
 export function deleteAlbum(id: number): void {
-  db.prepare('DELETE FROM album_photos WHERE album_id = ?').run(id)
-  db.prepare('DELETE FROM albums WHERE id = ?').run(id)
+  stmt('DELETE FROM album_photos WHERE album_id = ?').run(id)
+  stmt('DELETE FROM albums WHERE id = ?').run(id)
 }
 
 export function batchAlbum(ids: number[], albumId: number | null): void {
   const run = db.transaction(() => {
     if (albumId === null) {
-      const del = db.prepare('DELETE FROM album_photos WHERE photo_id = ?')
+      const del = stmt('DELETE FROM album_photos WHERE photo_id = ?')
       for (const id of ids) del.run(id)
     } else {
-      const ins = db.prepare('INSERT OR IGNORE INTO album_photos (album_id, photo_id) VALUES (?, ?)')
+      const ins = stmt('INSERT OR IGNORE INTO album_photos (album_id, photo_id) VALUES (?, ?)')
       for (const id of ids) ins.run(albumId, id)
     }
   })
@@ -465,35 +457,31 @@ export function batchAlbum(ids: number[], albumId: number | null): void {
 }
 
 export function removeFromAlbum(photoId: number, albumId: number): void {
-  db.prepare('DELETE FROM album_photos WHERE photo_id = ? AND album_id = ?').run(photoId, albumId)
+  stmt('DELETE FROM album_photos WHERE photo_id = ? AND album_id = ?').run(photoId, albumId)
 }
 
 /* ---------- stats ---------- */
 
 export function listPhotoIdsForRebuild(): number[] {
-  const rows = db
-    .prepare('SELECT id FROM photos WHERE missing = 0')
+  const rows = stmt('SELECT id FROM photos WHERE missing = 0')
     .all() as { id: number }[]
   return rows.map((r) => r.id)
 }
 
 /** 上次退出时未完成缩略图生成的照片（用于启动续跑） */
 export function listPhotoIdsPendingThumb(): number[] {
-  const rows = db
-    .prepare('SELECT id FROM photos WHERE thumb_status = 0 AND missing = 0')
+  const rows = stmt('SELECT id FROM photos WHERE thumb_status = 0 AND missing = 0')
     .all() as { id: number }[]
   return rows.map((r) => r.id)
 }
 
 export function libraryStats(): { total: number; missing: number; untagged: number } {
-  const total = (db.prepare('SELECT COUNT(*) AS c FROM photos WHERE missing = 0').get() as { c: number }).c
-  const missing = (db.prepare('SELECT COUNT(*) AS c FROM photos WHERE missing = 1').get() as { c: number }).c
+  const total = (stmt('SELECT COUNT(*) AS c FROM photos WHERE missing = 0').get() as { c: number }).c
+  const missing = (stmt('SELECT COUNT(*) AS c FROM photos WHERE missing = 1').get() as { c: number }).c
   const untagged = (
-    db
-      .prepare(
-        'SELECT COUNT(*) AS c FROM photos p WHERE p.missing = 0 AND NOT EXISTS (SELECT 1 FROM photo_tags pt WHERE pt.photo_id = p.id)'
-      )
-      .get() as { c: number }
+    stmt(
+      'SELECT COUNT(*) AS c FROM photos p WHERE p.missing = 0 AND NOT EXISTS (SELECT 1 FROM photo_tags pt WHERE pt.photo_id = p.id)'
+    ).get() as { c: number }
   ).c
   return { total, missing, untagged }
 }

@@ -86,7 +86,9 @@ export interface EditSpec {
 export interface ExportOptions {
   maxSide?: number
   quality?: number
-  format?: 'original' | 'jpeg' | 'webp' | 'png'
+  format?: 'original' | 'jpeg' | 'webp' | 'png' | 'avif'
+  /** 文件名模板，支持 {name} 原文件名、{date} 拍摄日期、{index} 三位序号 */
+  nameTemplate?: string
 }
 
 export interface MetaPair {

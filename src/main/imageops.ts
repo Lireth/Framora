@@ -11,6 +11,24 @@ function clamp(v: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, v))
 }
 
+/** 应用文件名模板并清理 Windows 非法字符 */
+function applyTemplate(
+  tpl: string,
+  row: { name: string; taken_at: number | null; imported_at: number },
+  index: number
+): string {
+  const base = path.basename(row.name, path.extname(row.name))
+  const d = new Date(row.taken_at ?? row.imported_at)
+  const date = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`
+  const out = (tpl || '{name}')
+    .replaceAll('{name}', base)
+    .replaceAll('{date}', date)
+    .replaceAll('{index}', String(index + 1).padStart(3, '0'))
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .trim()
+  return out || 'photo'
+}
+
 export async function exportPhotos(
   ids: number[],
   destDir: string,
@@ -30,7 +48,7 @@ export async function exportPhotos(
     }
     try {
       const fmt = opts.format ?? 'original'
-      const base = path.basename(row.name, path.extname(row.name))
+      const base = applyTemplate(opts.nameTemplate ?? '{name}', row, i)
       let outPath = ''
       let pipe: sharp.Sharp | null = null
       let ext = row.ext
@@ -59,6 +77,9 @@ export async function exportPhotos(
       } else if (fmt === 'webp') {
         pipe = pipe.webp({ quality: clamp(opts.quality ?? 90, 10, 100) })
         ext = 'webp'
+      } else if (fmt === 'avif') {
+        pipe = pipe.avif({ quality: clamp(opts.quality ?? 90, 10, 100) })
+        ext = 'avif'
       } else if (fmt === 'png') {
         pipe = pipe.png()
         ext = 'png'

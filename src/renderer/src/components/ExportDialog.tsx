@@ -5,7 +5,7 @@ import { api } from '../lib/api'
 import { GhostButton, Modal, PrimaryButton } from './ui'
 import { cn } from './ui'
 
-type Fmt = 'original' | 'jpeg' | 'webp' | 'png'
+type Fmt = 'original' | 'jpeg' | 'webp' | 'png' | 'avif'
 
 export function ExportDialog(): React.JSX.Element | null {
   const open = useStore((s) => s.exportOpen)
@@ -19,6 +19,7 @@ export function ExportDialog(): React.JSX.Element | null {
   const [fmt, setFmt] = useState<Fmt>('original')
   const [maxSide, setMaxSide] = useState(0)
   const [quality, setQuality] = useState(92)
+  const [nameTemplate, setNameTemplate] = useState('{name}')
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
@@ -27,6 +28,7 @@ export function ExportDialog(): React.JSX.Element | null {
       setFmt('original')
       setMaxSide(0)
       setQuality(92)
+      setNameTemplate('{name}')
     }
   }, [open])
 
@@ -49,7 +51,8 @@ export function ExportDialog(): React.JSX.Element | null {
       const r = await api.exportPhotos(ids, dir, {
         format: fmt,
         maxSide: maxSide || undefined,
-        quality
+        quality,
+        nameTemplate: nameTemplate.trim() || undefined
       })
       useStore
         .getState()
@@ -70,7 +73,8 @@ export function ExportDialog(): React.JSX.Element | null {
     ['original', '保持原格式'],
     ['jpeg', 'JPEG'],
     ['webp', 'WebP'],
-    ['png', 'PNG']
+    ['png', 'PNG'],
+    ['avif', 'AVIF']
   ]
   const sizeOptions: [number, string][] = [
     [0, '原始尺寸'],
@@ -158,7 +162,7 @@ export function ExportDialog(): React.JSX.Element | null {
           </div>
         </div>
 
-        {(fmt === 'jpeg' || fmt === 'webp') && (
+        {(fmt === 'jpeg' || fmt === 'webp' || fmt === 'avif') && (
           <div>
             <div className="mb-1 flex items-center justify-between text-[12px] text-ink3">
               <span>质量</span>
@@ -174,6 +178,19 @@ export function ExportDialog(): React.JSX.Element | null {
             />
           </div>
         )}
+
+        <div>
+          <p className="mb-1.5 text-[12px] text-ink3">文件名模板</p>
+          <input
+            value={nameTemplate}
+            onChange={(e) => setNameTemplate(e.target.value)}
+            placeholder="{name}"
+            className="h-8 w-full rounded-md border border-line bg-panel px-2.5 text-xs outline-none focus:border-[var(--c-accent)]"
+          />
+          <p className="mt-1 text-[11px] text-ink3">
+            支持 {'{name}'} 原文件名、{'{date}'} 拍摄日期、{'{index}'} 三位序号，重名自动追加序号。
+          </p>
+        </div>
 
         <p className="text-[11px] leading-relaxed text-ink3">
           重名文件自动追加序号，不会覆盖已有文件；旋转方向与星级等应用内编辑不会写入导出副本。

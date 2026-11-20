@@ -6,8 +6,10 @@ import {
   findPhotoByPath,
   getFolderByPath,
   insertPhoto,
+  insertPhotosBatch,
   listPhotoRowsByFolder,
-  updatePhotoFileFields
+  updatePhotoFileFields,
+  updatePhotoFilesBatch
 } from './db'
 import { enqueueThumb } from './thumbs'
 import type { ImportResult, ScanEvent, WatchEvent } from '@shared/types'
@@ -60,48 +62,96 @@ async function* walk(dir: string): AsyncGenerator<string> {
   }
 }
 
+interface FileStat {
+  path: string
+  size: number
+  mtime: number
+}
+
+/** 限制并发的批量 stat，避免万级文件逐个 await 串行等待 IO */
+async function statAll(files: string[], concurrency: number): Promise<FileStat[]> {
+  const out: (FileStat | null)[] = new Array(files.length).fill(null)
+  let cursor = 0
+  const worker = async (): Promise<void> => {
+    while (cursor < files.length) {
+      const i = cursor++
+      const s = await fs.promises.stat(files[i]).catch(() => null)
+      if (s) out[i] = { path: files[i], size: s.size, mtime: Math.round(s.mtimeMs) }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(concurrency, files.length)) }, worker))
+  return out.filter((s): s is FileStat => s !== null)
+}
+
 export async function importFolder(folderPath: string): Promise<ImportResult> {
   const st = await fs.promises.stat(folderPath).catch(() => null)
   if (!st || !st.isDirectory()) throw new Error('所选路径不是有效的文件夹')
   const existing = getFolderByPath(folderPath)
   const folderId = existing ? existing.id : addFolder(folderPath, path.basename(folderPath))
   broadcastScan({ phase: 'start', folderId })
-  let found = 0
-  let added = 0
-  let updated = 0
-  const known = new Map<string, { id: number; mtime: number; size: number; missing: number }>()
-  for (const r of listPhotoRowsByFolder(folderId)) {
-    known.set(r.path.toLowerCase(), r)
-  }
+  let found: number
+  let added: number
+  let updated: number
   const now = Date.now()
   try {
-    for await (const file of walk(folderPath)) {
-      found++
-      const s = await fs.promises.stat(file).catch(() => null)
-      if (!s) continue
-      const mtime = Math.round(s.mtimeMs)
-      const size = s.size
-      const k = known.get(file.toLowerCase())
+    // 1. 收集全部图片文件路径
+    const files: string[] = []
+    for await (const file of walk(folderPath)) files.push(file)
+    found = files.length
+
+    // 2. 并发 stat 后在内存中 diff
+    const known = new Map<string, { id: number; mtime: number; size: number; missing: number }>()
+    for (const r of listPhotoRowsByFolder(folderId)) {
+      known.set(r.path.toLowerCase(), r)
+    }
+    const stats = await statAll(files, 8)
+    const inserts: {
+      folder_id: number
+      path: string
+      name: string
+      ext: string
+      size: number
+      mtime: number
+      imported_at: number
+    }[] = []
+    const updates: { id: number; size: number; mtime: number }[] = []
+    const restores: { id: number; missing: 0 | 1 }[] = []
+    for (const s of stats) {
+      const k = known.get(s.path.toLowerCase())
       if (!k) {
-        const id = insertPhoto({
+        inserts.push({
           folder_id: folderId,
-          path: file,
-          name: path.basename(file),
-          ext: path.extname(file).toLowerCase().slice(1),
-          size,
-          mtime,
+          path: s.path,
+          name: path.basename(s.path),
+          ext: path.extname(s.path).toLowerCase().slice(1),
+          size: s.size,
+          mtime: s.mtime,
           imported_at: now
         })
-        added++
-        enqueueThumb(id)
-      } else if (k.mtime !== mtime || k.size !== size) {
-        updatePhotoFileFields(k.id, { size, mtime })
-        enqueueThumb(k.id)
-        updated++
+      } else if (k.mtime !== s.mtime || k.size !== s.size) {
+        updates.push({ id: k.id, size: s.size, mtime: s.mtime })
       } else if (k.missing) {
-        updatePhotoFileFields(k.id, { missing: 0 })
+        restores.push({ id: k.id, missing: 0 })
       }
     }
+
+    // 3. 分批事务写入，避免单批过大占用内存
+    const newIds: number[] = []
+    const BATCH = 500
+    for (let i = 0; i < inserts.length; i += BATCH) {
+      newIds.push(...insertPhotosBatch(inserts.slice(i, i + BATCH)))
+    }
+    for (let i = 0; i < updates.length; i += BATCH) {
+      updatePhotoFilesBatch(updates.slice(i, i + BATCH))
+    }
+    if (restores.length) updatePhotoFilesBatch(restores)
+    added = inserts.length
+    updated = updates.length
+
+    // 4. 统一入队缩略图生成
+    for (const id of newIds) enqueueThumb(id)
+    for (const u of updates) enqueueThumb(u.id)
+
     broadcastScan({ phase: 'done', folderId, found, added, updated })
   } catch (err) {
     broadcastScan({

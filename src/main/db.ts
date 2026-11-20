@@ -249,6 +249,42 @@ export function insertPhoto(p: {
   return Number(info.lastInsertRowid)
 }
 
+/** 批量插入（单事务），返回新照片 id 列表 */
+export function insertPhotosBatch(
+  rows: {
+    folder_id: number
+    path: string
+    name: string
+    ext: string
+    size: number
+    mtime: number
+    imported_at: number
+  }[]
+): number[] {
+  const run = db.transaction(() =>
+    rows.map(
+      (p) =>
+        Number(
+          stmt(
+            `INSERT INTO photos (folder_id, path, name, ext, size, mtime, imported_at)
+             VALUES (@folder_id, @path, @name, @ext, @size, @mtime, @imported_at)`
+          ).run(p).lastInsertRowid
+        )
+    )
+  )
+  return run()
+}
+
+/** 批量更新文件字段（size/mtime/missing），单事务 */
+export function updatePhotoFilesBatch(
+  rows: { id: number; size?: number; mtime?: number; missing?: 0 | 1 }[]
+): void {
+  const run = db.transaction(() => {
+    for (const r of rows) updatePhotoFileFields(r.id, r)
+  })
+  run()
+}
+
 export function updatePhotoFileFields(
   id: number,
   fields: { size?: number; mtime?: number; missing?: 0 | 1 }

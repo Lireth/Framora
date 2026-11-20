@@ -1,0 +1,60 @@
+# ============================================================
+# 拾帧 Framora — Git 忽略规则
+# 技术栈：Electron + electron-vite + electron-builder + TypeScript
+# ============================================================
+
+# ---------- 依赖 ----------
+node_modules/
+
+# ---------- 构建产物 ----------
+# electron-vite 构建输出（out/main、out/preload、out/renderer）
+out/
+# electron-builder 打包输出（安装包、win-unpacked、blockmap、latest.yml 等）
+release/
+# 通用构建输出目录（如其他工具链使用）
+dist/
+
+# ---------- 自动生成的资源 ----------
+# 由 scripts/gen-icon.mjs 在 postinstall 阶段生成，勿手工编辑、不入库
+build/icon.png
+build/icon.ico
+
+# ---------- 日志与缓存 ----------
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.eslintcache
+*.tsbuildinfo
+
+# ---------- 环境变量（防止密钥误提交） ----------
+.env
+.env.*
+*.local
+# 如需提交示例环境文件，可自行放开：
+# !.env.example
+
+# ---------- 测试与覆盖率 ----------
+coverage/
+.nyc_output/
+
+# ---------- 编辑器 / IDE ----------
+.vscode/
+!.vscode/extensions.json
+.idea/
+*.sw?
+
+# ---------- 操作系统 ----------
+# Windows
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+# macOS
+.DS_Store
+# Linux
+*~
+
+# ---------- 其他 ----------
+.trae/
+docs/

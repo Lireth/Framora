@@ -1,0 +1,271 @@
+import React, { useEffect, useRef, useState } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
+import { AlertTriangle, Check, FolderPlus, ImageOff, SearchX } from 'lucide-react'
+import { useStore } from '../store'
+import { thumbUrl } from '../lib/format'
+import { cn, ContextMenu, StarRating, type MenuItem } from './ui'
+import { api } from '../lib/api'
+import { deletePhotosAction, importFolderAction } from '../lib/actions'
+import { TagPicker } from './TagPicker'
+import type { PhotoLite } from '@shared/types'
+
+const TILE_PX = { s: 128, m: 172, l: 228 } as const
+const GAP = 10
+
+function Tile({
+  p,
+  tileW,
+  tileH
+}: {
+  p: PhotoLite
+  tileW: number
+  tileH: number
+}): React.JSX.Element {
+  const selected = useStore((s) => s.selection.has(p.id))
+  const toggleSelect = useStore((s) => s.toggleSelect)
+  const openViewer = useStore((s) => s.openViewer)
+  const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null)
+  const [imgFailed, setImgFailed] = useState(false)
+  const [hover, setHover] = useState(false)
+  const [tagPickerOpen, setTagPickerOpen] = useState(false)
+
+  const menuItems: MenuItem[] = [
+    { label: '打开查看器', onClick: () => openViewer(p.id) },
+    {
+      label: selected ? '取消选择' : '选中',
+      onClick: () => toggleSelect(p.id, { additive: true })
+    },
+    { separator: true },
+    {
+      label: '添加标签…',
+      onClick: () => setTagPickerOpen(true)
+    },
+    {
+      label: '导出…',
+      onClick: () => useStore.getState().openExport([p.id])
+    },
+    { separator: true },
+    {
+      label: '在资源管理器中显示',
+      onClick: () => api.openInExplorer(p.id).catch(() => undefined)
+    },
+    {
+      label: '删除（移入回收站）',
+      danger: true,
+      onClick: () => {
+        useStore.getState().clearSelection()
+        useStore.getState().toggleSelect(p.id)
+        useStore.getState().setConfirmDeleteOpen(true)
+      }
+    }
+  ]
+
+  return (
+    <div
+      className={cn(
+        'group relative shrink-0 overflow-hidden rounded-lg bg-raised transition-all duration-150',
+        selected ? 'ring-2 ring-[var(--c-accent)]' : 'hover:ring-1 hover:ring-[var(--c-line)]'
+      )}
+      style={{ width: tileW, height: tileH }}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      onClick={(e) =>
+        toggleSelect(p.id, { additive: e.ctrlKey || e.metaKey, range: e.shiftKey })
+      }
+      onDoubleClick={() => openViewer(p.id)}
+      onContextMenu={(e) => {
+        e.preventDefault()
+        if (!selected) toggleSelect(p.id)
+        setMenu({ x: e.clientX, y: e.clientY, items: menuItems })
+      }}
+    >
+      {/* 缩略图 */}
+      {p.missing ? (
+        <div className="flex h-full w-full flex-col items-center justify-center gap-1.5 text-ink3">
+          <ImageOff size={22} />
+          <span className="text-[10px]">文件缺失</span>
+        </div>
+      ) : p.thumb_status === 0 ? (
+        <div className="thumb-skeleton h-full w-full" />
+      ) : p.thumb_status === 2 || imgFailed ? (
+        <div className="flex h-full w-full flex-col items-center justify-center gap-1.5 text-ink3">
+          <AlertTriangle size={20} />
+          <span className="text-[10px]">无法生成缩略图</span>
+        </div>
+      ) : (
+        <img
+          src={thumbUrl(p)}
+          alt={p.name}
+          loading="lazy"
+          draggable={false}
+          onError={() => setImgFailed(true)}
+          className="h-full w-full object-cover animate-fadeIn"
+        />
+      )}
+
+      {/* 选择圈标记 */}
+      {(selected || hover) && (
+        <button
+          className={cn(
+            'absolute left-1.5 top-1.5 grid h-[18px] w-[18px] place-items-center rounded-full border transition-colors',
+            selected
+              ? 'border-[var(--c-accent)] bg-[var(--c-accent)]'
+              : 'border-white/70 bg-black/30 backdrop-blur'
+          )}
+          onClick={(e) => {
+            e.stopPropagation()
+            toggleSelect(p.id, { additive: true })
+          }}
+          aria-label="选择"
+        >
+          {selected && <Check size={11} className="text-[#171310]" strokeWidth={3.2} />}
+        </button>
+      )}
+
+      {/* 星级角标 */}
+      {p.rating > 0 && (
+        <div className="absolute bottom-1 left-1.5 flex rounded bg-black/55 px-1 py-0.5 backdrop-blur-sm">
+          <StarRating value={p.rating} size={9} />
+        </div>
+      )}
+
+      {tagPickerOpen && (
+        <TagPicker
+          photoIds={[p.id]}
+          onClose={() => setTagPickerOpen(false)}
+        />
+      )}
+
+      {menu && (
+        <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />
+      )}
+    </div>
+  )
+}
+
+function EmptyState(): React.JSX.Element {
+  const folders = useStore((s) => s.folders)
+  const total = useStore((s) => s.total)
+  const keyword = useStore((s) => s.keyword)
+  const hasFilter =
+    !!(useStore((s) => s.dateFrom) || useStore((s) => s.dateTo) || useStore((s) => s.minRating))
+
+  if (folders.length === 0) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-4 text-center">
+        <div className="grid h-16 w-16 place-items-center rounded-2xl bg-accent-soft">
+          <FolderPlus size={28} className="text-accent" />
+        </div>
+        <div>
+          <h2 className="text-lg font-semibold">从导入第一个文件夹开始</h2>
+          <p className="mt-1.5 max-w-[380px] text-[13px] leading-relaxed text-ink2">
+            拾帧会自动扫描文件夹中的照片并建立索引，
+            <br />
+            之后文件夹内有任何变动都会自动同步，无需重复导入。
+          </p>
+        </div>
+        <button
+          onClick={() => importFolderAction()}
+          className="rounded-md bg-[var(--c-accent)] px-4 py-2 text-[13px] font-medium text-[#171310] hover:bg-[var(--c-accent-hover)]"
+        >
+          选择文件夹导入
+        </button>
+      </div>
+    )
+  }
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-3 text-center text-ink3">
+      <SearchX size={30} />
+      <p className="text-[13px] text-ink2">
+        {keyword ? `没有匹配「${keyword}」的照片` : '当前筛选条件下没有照片'}
+      </p>
+      {(keyword || hasFilter) && (
+        <button
+          onClick={() =>
+            useStore.getState().setFilter({ keyword: '', dateFrom: '', dateTo: '', minRating: 0 })
+          }
+          className="rounded-md border border-line px-3 py-1.5 text-xs text-ink2 hover:bg-hover hover:text-ink"
+        >
+          清除搜索与筛选
+        </button>
+      )}
+      {total > 0 && <p className="text-[11px]">资料库共有 {total} 张照片</p>}
+    </div>
+  )
+}
+
+export function PhotoGrid(): React.JSX.Element {
+  const photos = useStore((s) => s.photos)
+  const tile = useStore((s) => s.tile)
+  const loading = useStore((s) => s.loading)
+  const parentRef = useRef<HTMLDivElement>(null)
+  const [width, setWidth] = useState(1200)
+
+  useEffect(() => {
+    const el = parentRef.current
+    if (!el) return
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect.width
+      if (w) setWidth(w)
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  const tileH = TILE_PX[tile]
+  const cols = Math.max(2, Math.floor((width + GAP) / (tileH + GAP)))
+  const tileW = Math.floor((width - (cols - 1) * GAP) / cols)
+  const rowCount = Math.ceil(photos.length / cols)
+
+  const virtualizer = useVirtualizer({
+    count: rowCount,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => tileH + GAP,
+    overscan: 4
+  })
+
+  return (
+    <div
+      ref={parentRef}
+      className="relative flex-1 overflow-y-auto overflow-x-hidden px-3 py-3"
+      data-testid="photo-grid"
+    >
+      {photos.length === 0 ? (
+        <EmptyState />
+      ) : (
+        <div
+          style={{ height: virtualizer.getTotalSize(), position: 'relative', width: '100%' }}
+        >
+          {virtualizer.getVirtualItems().map((vi) => {
+            const start = vi.index * cols
+            const items = photos.slice(start, start + cols)
+            return (
+              <div
+                key={vi.key}
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  width: '100%',
+                  height: tileH + GAP,
+                  transform: `translateY(${vi.start}px)`
+                }}
+              >
+                <div className="flex" style={{ gap: GAP }}>
+                  {items.map((p) => (
+                    <Tile key={p.id} p={p} tileW={tileW} tileH={tileH} />
+                  ))}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+      {loading && (
+        <div className="pointer-events-none absolute right-5 top-3 rounded-full bg-raised/80 px-3 py-1 text-[11px] text-ink2 shadow">
+          加载中…
+        </div>
+      )}
+    </div>
+  )
+}

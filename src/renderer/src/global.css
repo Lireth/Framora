@@ -1,0 +1,102 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --c-bg: #f5f4f0;
+  --c-panel: #fdfcfa;
+  --c-raised: #ffffff;
+  --c-hover: #edece7;
+  --c-line: #e3e1da;
+  --c-ink: #29261f;
+  --c-ink-2: #6e6a5f;
+  --c-ink-3: #a5a196;
+  --c-accent: #c2841d;
+  --c-accent-hover: #a8731a;
+  --c-accent-soft: rgba(194, 132, 29, 0.12);
+  color-scheme: light;
+}
+
+.dark {
+  --c-bg: #101014;
+  --c-panel: #16161c;
+  --c-raised: #1e1e26;
+  --c-hover: #26262f;
+  --c-line: #2b2b35;
+  --c-ink: #ececee;
+  --c-ink-2: #a8a8b2;
+  --c-ink-3: #6e6e79;
+  --c-accent: #e2a63d;
+  --c-accent-hover: #f0b75a;
+  --c-accent-soft: rgba(226, 166, 61, 0.16);
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--c-bg);
+  color: var(--c-ink);
+  font-family: 'Segoe UI Variable Display', 'Segoe UI', system-ui, 'Microsoft YaHei', sans-serif;
+  overflow: hidden;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+input,
+textarea {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--c-line);
+  border-radius: 8px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--c-ink-3);
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+input[type='range'] {
+  accent-color: var(--c-accent);
+}
+
+img {
+  -webkit-user-drag: none;
+}
+
+.thumb-skeleton {
+  background: linear-gradient(
+    110deg,
+    var(--c-hover) 30%,
+    var(--c-raised) 50%,
+    var(--c-hover) 70%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: 120% 0;
+  }
+  100% {
+    background-position: -80% 0;
+  }
+}

@@ -1,0 +1,40 @@
+appId: com.framora.desktop
+productName: 拾帧 Framora
+executableName: Framora
+copyright: Copyright © 2026 Framora Studio
+
+npmRebuild: false
+
+directories:
+  buildResources: build
+  output: release
+
+files:
+  - out/**
+  - package.json
+
+asarUnpack:
+  - node_modules/better-sqlite3/**
+  - node_modules/bindings/**
+  - node_modules/file-uri-to-path/**
+  - node_modules/sharp/**
+  - node_modules/@img/**
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: build/icon.ico
+  artifactName: Framora-${version}-setup.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: 拾帧 Framora
+  installerLanguages: [zh_CN]
+  unicode: true
+
+electronLanguages: [zh-CN, en-US]

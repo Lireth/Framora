@@ -104,7 +104,9 @@ export async function exportPhotos(
         if (t.noTransform) {
           await fs.promises.copyFile(t.src, t.outPath)
         } else {
-          let pipe = sharp(t.src, { failOn: 'none' }).rotate()
+          // withMetadata 保留 EXIF/ICC 等元数据；像素已按 EXIF/应用方向烘焙为正立，
+          // Orientation 必须显式重写为 1，避免其他软件按旧方向二次旋转
+          let pipe = sharp(t.src, { failOn: 'none' }).rotate().withMetadata({ orientation: 1 })
           if (t.orientation) pipe = pipe.rotate(t.orientation)
           if (t.flipH) pipe = pipe.flop()
           if (t.flipV) pipe = pipe.flip()
@@ -224,7 +226,9 @@ export async function saveEdits(
 
   const tmp = `${row.path}.framora-tmp${path.extname(row.path)}`
   try {
-    let pipe = sharp(row.path, { failOn: 'none' }).rotate()
+    // withMetadata 保留 EXIF/ICC 等元数据；像素已按 EXIF/应用方向烘焙为正立，
+    // Orientation 显式重写为 1（保存后应用层 orientation 已重置为 0），避免其他软件二次旋转
+    let pipe = sharp(row.path, { failOn: 'none' }).rotate().withMetadata({ orientation: 1 })
     if (row.orientation) pipe = pipe.rotate(row.orientation)
     if (row.flip_h) pipe = pipe.flop()
     if (row.flip_v) pipe = pipe.flip()

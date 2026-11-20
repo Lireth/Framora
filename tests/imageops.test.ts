@@ -16,12 +16,17 @@ vi.mock('../src/main/db', () => ({
   updatePhotoFileFields: vi.fn(),
   updatePhotoMeta: vi.fn()
 }))
-vi.mock('../src/main/thumbs', () => ({ backupsDir: () => tmpdir(), enqueueThumb: vi.fn() }))
+vi.mock('../src/main/thumbs', () => ({
+  backupsDir: () => tmpdir(),
+  enqueueThumb: vi.fn(),
+  RAW_EXTS: new Set(['cr2', 'cr3', 'nef', 'nrw', 'arw', 'raf', 'dng', 'rw2', 'orf', 'pef'])
+}))
 vi.mock('../src/main/scanner', () => ({
   broadcastExport: (e: { done: number; total: number }) => broadcasts.push(e)
 }))
 
-import { exportPhotos, pickName } from '../src/main/imageops'
+import { exportPhotos, pickName, saveEdits } from '../src/main/imageops'
+import exifr from 'exifr'
 import type { ExportOptions } from '@shared/types'
 
 let srcDir: string
@@ -57,6 +62,15 @@ async function makeJpeg(name: string, w = 40, h = 20): Promise<string> {
     .jpeg()
     .toFile(p)
   return p
+}
+
+/** 带测试 EXIF 与 Orientation=6 的源图（竖存横显：像素 20×40，自动转正后 40×20） */
+async function makeExifJpeg(name: string): Promise<void> {
+  await sharp({ create: { width: 40, height: 20, channels: 3, background: '#7fb3d5' } })
+    .rotate(90)
+    .withMetadata({ exif: { IFD0: { Make: 'framora-test' } }, orientation: 6 })
+    .jpeg()
+    .toFile(path.join(srcDir, name))
 }
 
 beforeAll(async () => {
@@ -152,5 +166,38 @@ describe('exportPhotos（两阶段并行导出回归）', () => {
     const r = await exportPhotos([9], destDir, { format: 'jpeg' } as ExportOptions)
     expect(r).toEqual({ exported: 0, failed: 1 })
     expect(broadcasts).toEqual([{ done: 1, total: 1 }])
+  })
+})
+
+describe('EXIF 元数据保留（编辑写回 / 导出重编码不丢元数据）', () => {
+  it('导出重编码保留 EXIF 且 Orientation 归一为 1', async () => {
+    rows.clear()
+    broadcasts.length = 0
+    await makeExifJpeg('exif-export.jpg')
+    addRow({ id: 500, file: 'exif-export.jpg' })
+    const dest5 = mkdtempSync(path.join(tmpdir(), 'framora-exp-exif-'))
+    const r = await exportPhotos([500], dest5, { format: 'jpeg', maxSide: 100 } as ExportOptions)
+    expect(r).toEqual({ exported: 1, failed: 0 })
+    const outPath = path.join(dest5, 'exif-export.jpg')
+    const meta = await sharp(outPath).metadata()
+    expect(meta.orientation).toBe(1)
+    expect(Math.max(meta.width ?? 0, meta.height ?? 0)).toBeLessThanOrEqual(100)
+    const exif = await exifr.parse(outPath)
+    expect(exif?.Make).toBe('framora-test')
+  })
+
+  it('编辑写回保留 EXIF 且像素转正、Orientation 归一', async () => {
+    rows.clear()
+    await makeExifJpeg('exif-edit.jpg')
+    addRow({ id: 501, file: 'exif-edit.jpg' })
+    await saveEdits(501, { brightness: 10 })
+    const p = path.join(srcDir, 'exif-edit.jpg')
+    const meta = await sharp(p).metadata()
+    expect(meta.orientation).toBe(1)
+    // EXIF 方向 6（竖存横显）经自动转正后回到原始显示尺寸
+    expect(meta.width).toBe(40)
+    expect(meta.height).toBe(20)
+    const exif = await exifr.parse(p)
+    expect(exif?.Make).toBe('framora-test')
   })
 })

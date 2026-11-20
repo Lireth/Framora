@@ -154,9 +154,20 @@ export function Sidebar(): React.JSX.Element {
       onClick: async () => {
         try {
           const r = await api.rescan(id)
-          useStore.getState().toast('success', `扫描完成：新增 ${r.added} 张，更新 ${r.updated} 张${r.unsupported ? `，另有 ${r.unsupported} 个无法解码的照片未导入` : ''}`)
-          useStore.getState().refreshLibrary()
-          useStore.getState().refreshPhotos()
+          if (r.cancelled) {
+            useStore.getState().toast('info', '扫描已取消')
+          } else {
+            useStore
+              .getState()
+              .toast(
+                'success',
+                `扫描完成：新增 ${r.added} 张，更新 ${r.updated} 张${
+                  r.unsupported ? `，另有 ${r.unsupported} 个无法解码的照片未导入` : ''
+                }`
+              )
+            useStore.getState().refreshLibrary()
+            useStore.getState().refreshPhotos()
+          }
         } catch (e) {
           useStore.getState().toast('error', e instanceof Error ? e.message : '扫描失败')
         }

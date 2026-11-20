@@ -6,6 +6,7 @@ import type {
   EditSpec,
   ExifData,
   ExportOptions,
+  ExportResult,
   FolderInfo,
   ImportFilesResult,
   ImportResult,
@@ -43,6 +44,7 @@ export const api = {
   importFolder: (p: string): Promise<ImportResult> => call('library:importFolder', p),
   importFiles: (paths: string[]): Promise<ImportFilesResult> => call('library:importFiles', paths),
   rescan: (id: number): Promise<ImportResult> => call('library:rescan', id),
+  cancelScan: (): Promise<void> => call('library:cancelScan'),
   removeFolder: (id: number): Promise<{ removed: number }> => call('library:removeFolder', id),
   stats: (): Promise<LibraryStats> => call('library:stats'),
   exportBackup: (): Promise<string | null> => call('library:exportBackup'),
@@ -60,11 +62,9 @@ export const api = {
   ): Promise<PhotoRecord> => call('photos:updateMeta', id, patch),
   metadata: (id: number): Promise<ExifData> => call('photos:metadata', id),
   deletePhotos: (ids: number[]): Promise<DeleteResult> => call('photos:delete', ids),
-  exportPhotos: (
-    ids: number[],
-    dir: string,
-    opts: ExportOptions
-  ): Promise<{ exported: number; failed: number }> => call('photos:export', ids, dir, opts),
+  exportPhotos: (ids: number[], dir: string, opts: ExportOptions): Promise<ExportResult> =>
+    call('photos:export', ids, dir, opts),
+  cancelExport: (): Promise<void> => call('photos:cancelExport'),
   saveEdits: (id: number, edit: EditSpec): Promise<PhotoRecord> => call('photos:saveEdits', id, edit),
   revertEdits: (id: number, backupName?: string): Promise<PhotoRecord> =>
     call('photos:revert', id, backupName),
@@ -73,6 +73,7 @@ export const api = {
   regenerateThumb: (id: number): Promise<void> => call('photos:regenerateThumb', id),
   rebuildThumbs: (): Promise<void> => call('thumbs:rebuildAll'),
   cleanupOrphanThumbs: (): Promise<number> => call('thumbs:cleanupOrphans'),
+  clearThumbQueue: (): Promise<number> => call('thumbs:clearQueue'),
 
   setTags: (photoId: number, tagIds: number[]): Promise<void> =>
     call('photos:setTags', photoId, tagIds),

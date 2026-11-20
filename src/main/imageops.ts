@@ -6,7 +6,7 @@ import { backupsDir, enqueueThumb } from './thumbs'
 import { broadcastExport } from './scanner'
 import { logError } from './log'
 import { isRawExt } from '@shared/formats'
-import type { BackupInfo, ExportOptions } from '@shared/types'
+import type { BackupInfo, ExportOptions, ExportResult } from '@shared/types'
 
 function clamp(v: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, v))
@@ -48,94 +48,109 @@ interface ExportTask {
 /** 导出重编码并发数：与 libvips 内部线程池配合，重叠 I/O 等待 */
 const EXPORT_CONCURRENCY = 3
 
+/** 进行中的导出任务（取消标记）：photos:cancelExport 使全部在途导出尽快中止 */
+const activeExports = new Set<{ cancelled: boolean }>()
+
+export function cancelExport(): void {
+  for (const t of activeExports) t.cancelled = true
+}
+
 export async function exportPhotos(
   ids: number[],
   destDir: string,
   opts: ExportOptions
-): Promise<{ exported: number; failed: number }> {
-  await fs.promises.mkdir(destDir, { recursive: true })
-  const fmt = opts.format ?? 'original'
-  const total = ids.length
+): Promise<ExportResult> {
+  // 令牌在任何 await 之前登记，保证调用方同步调用 cancelExport 即可取消本次导出
+  const token = { cancelled: false }
+  activeExports.add(token)
+  try {
+    await fs.promises.mkdir(destDir, { recursive: true })
+    const fmt = opts.format ?? 'original'
+    const total = ids.length
 
-  // 1. 顺序预分配输出路径：重名判定依赖会话内 used 集合，保持单线程避免并发撞名
-  const tasks: ExportTask[] = []
-  const used = new Set<string>()
-  let exported = 0
-  let failed = 0
-  let done = 0
-  for (let i = 0; i < ids.length; i++) {
-    const row = getPhotoRow(ids[i])
-    if (!row || row.missing || !fs.existsSync(row.path)) {
-      failed++
-      broadcastExport({ done: ++done, total })
-      continue
-    }
-    const base = applyTemplate(opts.nameTemplate ?? '{name}', row, i)
-    const noTransform =
-      fmt === 'original' && !opts.maxSide && !row.orientation && !row.flip_h && !row.flip_v
-    let ext = row.ext
-    if (!noTransform) {
-      if (fmt === 'jpeg') ext = 'jpg'
-      else if (fmt === 'webp') ext = 'webp'
-      else if (fmt === 'avif') ext = 'avif'
-      else if (fmt === 'png') ext = 'png'
-    }
-    const { outPath } = pickName(destDir, base, ext, used)
-    used.add(outPath.toLowerCase())
-    tasks.push({
-      src: row.path,
-      outPath,
-      noTransform,
-      orientation: row.orientation,
-      flipH: !!row.flip_h,
-      flipV: !!row.flip_v,
-      fmt,
-      srcExt: row.ext,
-      quality: opts.quality ?? 90,
-      maxSide: opts.maxSide
-    })
-  }
-
-  // 2. 小并发池执行复制/重编码
-  let cursor = 0
-  const worker = async (): Promise<void> => {
-    while (cursor < tasks.length) {
-      const t = tasks[cursor++]
-      try {
-        if (t.noTransform) {
-          await fs.promises.copyFile(t.src, t.outPath)
-        } else {
-          // withMetadata 保留 EXIF/ICC 等元数据；像素已按 EXIF/应用方向烘焙为正立，
-          // Orientation 必须显式重写为 1，避免其他软件按旧方向二次旋转
-          let pipe = sharp(t.src, { failOn: 'none' }).rotate().withMetadata({ orientation: 1 })
-          if (t.orientation) pipe = pipe.rotate(t.orientation)
-          if (t.flipH) pipe = pipe.flop()
-          if (t.flipV) pipe = pipe.flip()
-          if (t.maxSide) {
-            pipe = pipe.resize(t.maxSide, t.maxSide, { fit: 'inside', withoutEnlargement: true })
-          }
-          const q = clamp(t.quality, 10, 100)
-          if (t.fmt === 'jpeg') pipe = pipe.jpeg({ quality: q })
-          else if (t.fmt === 'webp') pipe = pipe.webp({ quality: q })
-          else if (t.fmt === 'avif') pipe = pipe.avif({ quality: q })
-          else if (t.fmt === 'png') pipe = pipe.png()
-          else if (t.srcExt === 'webp') pipe = pipe.webp({ quality: 90 })
-          else if (t.srcExt === 'png') pipe = pipe.png()
-          else pipe = pipe.jpeg({ quality: 92 })
-          await pipe.toFile(t.outPath)
-        }
-        exported++
-      } catch (err) {
-        logError('export', err)
+    // 1. 顺序预分配输出路径：重名判定依赖会话内 used 集合，保持单线程避免并发撞名
+    const tasks: ExportTask[] = []
+    const used = new Set<string>()
+    let exported = 0
+    let failed = 0
+    let done = 0
+    for (let i = 0; i < ids.length; i++) {
+      if (token.cancelled) break
+      const row = getPhotoRow(ids[i])
+      if (!row || row.missing || !fs.existsSync(row.path)) {
         failed++
+        broadcastExport({ done: ++done, total })
+        continue
       }
-      broadcastExport({ done: ++done, total })
+      const base = applyTemplate(opts.nameTemplate ?? '{name}', row, i)
+      const noTransform =
+        fmt === 'original' && !opts.maxSide && !row.orientation && !row.flip_h && !row.flip_v
+      let ext = row.ext
+      if (!noTransform) {
+        if (fmt === 'jpeg') ext = 'jpg'
+        else if (fmt === 'webp') ext = 'webp'
+        else if (fmt === 'avif') ext = 'avif'
+        else if (fmt === 'png') ext = 'png'
+      }
+      const { outPath } = pickName(destDir, base, ext, used)
+      used.add(outPath.toLowerCase())
+      tasks.push({
+        src: row.path,
+        outPath,
+        noTransform,
+        orientation: row.orientation,
+        flipH: !!row.flip_h,
+        flipV: !!row.flip_v,
+        fmt,
+        srcExt: row.ext,
+        quality: opts.quality ?? 90,
+        maxSide: opts.maxSide
+      })
     }
+
+    // 2. 小并发池执行复制/重编码
+    let cursor = 0
+    const worker = async (): Promise<void> => {
+      while (cursor < tasks.length && !token.cancelled) {
+        const t = tasks[cursor++]
+        try {
+          if (t.noTransform) {
+            await fs.promises.copyFile(t.src, t.outPath)
+          } else {
+            // withMetadata 保留 EXIF/ICC 等元数据；像素已按 EXIF/应用方向烘焙为正立，
+            // Orientation 必须显式重写为 1，避免其他软件按旧方向二次旋转
+            let pipe = sharp(t.src, { failOn: 'none' }).rotate().withMetadata({ orientation: 1 })
+            if (t.orientation) pipe = pipe.rotate(t.orientation)
+            if (t.flipH) pipe = pipe.flop()
+            if (t.flipV) pipe = pipe.flip()
+            if (t.maxSide) {
+              pipe = pipe.resize(t.maxSide, t.maxSide, { fit: 'inside', withoutEnlargement: true })
+            }
+            const q = clamp(t.quality, 10, 100)
+            if (t.fmt === 'jpeg') pipe = pipe.jpeg({ quality: q })
+            else if (t.fmt === 'webp') pipe = pipe.webp({ quality: q })
+            else if (t.fmt === 'avif') pipe = pipe.avif({ quality: q })
+            else if (t.fmt === 'png') pipe = pipe.png()
+            else if (t.srcExt === 'webp') pipe = pipe.webp({ quality: 90 })
+            else if (t.srcExt === 'png') pipe = pipe.png()
+            else pipe = pipe.jpeg({ quality: 92 })
+            await pipe.toFile(t.outPath)
+          }
+          exported++
+        } catch (err) {
+          logError('export', err)
+          failed++
+        }
+        broadcastExport({ done: ++done, total })
+      }
+    }
+    await Promise.all(
+      Array.from({ length: Math.max(1, Math.min(EXPORT_CONCURRENCY, tasks.length)) }, worker)
+    )
+    return token.cancelled ? { exported, failed, cancelled: true } : { exported, failed }
+  } finally {
+    activeExports.delete(token)
   }
-  await Promise.all(
-    Array.from({ length: Math.max(1, Math.min(EXPORT_CONCURRENCY, tasks.length)) }, worker)
-  )
-  return { exported, failed }
 }
 
 export function pickName(

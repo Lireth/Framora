@@ -54,13 +54,19 @@ export function ExportDialog(): React.JSX.Element | null {
         quality,
         nameTemplate: nameTemplate.trim() || undefined
       })
-      useStore
-        .getState()
-        .toast(
-          r.failed ? 'info' : 'success',
-          `导出完成：成功 ${r.exported} 张${r.failed ? `，失败 ${r.failed} 张` : ''} → ${dir}`
-        )
-      close()
+      if (r.cancelled) {
+        useStore
+          .getState()
+          .toast('info', `已停止导出：成功 ${r.exported} 张（已完成文件保留在导出目录）`)
+      } else {
+        useStore
+          .getState()
+          .toast(
+            r.failed ? 'info' : 'success',
+            `导出完成：成功 ${r.exported} 张${r.failed ? `，失败 ${r.failed} 张` : ''} → ${dir}`
+          )
+        close()
+      }
     } catch (e) {
       useStore.getState().toast('error', e instanceof Error ? e.message : '导出失败')
     } finally {
@@ -92,7 +98,13 @@ export function ExportDialog(): React.JSX.Element | null {
       width={440}
       footer={
         <>
-          <GhostButton onClick={close}>取消</GhostButton>
+          {busy ? (
+            <GhostButton onClick={() => void api.cancelExport().catch(() => undefined)}>
+              停止
+            </GhostButton>
+          ) : (
+            <GhostButton onClick={close}>取消</GhostButton>
+          )}
           <PrimaryButton onClick={run} disabled={busy || !dir}>
             <span className="flex items-center gap-1.5">
               {busy && <Loader2 size={13} className="animate-spin" />}

@@ -21,7 +21,7 @@ vi.mock('../src/main/scanner', () => ({
   broadcastExport: (e: { done: number; total: number }) => broadcasts.push(e)
 }))
 
-import { exportPhotos, pickName, saveEdits } from '../src/main/imageops'
+import { exportPhotos, pickName, saveEdits, cancelExport } from '../src/main/imageops'
 import exifr from 'exifr'
 import type { ExportOptions } from '@shared/types'
 
@@ -162,6 +162,20 @@ describe('exportPhotos（两阶段并行导出回归）', () => {
     const r = await exportPhotos([9], destDir, { format: 'jpeg' } as ExportOptions)
     expect(r).toEqual({ exported: 0, failed: 1 })
     expect(broadcasts).toEqual([{ done: 1, total: 1 }])
+  })
+
+  it('取消导出：不产生输出，结果标记 cancelled', async () => {
+    rows.clear()
+    broadcasts.length = 0
+    for (let i = 0; i < 20; i++) {
+      addRow({ id: 200 + i, file: 'a.jpg' })
+    }
+    const dest6 = mkdtempSync(path.join(tmpdir(), 'framora-exp-cancel-'))
+    // exportPhotos 在首个 await 前同步登记取消令牌，随后取消即可确定性命中
+    const pending = exportPhotos([200], dest6, { format: 'jpeg' } as ExportOptions)
+    cancelExport()
+    const r = await pending
+    expect(r).toEqual({ exported: 0, failed: 0, cancelled: true })
   })
 })
 

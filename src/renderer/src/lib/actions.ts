@@ -10,12 +10,16 @@ export async function importFolderAction(): Promise<void> {
     s.setScan({ active: true, label: '正在扫描文件夹…' })
     const r = await api.importFolder(dir)
     s.setScan({ active: false, label: '' })
-    s.toast(
-      'success',
-      `导入完成：发现 ${r.found} 张，新增 ${r.added} 张，更新 ${r.updated} 张${
-        r.unsupported ? `，另有 ${r.unsupported} 个无法解码的照片未导入` : ''
-      }`
-    )
+    if (r.cancelled) {
+      s.toast('info', '导入已取消')
+    } else {
+      s.toast(
+        'success',
+        `导入完成：发现 ${r.found} 张，新增 ${r.added} 张，更新 ${r.updated} 张${
+          r.unsupported ? `，另有 ${r.unsupported} 个无法解码的照片未导入` : ''
+        }`
+      )
+    }
     await s.refreshLibrary()
     s.refreshPhotos()
   } catch (e) {

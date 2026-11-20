@@ -1,6 +1,20 @@
-import { Loader2 } from 'lucide-react'
+import { Loader2, X } from 'lucide-react'
 import { useStore } from '../store'
+import { api } from '../lib/api'
 import { formatCount } from '../lib/format'
+
+function MiniStopBtn({ label, onClick }: { label: string; onClick: () => void }): React.JSX.Element {
+  return (
+    <button
+      onClick={onClick}
+      aria-label={label}
+      title={label}
+      className="grid h-4 w-4 place-items-center rounded-full text-ink3 transition-colors hover:bg-hover hover:text-ink"
+    >
+      <X size={10} />
+    </button>
+  )
+}
 
 export function StatusBar(): React.JSX.Element {
   const total = useStore((s) => s.total)
@@ -22,11 +36,32 @@ export function StatusBar(): React.JSX.Element {
         {selection.size > 0 && <span>已选 {selection.size} 项</span>}
       </div>
       <div className="flex items-center gap-3">
-        {pending > 0 && !scan.active && <span>生成缩略图 {pending} 张…</span>}
+        {pending > 0 && !scan.active && (
+          <span className="flex items-center gap-1">
+            生成缩略图 {pending} 张…
+            <MiniStopBtn
+              label="停止生成缩略图（剩余的将在下次启动时继续）"
+              onClick={() => {
+                void api
+                  .clearThumbQueue()
+                  .then((n) =>
+                    useStore
+                      .getState()
+                      .toast('info', `已停止缩略图生成，${n} 张待下次启动时自动继续`)
+                  )
+                  .catch(() => undefined)
+              }}
+            />
+          </span>
+        )}
         {scan.active && (
           <span className="flex items-center gap-1.5 text-accent">
             <Loader2 size={11} className="animate-spin" />
             {scan.label}
+            <MiniStopBtn
+              label="取消扫描（尚未导入的部分不会写入索引）"
+              onClick={() => void api.cancelScan().catch(() => undefined)}
+            />
           </span>
         )}
         <span>拾帧 Framora</span>

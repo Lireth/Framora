@@ -39,8 +39,10 @@ export function broadcastExport(e: ExportEvent): void {
 
 async function* walk(
   dir: string,
-  onKnownUnsupported?: (p: string) => void
+  onKnownUnsupported?: (p: string) => void,
+  token?: { cancelled: boolean }
 ): AsyncGenerator<string> {
+  if (token?.cancelled) return
   let entries: fs.Dirent[]
   try {
     entries = await fs.promises.readdir(dir, { withFileTypes: true })
@@ -48,10 +50,11 @@ async function* walk(
     return
   }
   for (const e of entries) {
+    if (token?.cancelled) return
     if (e.name.startsWith('.')) continue
     const full = path.join(dir, e.name)
     if (e.isDirectory()) {
-      yield* walk(full, onKnownUnsupported)
+      yield* walk(full, onKnownUnsupported, token)
     } else if (e.isFile()) {
       if (isImagePath(full)) yield full
       else if (KNOWN_UNSUPPORTED_EXT_SET.has(normalizeExt(path.extname(full)))) {
@@ -59,6 +62,13 @@ async function* walk(
       }
     }
   }
+}
+
+/** 进行中的扫描任务（取消标记）：library:cancelScan 使全部在途扫描尽快中止 */
+const activeScans = new Set<{ cancelled: boolean }>()
+
+export function cancelScan(): void {
+  for (const t of activeScans) t.cancelled = true
 }
 
 interface FileStat {
@@ -71,13 +81,14 @@ interface FileStat {
 async function statAll(
   files: string[],
   concurrency: number,
-  onProgress?: (processed: number) => void
+  onProgress?: (processed: number) => void,
+  token?: { cancelled: boolean }
 ): Promise<FileStat[]> {
   const out: (FileStat | null)[] = new Array(files.length).fill(null)
   let cursor = 0
   let done = 0
   const worker = async (): Promise<void> => {
-    while (cursor < files.length) {
+    while (cursor < files.length && !token?.cancelled) {
       const i = cursor++
       const s = await fs.promises.stat(files[i]).catch(() => null)
       if (s) out[i] = { path: files[i], size: s.size, mtime: Math.round(s.mtimeMs) }
@@ -90,30 +101,54 @@ async function statAll(
 }
 
 export async function importFolder(folderPath: string): Promise<ImportResult> {
-  const st = await fs.promises.stat(folderPath).catch(() => null)
-  if (!st || !st.isDirectory()) throw new Error('所选路径不是有效的文件夹')
-  const existing = getFolderByPath(folderPath)
-  const folderId = existing ? existing.id : addFolder(folderPath, path.basename(folderPath))
-  broadcastScan({ phase: 'start', folderId })
-  let found: number
-  let added: number
-  let updated: number
-  let unsupported = 0
-  const now = Date.now()
+  // 令牌在任何 await 之前登记，保证调用方同步调用 cancelScan 即可取消本次扫描
+  const token = { cancelled: false }
+  activeScans.add(token)
+  let folderId = 0
   try {
+    const st = await fs.promises.stat(folderPath).catch(() => null)
+    if (!st || !st.isDirectory()) throw new Error('所选路径不是有效的文件夹')
+    const existing = getFolderByPath(folderPath)
+    folderId = existing ? existing.id : addFolder(folderPath, path.basename(folderPath))
+    broadcastScan({ phase: 'start', folderId })
+    let added = 0
+    let updated = 0
+    let unsupported = 0
+    const now = Date.now()
+
     // 1. 收集全部图片文件路径，同时统计已知不支持的格式（如 HEIC）用于明确提示
     const files: string[] = []
-    for await (const file of walk(folderPath, () => unsupported++)) files.push(file)
-    found = files.length
+    for await (const file of walk(folderPath, () => unsupported++, token)) files.push(file)
+    const found = files.length
 
     // 2. 并发 stat 后在内存中 diff
     const known = new Map<string, { id: number; mtime: number; size: number; missing: number }>()
     for (const r of listPhotoRowsByFolder(folderId)) {
       known.set(r.path.toLowerCase(), r)
     }
-    const stats = await statAll(files, 8, (processed) => {
-      broadcastScan({ phase: 'progress', folderId, processed })
-    })
+    const stats = await statAll(
+      files,
+      8,
+      (processed) => {
+        broadcastScan({ phase: 'progress', folderId, processed })
+      },
+      token
+    )
+
+    // 取消：此时尚未写库，直接以取消态返回，不留半成品索引
+    if (token.cancelled) {
+      broadcastScan({
+        phase: 'done',
+        folderId,
+        found,
+        added: 0,
+        updated: 0,
+        unsupported,
+        cancelled: true
+      })
+      return { folderId, found, added: 0, updated: 0, unsupported, cancelled: true }
+    }
+
     const inserts: {
       folder_id: number
       path: string
@@ -162,6 +197,8 @@ export async function importFolder(folderPath: string): Promise<ImportResult> {
     for (const u of updates) enqueueThumb(u.id)
 
     broadcastScan({ phase: 'done', folderId, found, added, updated, unsupported })
+    broadcastLibraryChanged()
+    return { folderId, found, added, updated, unsupported }
   } catch (err) {
     broadcastScan({
       phase: 'error',
@@ -169,9 +206,9 @@ export async function importFolder(folderPath: string): Promise<ImportResult> {
       message: err instanceof Error ? err.message : String(err)
     })
     throw err
+  } finally {
+    activeScans.delete(token)
   }
-  broadcastLibraryChanged()
-  return { folderId, found, added, updated, unsupported }
 }
 
 /** 批量重命名等操作期间按路径抑制监听事件（unlink/add 会在改名后异步到达） */

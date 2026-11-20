@@ -18,7 +18,7 @@ vi.mock('../src/main/db', () => ({
 vi.mock('../src/main/thumbs', () => ({ enqueueThumb: vi.fn() }))
 
 import { IMAGE_EXTS } from '@shared/formats'
-import { importFolder, isImagePath, trackDeletedFile } from '../src/main/scanner'
+import { cancelScan, importFolder, isImagePath, trackDeletedFile } from '../src/main/scanner'
 import { addFolder, findPhotoByPath, getFolderByPath, insertPhotosBatch, updatePhotoFileFields } from '../src/main/db'
 
 describe('isImagePath', () => {
@@ -74,5 +74,35 @@ describe('importFolder 已知不支持格式计数', () => {
     const inserted = vi.mocked(insertPhotosBatch).mock.calls[0][0]
     expect(inserted).toHaveLength(1)
     expect(inserted[0].ext).toBe('jpg')
+  })
+
+  it('取消扫描：不写库，结果标记 cancelled', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'framora-scan-cancel-'))
+    await sharp({ create: { width: 8, height: 8, channels: 3, background: '#fff' } })
+      .jpeg()
+      .toFile(path.join(dir, 'a.jpg'))
+
+    // importFolder 在首个 await 前同步登记取消令牌，随后取消即可确定性命中
+    const pending = importFolder(dir)
+    cancelScan()
+    const r = await pending
+    expect(r.cancelled).toBe(true)
+    expect(r.found).toBe(0)
+    expect(r.added).toBe(0)
+    expect(insertPhotosBatch).not.toHaveBeenCalled()
+  })
+
+  it('取消只影响当次扫描，后续扫描不受影响', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'framora-scan-resume-'))
+    await sharp({ create: { width: 8, height: 8, channels: 3, background: '#fff' } })
+      .jpeg()
+      .toFile(path.join(dir, 'a.jpg'))
+
+    const first = importFolder(dir)
+    cancelScan()
+    await first
+    const r = await importFolder(dir)
+    expect(r.cancelled).toBeUndefined()
+    expect(r.added).toBe(1)
   })
 })

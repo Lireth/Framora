@@ -146,12 +146,21 @@ export interface ScanEvent {
   processed?: number
   /** 已识别但当前构建无法解码的格式数量（如 HEIC），用于导入完成提示 */
   unsupported?: number
+  /** 用户取消扫描（此时尚未写库，无半成品索引） */
+  cancelled?: boolean
   message?: string
 }
 
 export interface ExportEvent {
   done: number
   total: number
+}
+
+export interface ExportResult {
+  exported: number
+  failed: number
+  /** 用户取消导出（已完成部分保留） */
+  cancelled?: boolean
 }
 
 export interface ThumbEvent {
@@ -178,6 +187,8 @@ export interface ImportResult {
   found: number
   /** 已识别但当前构建无法解码的格式数量（如 HEIC） */
   unsupported?: number
+  /** 用户取消导入 */
+  cancelled?: boolean
 }
 
 /** 单张照片的编辑备份条目（按时间倒序） */

@@ -5,9 +5,10 @@ import sharp from 'sharp'
 import { BrowserWindow, dialog, ipcMain, shell, app } from 'electron'
 import * as db from './db'
 import { IMAGE_EXTS, formatBytes, formatDateTime } from '@shared/formats'
-import { importFolder, isImagePath, trackNewFile } from './scanner'
+import { cancelScan, importFolder, isImagePath, trackNewFile } from './scanner'
 import {
   cleanupOrphanThumbs,
+  clearThumbQueue,
   enqueueThumb,
   previewPath,
   rebuildAllThumbs,
@@ -16,8 +17,9 @@ import {
 } from './thumbs'
 import { startWatcher, stopAllWatchers, stopWatcher } from './watcher'
 import {
-  clearAllBackups,
   applyTemplate,
+  cancelExport,
+  clearAllBackups,
   exportPhotos,
   listBackups,
   pickName,
@@ -154,6 +156,8 @@ export function registerIpc(): void {
     if (!folder) throw new Error('文件夹不存在')
     return importFolder(folder.path)
   })
+
+  ipcMain.handle('library:cancelScan', () => cancelScan())
 
   ipcMain.handle('library:removeFolder', async (_e, folderId: number) => {
     await stopWatcher(folderId)
@@ -356,6 +360,8 @@ export function registerIpc(): void {
       exportPhotos(ids, destDir, opts)
   )
 
+  ipcMain.handle('photos:cancelExport', () => cancelExport())
+
   ipcMain.handle('photos:saveEdits', async (_e, id: number, edit: EditSpec) => {
     await saveEdits(id, edit)
     return db.getPhotoRecord(id)
@@ -382,6 +388,8 @@ export function registerIpc(): void {
   ipcMain.handle('thumbs:rebuildAll', () => rebuildAllThumbs())
 
   ipcMain.handle('thumbs:cleanupOrphans', () => cleanupOrphanThumbs())
+
+  ipcMain.handle('thumbs:clearQueue', () => clearThumbQueue())
 
   /* ---------- tags ---------- */
   ipcMain.handle('tags:list', () => db.listTags())

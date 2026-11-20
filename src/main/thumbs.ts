@@ -53,6 +53,14 @@ export function dequeueThumb(id: number): void {
   queued.delete(id)
 }
 
+/** 清空待生成队列（进行中的单张会自然完成），返回被移除的数量；剩余照片下次启动续跑 */
+export function clearThumbQueue(): number {
+  const drained = queue.length
+  queue.length = 0
+  queued.clear()
+  return drained
+}
+
 function pump(): void {
   while (running < CONCURRENCY && queue.length > 0) {
     const id = queue.shift()!

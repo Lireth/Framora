@@ -2,7 +2,7 @@ import Database from 'better-sqlite3'
 import path from 'node:path'
 import fs from 'node:fs'
 import { app, dialog } from 'electron'
-import { clusterPhashes } from './phashCore'
+import { computePhashClusters } from './phashCluster'
 import type {
   AlbumInfo,
   FolderInfo,
@@ -927,29 +927,50 @@ export function listPhashes(): { id: number; lo: number; hi: number }[] {
   ).all() as { id: number; lo: number; hi: number }[]
 }
 
-/** 聚类结果缓存（保留簇边界）：哈希/缺失/删除变化后置脏，下次查询重算 */
+/** 聚类结果缓存（保留簇边界）：哈希/缺失/删除变化后置脏，下次查询在 worker 中重算 */
 let dupClustersCache: number[][] | null = null
+/** 置脏代次：计算期间再次置脏时，本次结果作废不缓存，下次查询重算 */
+let dupGen = 0
+let dupInflight: { gen: number; promise: Promise<number[][]> } | null = null
 
 export function markPhashDirty(): void {
+  dupGen++
   dupClustersCache = null
 }
 
-/** 疑似重复簇（仅含成员数 ≥ 2 的簇） */
-export function duplicateClusters(): number[][] {
+/**
+ * 疑似重复簇（仅含成员数 ≥ 2 的簇）。
+ * 聚类在 worker 线程执行，不阻塞主进程；并发调用合并为同一次计算。
+ */
+export async function duplicateClusters(): Promise<number[][]> {
   if (dupClustersCache) return dupClustersCache
-  const rows = listPhashes().sort((a, b) => a.id - b.id)
-  dupClustersCache = clusterPhashes(rows).filter((c) => c.length >= 2)
-  return dupClustersCache
+  if (dupInflight && dupInflight.gen === dupGen) return dupInflight.promise
+  const myGen = dupGen
+  const promise = (async (): Promise<number[][]> => {
+    const rows = listPhashes().sort((a, b) => a.id - b.id)
+    return (await computePhashClusters(rows)).filter((c) => c.length >= 2)
+  })()
+  dupInflight = { gen: myGen, promise }
+  let result: number[][]
+  try {
+    result = await promise
+  } finally {
+    if (dupInflight?.promise === promise) dupInflight = null
+  }
+  // 计算期间哈希/缺失状态变化：本次结果可能略旧，直接返回但不缓存
+  if (myGen !== dupGen) return result
+  dupClustersCache = result
+  return result
 }
 
 /** 疑似重复照片 id（按簇顺序排列） */
-export function duplicatePhotoIds(): number[] {
-  return duplicateClusters().flat()
+export async function duplicatePhotoIds(): Promise<number[]> {
+  return (await duplicateClusters()).flat()
 }
 
 /** 按簇顺序查询疑似重复照片（支持分页） */
-export function queryDuplicates(q: { limit?: number; offset?: number }): QueryResult {
-  const ids = duplicatePhotoIds()
+export async function queryDuplicates(q: { limit?: number; offset?: number }): Promise<QueryResult> {
+  const ids = await duplicatePhotoIds()
   const limit = Math.min(q.limit ?? 50000, 100000)
   const offset = Math.max(0, Math.floor(q.offset ?? 0))
   const slice = ids.slice(offset, offset + limit)

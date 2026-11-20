@@ -219,36 +219,36 @@ describe('dupCache 失效语义（第一批修复回归）', () => {
     return [a, b]
   }
 
-  it('相同哈希聚为一簇；删除成员后缓存立即失效', () => {
+  it('相同哈希聚为一簇；删除成员后缓存立即失效', async () => {
     const f = newFolder('C:\\pics')
     const [a, b] = dupPair(f, 1)
-    expect(db.duplicatePhotoIds().sort()).toEqual([a, b].sort())
+    expect((await db.duplicatePhotoIds()).sort()).toEqual([a, b].sort())
     db.deletePhotoRows([a])
     // 簇仅剩 1 名成员 → 不再视为重复（若缓存未失效此处仍为 2）
-    expect(db.duplicatePhotoIds()).toHaveLength(0)
+    expect(await db.duplicatePhotoIds()).toHaveLength(0)
   })
 
-  it('标记 missing 后从重复簇排除', () => {
+  it('标记 missing 后从重复簇排除', async () => {
     const f = newFolder('C:\\pics')
     const [, b] = dupPair(f, 2)
-    expect(db.duplicatePhotoIds()).toHaveLength(2)
+    expect(await db.duplicatePhotoIds()).toHaveLength(2)
     db.updatePhotoFileFields(b, { missing: 1 })
-    expect(db.duplicatePhotoIds()).toHaveLength(0)
+    expect(await db.duplicatePhotoIds()).toHaveLength(0)
     db.updatePhotoFileFields(b, { missing: 0 })
-    expect(db.duplicatePhotoIds()).toHaveLength(2)
+    expect(await db.duplicatePhotoIds()).toHaveLength(2)
   })
 
-  it('移除资料库后其照片不再出现在重复结果', () => {
+  it('移除资料库后其照片不再出现在重复结果', async () => {
     const f1 = newFolder('C:\\pics\\x')
     const f2 = newFolder('C:\\pics\\y')
     dupPair(f1, 3)
     dupPair(f2, 4)
-    expect(db.duplicatePhotoIds()).toHaveLength(4)
+    expect(await db.duplicatePhotoIds()).toHaveLength(4)
     db.removeFolderRows(f1)
-    expect(db.duplicatePhotoIds()).toHaveLength(2)
+    expect(await db.duplicatePhotoIds()).toHaveLength(2)
   })
 
-  it('duplicateClusters 保留簇边界且与拍平 id 一致', () => {
+  it('duplicateClusters 保留簇边界且与拍平 id 一致', async () => {
     const f = newFolder('C:\\pics')
     const [a, b] = dupPair(f, 0x00000000)
     // 第二簇用与 0 汉明距离 32 位的哈希，确保不与第一簇合并
@@ -256,19 +256,19 @@ describe('dupCache 失效语义（第一批修复回归）', () => {
     const d = seed(f, 'dup-2nd-b')
     db.setPhotoPhash(c, 0xffffffff, 0xffffffff)
     db.setPhotoPhash(d, 0xffffffff, 0xffffffff)
-    const clusters = db.duplicateClusters()
+    const clusters = await db.duplicateClusters()
     expect(clusters).toHaveLength(2)
     expect(clusters.every((x) => x.length === 2)).toBe(true)
     expect(clusters.flat().sort((x, y) => x - y)).toEqual(
-      db.duplicatePhotoIds().sort((x, y) => x - y)
+      (await db.duplicatePhotoIds()).sort((x, y) => x - y)
     )
     expect(clusters.flat().sort((x, y) => x - y)).toEqual([a, b, c, d].sort((x, y) => x - y))
   })
 
-  it('queryDuplicates 按簇顺序分页', () => {
+  it('queryDuplicates 按簇顺序分页', async () => {
     const f = newFolder('C:\\pics')
     const [a, b] = dupPair(f, 5)
-    const r = db.queryDuplicates({ limit: 1 })
+    const r = await db.queryDuplicates({ limit: 1 })
     expect(r.total).toBe(2)
     expect(r.items).toHaveLength(1)
     expect([a, b]).toContain(r.items[0].id)

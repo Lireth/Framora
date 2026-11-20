@@ -31,12 +31,19 @@ export function hamming64(a: { lo: number; hi: number }, b: { lo: number; hi: nu
   return popcount32((a.hi ^ b.hi) >>> 0) + popcount32((a.lo ^ b.lo) >>> 0)
 }
 
+/** 感知哈希行（高低 32 位对） */
+export interface PhashRow {
+  id: number
+  lo: number
+  hi: number
+}
+
 /**
  * 贪心聚类：每张照片与既有簇代表比较，距离 ≤ threshold 归入该簇，否则自立新簇。
  * 返回成员数 ≥ 2 的簇（疑似重复组），簇内按输入顺序排列。
  */
 export function clusterPhashes(
-  rows: { id: number; lo: number; hi: number }[],
+  rows: PhashRow[],
   threshold = 6
 ): number[][] {
   const clusters: { lo: number; hi: number; members: number[] }[] = []

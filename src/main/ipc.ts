@@ -210,8 +210,8 @@ export function registerIpc(): void {
   })
 
   /** 重复治理：每组保留一张（最佳=体积最大，其次最早；最早=导入时间最早），选中其余冗余项 */
-  ipcMain.handle('duplicates:selectRedundant', (_e, mode: 'best' | 'oldest') => {
-    const clusters = db.duplicateClusters()
+  ipcMain.handle('duplicates:selectRedundant', async (_e, mode: 'best' | 'oldest') => {
+    const clusters = await db.duplicateClusters()
     const redundant: number[] = []
     for (const cluster of clusters) {
       const rows = cluster

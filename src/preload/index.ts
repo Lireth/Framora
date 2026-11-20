@@ -41,7 +41,8 @@ const CALLABLE = new Set([
   'window:toggleFullscreen',
   'app:openDataDir',
   'app:openThumbsDir',
-  'app:clearBackups'
+  'app:clearBackups',
+  'app:openLogsDir'
 ])
 
 const EVENTS = new Set(['evt:scan', 'evt:thumb', 'evt:watch', 'evt:library', 'evt:export'])

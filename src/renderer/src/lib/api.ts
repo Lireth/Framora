@@ -87,7 +87,8 @@ export const api = {
   toggleFullscreen: (): Promise<void> => call('window:toggleFullscreen'),
   openDataDir: (): Promise<void> => call('app:openDataDir'),
   openThumbsDir: (): Promise<void> => call('app:openThumbsDir'),
-  clearBackups: (): Promise<number> => call('app:clearBackups')
+  clearBackups: (): Promise<number> => call('app:clearBackups'),
+  openLogsDir: (): Promise<void> => call('app:openLogsDir')
 }
 
 export type EventChannel = 'evt:scan' | 'evt:thumb' | 'evt:watch' | 'evt:library' | 'evt:export'

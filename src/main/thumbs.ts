@@ -5,6 +5,7 @@ import sharp from 'sharp'
 import exifr from 'exifr'
 import { BrowserWindow, app } from 'electron'
 import { getPhotoRow, listAllPhotoIds, listPhotoIdsForRebuild, setPhotoDimsAndDate, setThumbStatus } from './db'
+import { logError } from './log'
 import type { ThumbEvent } from '@shared/types'
 
 const CONCURRENCY = Math.max(2, Math.min(6, os.cpus().length - 1))
@@ -98,7 +99,8 @@ async function run(id: number): Promise<void> {
     setPhotoDimsAndDate(id, meta.width ?? null, meta.height ?? null, takenAt)
     setThumbStatus(id, 1)
     emit({ id, status: 'ok' })
-  } catch {
+  } catch (err) {
+    logError('thumb', err)
     setThumbStatus(id, 2)
     emit({ id, status: 'fail' })
   }

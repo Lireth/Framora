@@ -7,6 +7,7 @@ import { importFolder } from './scanner'
 import { cleanupOrphanThumbs, enqueueThumb, rebuildAllThumbs, thumbPath, thumbsDir } from './thumbs'
 import { startWatcher, stopWatcher } from './watcher'
 import { clearAllBackups, exportPhotos, revertEdits, saveEdits } from './imageops'
+import { logsDir } from './log'
 import { listFolders } from './db'
 import type {
   EditSpec,
@@ -286,6 +287,10 @@ export function registerIpc(): void {
   })
 
   ipcMain.handle('app:clearBackups', () => clearAllBackups())
+
+  ipcMain.handle('app:openLogsDir', () => {
+    shell.openPath(logsDir())
+  })
 }
 
 /* ---------- helpers ---------- */

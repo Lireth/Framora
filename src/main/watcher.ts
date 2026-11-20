@@ -1,6 +1,7 @@
 import path from 'node:path'
 import chokidar from 'chokidar'
 import { IMAGE_EXTS, trackChangedFile, trackDeletedFile, trackNewFile } from './scanner'
+import { logError } from './log'
 
 const watchers = new Map<number, chokidar.FSWatcher>()
 
@@ -26,6 +27,7 @@ export async function startWatcher(folderId: number, root: string): Promise<void
     .on('unlink', (p) => {
       if (isImage(p)) trackDeletedFile(folderId, p)
     })
+    .on('error', (err) => logError('watcher', err))
   watchers.set(folderId, watcher)
 }
 

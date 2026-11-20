@@ -12,6 +12,7 @@ import {
   updatePhotoFilesBatch
 } from './db'
 import { enqueueThumb } from './thumbs'
+import { logError } from './log'
 import type { ExportEvent, ImportResult, ScanEvent, WatchEvent } from '@shared/types'
 
 export const IMAGE_EXTS = new Set([
@@ -197,7 +198,7 @@ export function trackNewFile(folderId: number, filePath: string): void {
       const row = findPhotoByPath(filePath)
       broadcastWatch({ type: 'add', folderId, photo: row ?? undefined })
     })
-    .catch(() => undefined)
+    .catch((err) => logError('trackNewFile', err))
 }
 
 export function trackChangedFile(folderId: number, filePath: string): void {
@@ -213,7 +214,7 @@ export function trackChangedFile(folderId: number, filePath: string): void {
       enqueueThumb(row.id)
       broadcastWatch({ type: 'change', folderId, id: row.id })
     })
-    .catch(() => undefined)
+    .catch((err) => logError('trackChangedFile', err))
 }
 
 export function trackDeletedFile(folderId: number, filePath: string): void {

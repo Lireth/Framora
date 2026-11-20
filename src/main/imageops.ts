@@ -4,6 +4,7 @@ import sharp from 'sharp'
 import { getPhotoRow, updatePhotoFileFields, updatePhotoMeta } from './db'
 import { backupsDir, enqueueThumb } from './thumbs'
 import { broadcastExport } from './scanner'
+import { logError } from './log'
 import type { ExportOptions } from '@shared/types'
 
 function clamp(v: number, min: number, max: number): number {
@@ -72,7 +73,8 @@ export async function exportPhotos(
       await pipe.toFile(outPath)
       used.add(outPath.toLowerCase())
       exported++
-    } catch {
+    } catch (err) {
+      logError('export', err)
       failed++
     }
     broadcastExport({ done: i + 1, total: ids.length })

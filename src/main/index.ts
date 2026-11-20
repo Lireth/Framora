@@ -7,6 +7,7 @@ import { registerIpc } from './ipc'
 import { isImagePath } from './scanner'
 import { startWatcher, stopAllWatchers } from './watcher'
 import { thumbsDir, enqueueThumb } from './thumbs'
+import { initLogging, logError } from './log'
 
 const isDev = !app.isPackaged
 
@@ -14,6 +15,10 @@ const isDev = !app.isPackaged
 if (process.env['FRAMORA_USER_DATA']) {
   app.setPath('userData', process.env['FRAMORA_USER_DATA'])
 }
+
+initLogging()
+process.on('uncaughtException', (err) => logError('uncaughtException', err))
+process.on('unhandledRejection', (reason) => logError('unhandledRejection', reason))
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'media', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },

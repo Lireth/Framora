@@ -1,5 +1,5 @@
 import React from 'react'
-import { Database, Eraser, FileClock, HardDrive, Images, Moon, Sun } from 'lucide-react'
+import { Database, Eraser, FileClock, FileWarning, HardDrive, Images, Moon, Sun } from 'lucide-react'
 import { useStore } from '../store'
 import { api } from '../lib/api'
 import { cn, ConfirmDialog, Modal, PrimaryButton } from './ui'
@@ -79,6 +79,12 @@ export function SettingsModal(): React.JSX.Element | null {
                 className="flex items-center gap-1.5 rounded-md border border-line px-3 py-1.5 text-[12px] text-ink2 hover:bg-hover hover:text-ink"
               >
                 <Database size={13} /> 打开数据目录
+              </button>
+              <button
+                onClick={() => api.openLogsDir().catch(() => undefined)}
+                className="flex items-center gap-1.5 rounded-md border border-line px-3 py-1.5 text-[12px] text-ink2 hover:bg-hover hover:text-ink"
+              >
+                <FileWarning size={13} /> 打开日志目录
               </button>
               <button
                 onClick={() => setClearBackupsOpen(true)}

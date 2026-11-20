@@ -30,6 +30,7 @@ const call = <T>(channel: string, ...args: unknown[]): Promise<T> =>
 export const api = {
   info: (): Promise<AppInfo> => call('app:info'),
   getSetting: (key: string): Promise<string | null> => call('settings:get', key),
+  setSetting: (key: string, value: string): Promise<void> => call('settings:set', key, value),
   pickFolder: (): Promise<string | null> => call('dialog:pickFolder'),
   pickExportDir: (): Promise<string | null> => call('dialog:pickExportDir'),
 

@@ -1,8 +1,8 @@
 import path from 'node:path'
 import fs from 'node:fs'
-import { BrowserWindow, Menu, app, net, protocol } from 'electron'
+import { BrowserWindow, Menu, app, net, protocol, screen } from 'electron'
 import { pathToFileURL } from 'node:url'
-import { initDb, closeDb, getSetting, listFolders, listPhotoIdsPendingThumb } from './db'
+import { initDb, closeDb, getSetting, setSetting, listFolders, listPhotoIdsPendingThumb } from './db'
 import { registerIpc } from './ipc'
 import { isImagePath } from './scanner'
 import { startWatcher, stopAllWatchers } from './watcher'
@@ -17,10 +17,57 @@ protocol.registerSchemesAsPrivileged([
 
 let win: BrowserWindow | null = null
 
+const DEFAULT_WIDTH = 1360
+const DEFAULT_HEIGHT = 860
+
+interface SavedBounds {
+  x: number
+  y: number
+  width: number
+  height: number
+  maximized: boolean
+}
+
+function loadWindowBounds(): SavedBounds | null {
+  try {
+    const raw = getSetting('windowBounds')
+    if (!raw) return null
+    const b = JSON.parse(raw) as Partial<SavedBounds>
+    if (
+      typeof b.width !== 'number' ||
+      typeof b.height !== 'number' ||
+      b.width < 1000 ||
+      b.height < 640
+    ) {
+      return null
+    }
+    return {
+      width: Math.round(b.width),
+      height: Math.round(b.height),
+      x: typeof b.x === 'number' ? Math.round(b.x) : 0,
+      y: typeof b.y === 'number' ? Math.round(b.y) : 0,
+      maximized: b.maximized === true
+    }
+  } catch {
+    return null
+  }
+}
+
+/** 保存的位置必须仍落在某个显示器的可视区域内，否则丢弃（如拔掉外接显示器） */
+function isOnSomeDisplay(x: number, y: number): boolean {
+  return screen.getAllDisplays().some((d) => {
+    const a = d.workArea
+    return x >= a.x - 40 && x < a.x + a.width && y >= a.y - 40 && y < a.y + a.height
+  })
+}
+
 function createWindow(): void {
+  const saved = loadWindowBounds()
+  const usePosition = saved ? isOnSomeDisplay(saved.x, saved.y) : false
   win = new BrowserWindow({
-    width: 1360,
-    height: 860,
+    width: saved?.width ?? DEFAULT_WIDTH,
+    height: saved?.height ?? DEFAULT_HEIGHT,
+    ...(usePosition ? { x: saved!.x, y: saved!.y } : {}),
     minWidth: 1000,
     minHeight: 640,
     show: false,
@@ -39,7 +86,22 @@ function createWindow(): void {
     }
   })
 
-  win.on('ready-to-show', () => win?.show())
+  win.on('ready-to-show', () => {
+    if (saved?.maximized) win?.maximize()
+    win?.show()
+  })
+  win.on('close', () => {
+    if (!win) return
+    try {
+      const b = win.getBounds()
+      setSetting(
+        'windowBounds',
+        JSON.stringify({ x: b.x, y: b.y, width: b.width, height: b.height, maximized: win.isMaximized() })
+      )
+    } catch {
+      /* 关闭时保存失败可忽略 */
+    }
+  })
   win.on('closed', () => {
     win = null
   })

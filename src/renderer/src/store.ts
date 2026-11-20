@@ -87,8 +87,34 @@ interface AppState extends Filters {
 let toastSeq = 1
 let refreshLibraryTimer: ReturnType<typeof setTimeout> | null = null
 let refreshPhotosTimer: ReturnType<typeof setTimeout> | null = null
+let viewStateTimer: ReturnType<typeof setTimeout> | null = null
 let thumbBuffer: { id: number; status: 'ok' | 'fail' }[] = []
 let thumbRaf: number | null = null
+
+/** 防抖持久化视图状态（scope/tile/sort/dir），启动时恢复 */
+function persistViewState(): void {
+  if (viewStateTimer) clearTimeout(viewStateTimer)
+  viewStateTimer = setTimeout(() => {
+    viewStateTimer = null
+    const s = useStore.getState()
+    void api
+      .setSetting(
+        'viewState',
+        JSON.stringify({
+          scope: s.scope,
+          scopeId: s.scopeId ?? null,
+          tile: s.tile,
+          sort: s.sort,
+          dir: s.dir
+        })
+      )
+      .catch(() => undefined)
+  }, 400)
+}
+
+const VALID_SCOPES: PhotoScope[] = ['all', 'recent', 'missing', 'folder', 'album', 'tag', 'untagged']
+const VALID_TILES = ['s', 'm', 'l'] as const
+const VALID_SORTS: SortKey[] = ['taken', 'imported', 'name', 'rating', 'size']
 
 function buildQuery(s: AppState): PhotoQuery {
   return {
@@ -143,7 +169,38 @@ export const useStore = create<AppState>((set, get) => ({
     } catch {
       /* ignore */
     }
+    // 恢复上次的视图状态
+    try {
+      const raw = await api.getSetting('viewState')
+      if (raw) {
+        const v = JSON.parse(raw) as Partial<{
+          scope: PhotoScope
+          scopeId: number | null
+          tile: 's' | 'm' | 'l'
+          sort: SortKey
+          dir: 'asc' | 'desc'
+        }>
+        const scope = VALID_SCOPES.includes(v.scope as PhotoScope) ? (v.scope as PhotoScope) : 'all'
+        const needsId = scope === 'folder' || scope === 'album' || scope === 'tag'
+        set({
+          scope,
+          scopeId: needsId && typeof v.scopeId === 'number' ? v.scopeId : undefined,
+          tile: VALID_TILES.includes(v.tile as 's' | 'm' | 'l') ? (v.tile as 's' | 'm' | 'l') : 'm',
+          sort: VALID_SORTS.includes(v.sort as SortKey) ? (v.sort as SortKey) : 'taken',
+          dir: v.dir === 'asc' ? 'asc' : 'desc'
+        })
+      }
+    } catch {
+      /* ignore */
+    }
     await get().refreshLibrary()
+    // 校验作用域指向的文件夹/相册/标签是否仍存在，失效则回退到全部照片
+    const st = get()
+    const scopeGone =
+      (st.scope === 'folder' && !st.folders.some((f) => f.id === st.scopeId)) ||
+      (st.scope === 'album' && !st.albums.some((a) => a.id === st.scopeId)) ||
+      (st.scope === 'tag' && !st.tags.some((t) => t.id === st.scopeId))
+    if (scopeGone) set({ scope: 'all', scopeId: undefined })
     get().refreshPhotos()
     api
       .info()
@@ -160,11 +217,13 @@ export const useStore = create<AppState>((set, get) => ({
     if (get().scope === scope && get().scopeId === scopeId) return
     set({ scope, scopeId, selection: new Set(), anchorId: null })
     get().refreshPhotos()
+    persistViewState()
   },
 
   setFilter: (patch) => {
     set(patch as Partial<AppState>)
     get().refreshPhotos()
+    persistViewState()
   },
 
   refreshLibrary: async () => {
@@ -244,7 +303,10 @@ export const useStore = create<AppState>((set, get) => ({
 
   toggleDetail: () => set({ detailOpen: !get().detailOpen }),
 
-  setTile: (tile) => set({ tile }),
+  setTile: (tile) => {
+    set({ tile })
+    persistViewState()
+  },
 
   setScan: (scan) => set({ scan }),
 

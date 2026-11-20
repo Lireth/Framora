@@ -1,6 +1,7 @@
 import path from 'node:path'
 import fs from 'node:fs'
 import exifr from 'exifr'
+import sharp from 'sharp'
 import { BrowserWindow, dialog, ipcMain, shell, app } from 'electron'
 import * as db from './db'
 import { importFolder } from './scanner'
@@ -294,6 +295,24 @@ export function registerIpc(): void {
 
   ipcMain.handle('app:openLogsDir', () => {
     shell.openPath(logsDir())
+  })
+
+  ipcMain.handle('app:dragOutPhotos', async (_e, ids: number[]) => {
+    const win = BrowserWindow.getAllWindows()[0]
+    if (!win || !ids.length) return
+    const row = db.getPhotoRow(ids[0])
+    if (!row || !fs.existsSync(row.path)) return
+    // 生成 48px 拖拽图标（优先用缩略图），随后启动原生 OS 拖拽
+    const iconPath = path.join(app.getPath('userData'), 'drag-icon.png')
+    let icon = iconPath
+    try {
+      const src = fs.existsSync(thumbPath(row.id)) ? thumbPath(row.id) : row.path
+      await sharp(src, { failOn: 'none' }).rotate().resize(48, 48, { fit: 'inside' }).png().toFile(iconPath)
+    } catch {
+      icon = path.join(app.getAppPath(), 'build', 'icon.png')
+      if (!fs.existsSync(icon)) return
+    }
+    win.webContents.startDrag({ file: row.path, files: [row.path], icon })
   })
 }
 

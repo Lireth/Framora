@@ -68,7 +68,9 @@ function NavRow({
   count,
   active,
   onClick,
-  onContextMenu
+  onContextMenu,
+  droppable,
+  onDropPhotos
 }: {
   icon: React.ReactNode
   label: string
@@ -76,14 +78,46 @@ function NavRow({
   active: boolean
   onClick: () => void
   onContextMenu?: (e: React.MouseEvent) => void
+  /** 允许把照片拖入此行（相册/标签） */
+  droppable?: boolean
+  onDropPhotos?: (ids: number[]) => void
 }): React.JSX.Element {
+  const [dragOver, setDragOver] = useState(false)
   return (
     <button
       onClick={onClick}
       onContextMenu={onContextMenu}
+      onDragOver={
+        droppable
+          ? (e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              if (!dragOver) setDragOver(true)
+            }
+          : undefined
+      }
+      onDragLeave={droppable ? () => setDragOver(false) : undefined}
+      onDrop={
+        droppable
+          ? (e) => {
+              e.preventDefault()
+              setDragOver(false)
+              try {
+                const raw = e.dataTransfer.getData('application/x-framora-photos')
+                const ids = JSON.parse(raw) as unknown
+                if (Array.isArray(ids) && ids.length && ids.every((x) => typeof x === 'number')) {
+                  onDropPhotos?.(ids)
+                }
+              } catch {
+                /* 无效拖拽数据忽略 */
+              }
+            }
+          : undefined
+      }
       className={cn(
         'mx-2 flex w-[calc(100%-16px)] items-center gap-2.5 rounded-md px-2.5 py-[7px] text-left text-[13px] transition-colors',
-        active ? 'bg-accent-soft text-accent' : 'text-ink2 hover:bg-hover hover:text-ink'
+        active ? 'bg-accent-soft text-accent' : 'text-ink2 hover:bg-hover hover:text-ink',
+        dragOver && 'ring-1 ring-[var(--c-accent)] bg-accent-soft'
       )}
     >
       <span className={cn('shrink-0', active ? 'text-accent' : 'text-ink3')}>{icon}</span>
@@ -313,6 +347,17 @@ export function Sidebar(): React.JSX.Element {
           count={a.count}
           active={scope === 'album' && scopeId === a.id}
           onClick={() => setScope('album', a.id)}
+          droppable
+          onDropPhotos={(ids) =>
+            api
+              .batchAlbum(ids, a.id)
+              .then(() => {
+                useStore.getState().toast('success', `已将 ${ids.length} 张照片加入「${a.name}」`)
+                useStore.getState().refreshLibrary()
+                useStore.getState().refreshPhotos()
+              })
+              .catch(() => useStore.getState().toast('error', '加入相册失败'))
+          }
           onContextMenu={(e) => {
             e.preventDefault()
             setMenu({ x: e.clientX, y: e.clientY, items: albumMenu(a.id, a.name) })
@@ -348,6 +393,17 @@ export function Sidebar(): React.JSX.Element {
           count={t.count}
           active={scope === 'tag' && scopeId === t.id}
           onClick={() => setScope('tag', t.id)}
+          droppable
+          onDropPhotos={(ids) =>
+            api
+              .batchTags(ids, [t.id], [])
+              .then(() => {
+                useStore.getState().toast('success', `已为 ${ids.length} 张照片添加「${t.name}」`)
+                useStore.getState().refreshLibrary()
+                useStore.getState().refreshPhotos()
+              })
+              .catch(() => useStore.getState().toast('error', '添加标签失败'))
+          }
           onContextMenu={(e) => {
             e.preventDefault()
             setMenu({ x: e.clientX, y: e.clientY, items: tagMenu(t.id, t.name) })

@@ -44,7 +44,8 @@ const CALLABLE = new Set([
   'app:openDataDir',
   'app:openThumbsDir',
   'app:clearBackups',
-  'app:openLogsDir'
+  'app:openLogsDir',
+  'app:dragOutPhotos'
 ])
 
 const EVENTS = new Set(['evt:scan', 'evt:thumb', 'evt:watch', 'evt:library', 'evt:export'])

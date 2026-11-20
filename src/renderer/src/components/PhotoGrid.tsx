@@ -75,6 +75,13 @@ function Tile({
         selected ? 'ring-2 ring-[var(--c-accent)]' : 'hover:ring-1 hover:ring-[var(--c-line)]'
       )}
       style={{ width: tileW, height: tileH }}
+      draggable={!p.missing}
+      onDragStart={(e) => {
+        // 选中集合整体拖拽，否则只拖当前瓦片
+        const ids = useStore.getState().selection.has(p.id) ? [...useStore.getState().selection] : [p.id]
+        e.dataTransfer.setData('application/x-framora-photos', JSON.stringify(ids))
+        e.dataTransfer.effectAllowed = 'copyMove'
+      }}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       onClick={(e) =>

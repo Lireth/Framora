@@ -91,7 +91,8 @@ export const api = {
   openDataDir: (): Promise<void> => call('app:openDataDir'),
   openThumbsDir: (): Promise<void> => call('app:openThumbsDir'),
   clearBackups: (): Promise<number> => call('app:clearBackups'),
-  openLogsDir: (): Promise<void> => call('app:openLogsDir')
+  openLogsDir: (): Promise<void> => call('app:openLogsDir'),
+  dragOutPhotos: (ids: number[]): Promise<void> => call('app:dragOutPhotos', ids)
 }
 
 export type EventChannel = 'evt:scan' | 'evt:thumb' | 'evt:watch' | 'evt:library' | 'evt:export'

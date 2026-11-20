@@ -460,16 +460,23 @@ export function Viewer(): React.JSX.Element {
         <img
           src={mediaUrl(photo)}
           alt={photo.name}
-          draggable={false}
-          className={cn(
-            'max-h-[calc(100vh-148px)] max-w-[calc(100vw-40px)] select-none object-contain',
-            dragging ? 'cursor-grabbing' : 'cursor-grab'
-          )}
+          draggable
+          onDragStart={(e) => {
+            e.preventDefault()
+            // 放大状态下拖拽留给平移，仅在原始视图下把原文件拖出到资源管理器
+            if (zoom !== 1) return
+            void api.dragOutPhotos([photo.id]).catch(() => undefined)
+          }}
           style={{
+            ...( { WebkitUserDrag: 'element' } as React.CSSProperties ),
             transform: `translate(${offset.x}px, ${offset.y}px) scale(${zoom}) rotate(${rotation}deg) scaleX(${edit.flipH ? -1 : 1}) scaleY(${edit.flipV ? -1 : 1})`,
             filter: cssFilter,
             transition: dragging ? 'none' : 'transform 0.12s ease-out'
           }}
+          className={cn(
+            'max-h-[calc(100vh-148px)] max-w-[calc(100vw-40px)] select-none object-contain',
+            dragging ? 'cursor-grabbing' : 'cursor-grab'
+          )}
         />
       </div>
 

@@ -334,6 +334,22 @@ export function getPhotoRow(id: number): PhotoLite & { title: string | null; des
   ).get(id) as never
 }
 
+/** 批量获取照片行（不存在的 id 不在返回值中） */
+export function getPhotoRows(ids: number[]): { id: number; path: string }[] {
+  if (!ids.length) return []
+  const rows: { id: number; path: string }[] = []
+  for (let i = 0; i < ids.length; i += 900) {
+    const chunk = ids.slice(i, i + 900)
+    const ph = chunk.map(() => '?').join(', ')
+    const part = stmt(`SELECT id, path FROM photos WHERE id IN (${ph})`).all(...chunk) as {
+      id: number
+      path: string
+    }[]
+    rows.push(...part)
+  }
+  return rows
+}
+
 export function findPhotoByPath(photoPath: string): PhotoLite | undefined {
   return stmt(`SELECT ${PHOTO_LITE_COLS} FROM photos WHERE path = ?`).get(photoPath) as
     | PhotoLite
@@ -496,14 +512,18 @@ export function updatePhotoMeta(
 }
 
 export function deletePhotoRows(ids: number[]): void {
-  const del = db.transaction((list: number[]) => {
-    for (const id of list) {
-      stmt('DELETE FROM photo_tags WHERE photo_id = ?').run(id)
-      stmt('DELETE FROM album_photos WHERE photo_id = ?').run(id)
-      stmt('DELETE FROM photos WHERE id = ?').run(id)
+  if (!ids.length) return
+  const run = db.transaction(() => {
+    // 按 900 个一批拆分 IN 子句，避免超过 SQLite 变量上限
+    for (let i = 0; i < ids.length; i += 900) {
+      const chunk = ids.slice(i, i + 900)
+      const ph = chunk.map(() => '?').join(', ')
+      stmt(`DELETE FROM photo_tags WHERE photo_id IN (${ph})`).run(...chunk)
+      stmt(`DELETE FROM album_photos WHERE photo_id IN (${ph})`).run(...chunk)
+      stmt(`DELETE FROM photos WHERE id IN (${ph})`).run(...chunk)
     }
   })
-  del(ids)
+  run()
 }
 
 /** 将 PhotoQuery 组装为 WHERE 子句与参数（queryPhotos / queryPhotoIds 共用） */

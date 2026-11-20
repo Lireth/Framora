@@ -149,26 +149,35 @@ export function registerIpc(): void {
   })
 
   ipcMain.handle('photos:delete', async (_e, ids: number[]) => {
-    let deleted = 0
     let failed = 0
-    for (const id of ids) {
-      const row = db.getPhotoRow(id)
-      if (!row) {
-        failed++
-        continue
-      }
-      try {
-        if (fs.existsSync(row.path)) {
-          await shell.trashItem(row.path)
+    // 索引中不存在的直接计为失败
+    const trashing = db.getPhotoRows(ids)
+    failed += ids.length - trashing.length
+    // 回收站操作限并发并行执行
+    const okIds: number[] = []
+    let cursor = 0
+    const CONCURRENCY = 4
+    const worker = async (): Promise<void> => {
+      while (cursor < trashing.length) {
+        const row = trashing[cursor++]
+        try {
+          if (fs.existsSync(row.path)) {
+            await shell.trashItem(row.path)
+          }
+          okIds.push(row.id)
+        } catch {
+          failed++
         }
-        await fs.promises.rm(thumbPath(id), { force: true }).catch(() => undefined)
-        db.deletePhotoRows([id])
-        deleted++
-      } catch {
-        failed++
       }
     }
-    return { deleted, failed }
+    await Promise.all(Array.from({ length: Math.max(1, Math.min(CONCURRENCY, trashing.length)) }, worker))
+    // 单事务批量清理索引行
+    db.deletePhotoRows(okIds)
+    // 并行清理缩略图文件
+    await Promise.all(
+      okIds.map((id) => fs.promises.rm(thumbPath(id), { force: true }).catch(() => undefined))
+    )
+    return { deleted: okIds.length, failed }
   })
 
   ipcMain.handle(

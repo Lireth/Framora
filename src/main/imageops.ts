@@ -11,8 +11,8 @@ function clamp(v: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, v))
 }
 
-/** 应用文件名模板并清理 Windows 非法字符 */
-function applyTemplate(
+/** 应用文件名模板并清理 Windows 非法字符（导出与批量重命名共用） */
+export function applyTemplate(
   tpl: string,
   row: { name: string; taken_at: number | null; imported_at: number },
   index: number

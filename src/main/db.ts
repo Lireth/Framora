@@ -453,8 +453,7 @@ export function recomputeSearchText(ids: number[]): void {
 export function updatePhotoFileFields(
   id: number,
   fields: { size?: number; mtime?: number; missing?: 0 | 1 }
-): void {
-  const sets: string[] = []
+): void {  const sets: string[] = []
   const params: Record<string, unknown> = { id }
   if (fields.size !== undefined) {
     sets.push('size = @size')
@@ -470,6 +469,22 @@ export function updatePhotoFileFields(
   }
   if (!sets.length) return
   stmt(`UPDATE photos SET ${sets.join(', ')} WHERE id = @id`).run(params)
+}
+
+/** 批量重命名后更新索引中的路径与文件名，并重算搜索文本 */
+export function updatePhotoPath(id: number, newPath: string, newName: string): void {
+  let mtime: number | null = null
+  try {
+    mtime = Math.round(fs.statSync(newPath).mtimeMs)
+  } catch {
+    /* rename 后 stat 失败保持旧值 */
+  }
+  if (mtime !== null) {
+    stmt('UPDATE photos SET path = ?, name = ?, mtime = ? WHERE id = ?').run(newPath, newName, mtime, id)
+  } else {
+    stmt('UPDATE photos SET path = ?, name = ? WHERE id = ?').run(newPath, newName, id)
+  }
+  recomputeSearchText([id])
 }
 
 export function setPhotoDimsAndDate(

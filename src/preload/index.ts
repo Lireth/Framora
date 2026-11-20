@@ -26,6 +26,7 @@ const CALLABLE = new Set([
   'photos:batchTags',
   'photos:batchRate',
   'photos:batchAlbum',
+  'photos:batchRename',
   'photos:removeAlbum',
   'thumbs:rebuildAll',
   'thumbs:cleanupOrphans',

@@ -179,8 +179,23 @@ export async function importFolder(folderPath: string): Promise<ImportResult> {
   return { folderId, found, added, updated }
 }
 
+/** 批量重命名等操作期间按路径抑制监听事件（unlink/add 会在改名后异步到达） */
+const suppressedPaths = new Set<string>()
+let suppressTimer: ReturnType<typeof setTimeout> | null = null
+
+export function suppressTracking(paths: string[]): void {
+  for (const p of paths) suppressedPaths.add(p.toLowerCase())
+  if (suppressTimer) clearTimeout(suppressTimer)
+  suppressTimer = setTimeout(() => suppressedPaths.clear(), 15000)
+}
+
+function isSuppressed(p: string): boolean {
+  return suppressedPaths.has(p.toLowerCase())
+}
+
 /** 单文件新增（来自文件监听） */
 export function trackNewFile(folderId: number, filePath: string): void {
+  if (isSuppressed(filePath)) return
   if (findPhotoByPath(filePath)) return
   fs.promises
     .stat(filePath)
@@ -202,6 +217,7 @@ export function trackNewFile(folderId: number, filePath: string): void {
 }
 
 export function trackChangedFile(folderId: number, filePath: string): void {
+  if (isSuppressed(filePath)) return
   const row = findPhotoByPath(filePath)
   if (!row) {
     trackNewFile(folderId, filePath)
@@ -218,6 +234,7 @@ export function trackChangedFile(folderId: number, filePath: string): void {
 }
 
 export function trackDeletedFile(folderId: number, filePath: string): void {
+  if (isSuppressed(filePath)) return
   const row = findPhotoByPath(filePath)
   if (!row) return
   updatePhotoFileFields(row.id, { missing: 1 })

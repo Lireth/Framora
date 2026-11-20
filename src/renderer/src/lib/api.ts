@@ -70,6 +70,8 @@ export const api = {
   batchRate: (ids: number[], rating: number): Promise<void> => call('photos:batchRate', ids, rating),
   batchAlbum: (ids: number[], albumId: number | null): Promise<void> =>
     call('photos:batchAlbum', ids, albumId),
+  batchRename: (ids: number[], template: string): Promise<{ renamed: number; skipped: number; failed: number }> =>
+    call('photos:batchRename', ids, template),
   removeAlbum: (photoId: number, albumId: number): Promise<void> =>
     call('photos:removeAlbum', photoId, albumId),
 

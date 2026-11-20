@@ -7,8 +7,9 @@ import * as db from './db'
 import { importFolder } from './scanner'
 import { cleanupOrphanThumbs, enqueueThumb, rebuildAllThumbs, thumbPath, thumbsDir } from './thumbs'
 import { startWatcher, stopWatcher } from './watcher'
-import { clearAllBackups, exportPhotos, revertEdits, saveEdits } from './imageops'
-import { logsDir } from './log'
+import { clearAllBackups, applyTemplate, exportPhotos, revertEdits, saveEdits } from './imageops'
+import { suppressTracking } from './scanner'
+import { logsDir, logError } from './log'
 import { listFolders } from './db'
 import type {
   EditSpec,
@@ -245,6 +246,47 @@ export function registerIpc(): void {
     (_e, ids: number[], addTagIds: number[], removeTagIds: number[]) =>
       db.batchTags(ids, addTagIds, removeTagIds)
   )
+
+  ipcMain.handle('photos:batchRename', async (_e, ids: number[], template: string) => {
+    let renamed = 0
+    let skipped = 0
+    let failed = 0
+    const used = new Set<string>()
+    const touchedPaths: string[] = []
+    for (let i = 0; i < ids.length; i++) {
+      const row = db.getPhotoRow(ids[i])
+      if (!row || row.missing || !fs.existsSync(row.path)) {
+        failed++
+        continue
+      }
+      try {
+        const base = applyTemplate(template || '{name}', row, i)
+        const ext = path.extname(row.path)
+        const newName = `${base}${ext}`
+        const newPath = path.join(path.dirname(row.path), newName)
+        const same = newPath.toLowerCase() === row.path.toLowerCase()
+        if (same) {
+          skipped++
+          continue
+        }
+        if (used.has(newPath.toLowerCase()) || fs.existsSync(newPath)) {
+          skipped++
+          continue
+        }
+        await fs.promises.rename(row.path, newPath)
+        used.add(newPath.toLowerCase())
+        touchedPaths.push(row.path, newPath)
+        db.updatePhotoPath(row.id, newPath, newName)
+        renamed++
+      } catch (err) {
+        logError('batchRename', err)
+        failed++
+      }
+    }
+    // 重命名的 unlink/add 监听事件异步到达，按路径抑制避免误标缺失/重复入库
+    suppressTracking(touchedPaths)
+    return { renamed, skipped, failed }
+  })
   ipcMain.handle('photos:batchRate', (_e, ids: number[], rating: number) =>
     db.batchRate(ids, rating)
   )

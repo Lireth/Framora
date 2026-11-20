@@ -1,9 +1,9 @@
 import React, { useState } from 'react'
-import { Download, Images, Star, Tag, Trash2, X } from 'lucide-react'
+import { Download, Images, Pencil, Star, Tag, Trash2, X } from 'lucide-react'
 import { useStore } from '../store'
 import { api } from '../lib/api'
 import { deletePhotosAction } from '../lib/actions'
-import { ConfirmDialog, ContextMenu, type MenuItem } from './ui'
+import { ConfirmDialog, ContextMenu, InputDialog, type MenuItem } from './ui'
 import { TagPicker } from './TagPicker'
 
 export function BatchBar(): React.JSX.Element {
@@ -15,6 +15,7 @@ export function BatchBar(): React.JSX.Element {
   const albums = useStore((s) => s.albums)
 
   const [tagPicker, setTagPicker] = useState(false)
+  const [renameOpen, setRenameOpen] = useState(false)
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null)
   const ids = [...selection]
 
@@ -71,6 +72,7 @@ export function BatchBar(): React.JSX.Element {
             <BarBtn icon={<Star size={14} />} label="设置星级" onClick={openRateMenu} />
             <BarBtn icon={<Tag size={14} />} label="添加标签" onClick={() => setTagPicker(!tagPicker)} />
             <BarBtn icon={<Images size={14} />} label="加入相册" onClick={openAlbumMenu} />
+            <BarBtn icon={<Pencil size={14} />} label="批量重命名" onClick={() => setRenameOpen(true)} />
             <BarBtn icon={<Download size={14} />} label="批量导出" onClick={() => openExport(ids)} />
             <BarBtn
               icon={<Trash2 size={14} />}
@@ -93,6 +95,26 @@ export function BatchBar(): React.JSX.Element {
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />
       )}
+      <InputDialog
+        open={renameOpen}
+        title={`批量重命名 ${ids.length} 张照片`}
+        placeholder="例如：{date}-{index} 或 写真-{index}"
+        confirmText="开始重命名"
+        onClose={() => setRenameOpen(false)}
+        onConfirm={(tpl) => {
+          void api
+            .batchRename(ids, tpl)
+            .then((r) => {
+              const s = useStore.getState()
+              s.toast(
+                r.failed ? 'info' : 'success',
+                `重命名 ${r.renamed} 张，跳过 ${r.skipped} 张${r.failed ? `，失败 ${r.failed} 张` : ''}`
+              )
+              s.refreshPhotos()
+            })
+            .catch(() => useStore.getState().toast('error', '批量重命名失败'))
+        }}
+      />
     </>
   )
 }

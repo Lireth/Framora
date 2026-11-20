@@ -2,11 +2,11 @@ import path from 'node:path'
 import fs from 'node:fs'
 import { BrowserWindow, Menu, app, net, protocol } from 'electron'
 import { pathToFileURL } from 'node:url'
-import { initDb, closeDb, getSetting, listFolders } from './db'
+import { initDb, closeDb, getSetting, listFolders, listPhotoIdsPendingThumb } from './db'
 import { registerIpc } from './ipc'
 import { isImagePath } from './scanner'
 import { startWatcher, stopAllWatchers } from './watcher'
-import { thumbPath, thumbsDir } from './thumbs'
+import { thumbPath, thumbsDir, enqueueThumb } from './thumbs'
 
 const isDev = !app.isPackaged
 
@@ -105,6 +105,10 @@ if (!gotLock) {
     // 恢复已有文件夹的文件监听
     for (const f of listFolders()) {
       if (fs.existsSync(f.path)) startWatcher(f.id, f.path)
+    }
+    // 续跑上次未完成的缩略图生成（崩溃/退出遗留的 thumb_status=0）
+    for (const id of listPhotoIdsPendingThumb()) {
+      enqueueThumb(id)
     }
   })
 

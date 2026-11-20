@@ -477,6 +477,14 @@ export function listPhotoIdsForRebuild(): number[] {
   return rows.map((r) => r.id)
 }
 
+/** 上次退出时未完成缩略图生成的照片（用于启动续跑） */
+export function listPhotoIdsPendingThumb(): number[] {
+  const rows = db
+    .prepare('SELECT id FROM photos WHERE thumb_status = 0 AND missing = 0')
+    .all() as { id: number }[]
+  return rows.map((r) => r.id)
+}
+
 export function libraryStats(): { total: number; missing: number; untagged: number } {
   const total = (db.prepare('SELECT COUNT(*) AS c FROM photos WHERE missing = 0').get() as { c: number }).c
   const missing = (db.prepare('SELECT COUNT(*) AS c FROM photos WHERE missing = 1').get() as { c: number }).c

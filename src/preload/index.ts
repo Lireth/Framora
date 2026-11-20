@@ -12,6 +12,7 @@ const CALLABLE = new Set([
   'library:removeFolder',
   'library:stats',
   'photos:query',
+  'photos:queryIds',
   'photos:get',
   'photos:updateMeta',
   'photos:metadata',

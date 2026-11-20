@@ -78,6 +78,7 @@ export function registerIpc(): void {
 
   /* ---------- photos ---------- */
   ipcMain.handle('photos:query', (_e, q: PhotoQuery) => db.queryPhotos(q))
+  ipcMain.handle('photos:queryIds', (_e, q: PhotoQuery) => db.queryPhotoIds(q))
   ipcMain.handle('photos:get', (_e, id: number) => db.getPhotoRecord(id))
 
   ipcMain.handle(

@@ -200,6 +200,7 @@ export function PhotoGrid(): React.JSX.Element {
   const photos = useStore((s) => s.photos)
   const tile = useStore((s) => s.tile)
   const loading = useStore((s) => s.loading)
+  const hasMore = useStore((s) => s.hasMore)
   const anchorId = useStore((s) => s.anchorId)
   const navTick = useStore((s) => s.navTick)
   const setGridCols = useStore((s) => s.setGridCols)
@@ -233,6 +234,7 @@ export function PhotoGrid(): React.JSX.Element {
     estimateSize: () => tileH + GAP,
     overscan: 4
   })
+  const loadMorePhotos = useStore((s) => s.loadMorePhotos)
 
   // 键盘导航后把锚点所在行滚动到可视区
   useEffect(() => {
@@ -242,6 +244,15 @@ export function PhotoGrid(): React.JSX.Element {
     virtualizer.scrollToIndex(Math.floor(idx / cols), { align: 'auto' })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [navTick])
+
+  // 滚动接近底部时增量加载下一页
+  useEffect(() => {
+    if (!hasMore) return
+    const items = virtualizer.getVirtualItems()
+    const last = items.length ? items[items.length - 1].index : -1
+    if (last >= rowCount - 3) void loadMorePhotos()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [virtualizer.getVirtualItems().length, rowCount, hasMore])
 
   return (
     <div

@@ -41,6 +41,7 @@ export const api = {
   stats: (): Promise<LibraryStats> => call('library:stats'),
 
   queryPhotos: (q: PhotoQuery): Promise<QueryResult> => call('photos:query', q),
+  queryPhotoIds: (q: PhotoQuery): Promise<number[]> => call('photos:queryIds', q),
   getPhoto: (id: number): Promise<PhotoRecord> => call('photos:get', id),
   updateMeta: (
     id: number,

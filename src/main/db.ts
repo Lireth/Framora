@@ -342,7 +342,8 @@ export function deletePhotoRows(ids: number[]): void {
   del(ids)
 }
 
-export function queryPhotos(q: PhotoQuery): QueryResult {
+/** 将 PhotoQuery 组装为 WHERE 子句与参数（queryPhotos / queryPhotoIds 共用） */
+function buildPhotoFilter(q: PhotoQuery): { whereSql: string; params: Record<string, unknown> } {
   const where: string[] = []
   const params: Record<string, unknown> = {}
   switch (q.scope) {
@@ -388,26 +389,55 @@ export function queryPhotos(q: PhotoQuery): QueryResult {
     where.push('p.rating >= @minRating')
     params.minRating = q.minRating
   }
-  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''
+  return { whereSql: where.length ? `WHERE ${where.join(' AND ')}` : '', params }
+}
+
+function buildOrderSql(q: PhotoQuery): string {
   const dir = q.dir === 'asc' ? 'ASC' : 'DESC'
-  let orderSql = `ORDER BY COALESCE(p.taken_at, p.imported_at) ${dir}, p.id ${dir}`
-  if (q.scope === 'recent') {
-    orderSql = 'ORDER BY p.imported_at DESC, p.id DESC'
-  } else if (q.sort === 'name') {
-    orderSql = `ORDER BY p.name COLLATE NOCASE ${dir}, p.id ${dir}`
-  } else if (q.sort === 'rating') {
-    orderSql = `ORDER BY p.rating ${dir}, p.id ${dir}`
-  } else if (q.sort === 'size') {
-    orderSql = `ORDER BY p.size ${dir}, p.id ${dir}`
-  } else if (q.sort === 'imported') {
-    orderSql = `ORDER BY p.imported_at ${dir}, p.id ${dir}`
+  if (q.scope === 'recent') return 'ORDER BY p.imported_at DESC, p.id DESC'
+  switch (q.sort) {
+    case 'name':
+      return `ORDER BY p.name COLLATE NOCASE ${dir}, p.id ${dir}`
+    case 'rating':
+      return `ORDER BY p.rating ${dir}, p.id ${dir}`
+    case 'size':
+      return `ORDER BY p.size ${dir}, p.id ${dir}`
+    case 'imported':
+      return `ORDER BY p.imported_at ${dir}, p.id ${dir}`
+    default:
+      return `ORDER BY COALESCE(p.taken_at, p.imported_at) ${dir}, p.id ${dir}`
   }
+}
+
+export function queryPhotos(q: PhotoQuery): QueryResult {
+  const { whereSql, params } = buildPhotoFilter(q)
+  const orderSql = buildOrderSql(q)
   const limit = Math.min(q.limit ?? 50000, 100000)
-  const items = stmt(`SELECT ${PHOTO_LITE_COLS} FROM photos p ${whereSql} ${orderSql} LIMIT ${limit}`)
-    .all(params) as PhotoLite[]
-  const totalRow = stmt(`SELECT COUNT(*) AS c FROM photos p ${whereSql}`)
-    .get(params) as { c: number }
-  return { items, total: totalRow.c }
+  const offset = Math.max(0, Math.floor(q.offset ?? 0))
+  // 窗口函数在单次查询中同时返回总数，避免额外的 COUNT 扫描
+  const rows = stmt(
+    `SELECT ${PHOTO_LITE_COLS}, COUNT(*) OVER() AS _total FROM photos p ${whereSql} ${orderSql} LIMIT ${limit} OFFSET ${offset}`
+  ).all(params) as (PhotoLite & { _total?: number })[]
+  let total: number
+  if (rows.length) {
+    total = Number(rows[0]._total ?? 0)
+  } else if (offset > 0) {
+    // 翻页越过末尾时窗口函数无行可读，退回显式 COUNT
+    total = (stmt(`SELECT COUNT(*) AS c FROM photos p ${whereSql}`).get(params) as { c: number }).c
+  } else {
+    total = 0
+  }
+  const items = rows.map(({ _total: _t, ...p }) => p)
+  return { items, total }
+}
+
+/** 返回匹配查询条件的全部照片 id（“全选”等批量操作用，不受分页限制） */
+export function queryPhotoIds(q: PhotoQuery): number[] {
+  const { whereSql, params } = buildPhotoFilter(q)
+  const rows = stmt(`SELECT p.id FROM photos p ${whereSql} LIMIT 200000`).all(params) as {
+    id: number
+  }[]
+  return rows.map((r) => r.id)
 }
 
 /* ---------- tags ---------- */

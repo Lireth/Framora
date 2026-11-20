@@ -44,6 +44,9 @@ interface AppState extends Filters {
   photos: PhotoLite[]
   total: number
   loading: boolean
+  loadingMore: boolean
+  hasMore: boolean
+  lastQueryKey: string | null
   selection: Set<number>
   anchorId: number | null
   activeId: number | null
@@ -66,8 +69,9 @@ interface AppState extends Filters {
   setFilter: (patch: Partial<Filters>) => void
   refreshLibrary: () => Promise<void>
   refreshPhotos: () => Promise<void>
+  loadMorePhotos: () => Promise<void>
   toggleSelect: (id: number, opts?: { additive?: boolean; range?: boolean }) => void
-  selectAll: () => void
+  selectAll: () => Promise<void>
   clearSelection: () => void
   openViewer: (id: number) => void
   closeViewer: () => void
@@ -120,6 +124,9 @@ const VALID_SCOPES: PhotoScope[] = ['all', 'recent', 'missing', 'folder', 'album
 const VALID_TILES = ['s', 'm', 'l'] as const
 const VALID_SORTS: SortKey[] = ['taken', 'imported', 'name', 'rating', 'size']
 
+/** 分页加载数量：首屏与每次增量加载 */
+const PAGE_SIZE = 500
+
 function buildQuery(s: AppState): PhotoQuery {
   return {
     scope: s.scope,
@@ -150,6 +157,9 @@ export const useStore = create<AppState>((set, get) => ({
   photos: [],
   total: 0,
   loading: false,
+  loadingMore: false,
+  hasMore: false,
+  lastQueryKey: null,
   selection: new Set(),
   anchorId: null,
   activeId: null,
@@ -248,19 +258,57 @@ export const useStore = create<AppState>((set, get) => ({
 
   refreshPhotos: async () => {
     const snapshot = buildQuery(get())
+    const queryKey = JSON.stringify(snapshot)
+    const queryChanged = queryKey !== get().lastQueryKey
     set({ loading: true })
     try {
-      const r = await api.queryPhotos(snapshot)
-      if (
-        JSON.stringify(buildQuery(get())) !== JSON.stringify(snapshot)
-      ) {
+      const r = await api.queryPhotos({ ...snapshot, limit: PAGE_SIZE })
+      if (JSON.stringify(buildQuery(get())) !== JSON.stringify(snapshot)) {
         return // 过滤条件已变化，丢弃过期结果
       }
-      const valid = new Set(r.items.map((p) => p.id))
-      const selection = new Set([...get().selection].filter((id) => valid.has(id)))
-      set({ photos: r.items, total: r.total, loading: false, selection })
+      // 仅在过滤条件变化时按已加载结果裁剪选择集，后台数据刷新不破坏既有选择
+      const selection = queryChanged
+        ? (() => {
+            const valid = new Set(r.items.map((p) => p.id))
+            return new Set([...get().selection].filter((id) => valid.has(id)))
+          })()
+        : get().selection
+      set({
+        photos: r.items,
+        total: r.total,
+        hasMore: r.items.length < r.total,
+        loading: false,
+        selection,
+        lastQueryKey: queryKey
+      })
     } catch {
       set({ loading: false })
+    }
+  },
+
+  /** 增量加载下一页（滚动/翻图接近已加载末尾时触发） */
+  loadMorePhotos: async () => {
+    const { loading, loadingMore, hasMore, photos } = get()
+    if (loading || loadingMore || !hasMore) return
+    const snapshot = buildQuery(get())
+    set({ loadingMore: true })
+    try {
+      const r = await api.queryPhotos({ ...snapshot, limit: PAGE_SIZE, offset: photos.length })
+      if (JSON.stringify(buildQuery(get())) !== JSON.stringify(snapshot)) {
+        set({ loadingMore: false })
+        return
+      }
+      const loaded = new Set(photos.map((p) => p.id))
+      const fresh = r.items.filter((p) => !loaded.has(p.id))
+      const merged = [...photos, ...fresh]
+      set({
+        photos: merged,
+        total: r.total,
+        hasMore: merged.length < r.total,
+        loadingMore: false
+      })
+    } catch {
+      set({ loadingMore: false })
     }
   },
 
@@ -286,9 +334,15 @@ export const useStore = create<AppState>((set, get) => ({
     set({ selection: next })
   },
 
-  selectAll: () => {
-    const next = new Set(get().photos.map((p) => p.id))
-    set({ selection: next, anchorId: null })
+  /** 全选当前查询条件下的全部照片（不受分页加载范围限制） */
+  selectAll: async () => {
+    const q = buildQuery(get())
+    try {
+      const ids = await api.queryPhotoIds(q)
+      set({ selection: new Set(ids), anchorId: null, lastQueryKey: JSON.stringify(q) })
+    } catch {
+      /* 查询失败保持原选择 */
+    }
   },
 
   clearSelection: () => set({ selection: new Set(), anchorId: null }),
@@ -305,6 +359,8 @@ export const useStore = create<AppState>((set, get) => ({
     const idx = photos.findIndex((p) => p.id === activeId)
     const next = idx < 0 ? 0 : Math.min(photos.length - 1, Math.max(0, idx + delta))
     set({ activeId: photos[next].id })
+    // 接近已加载末尾时预取下一页，保证连续翻图
+    if (next >= photos.length - 30) void get().loadMorePhotos()
   },
 
   toggleDetail: () => set({ detailOpen: !get().detailOpen }),

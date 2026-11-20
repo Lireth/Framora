@@ -64,6 +64,7 @@ export interface PhotoQuery {
   sort?: 'taken' | 'imported' | 'name' | 'rating' | 'size'
   dir?: 'asc' | 'desc'
   limit?: number
+  offset?: number
 }
 
 export interface QueryResult {

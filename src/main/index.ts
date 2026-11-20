@@ -2,7 +2,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import { BrowserWindow, Menu, app, net, protocol, screen } from 'electron'
 import { pathToFileURL } from 'node:url'
-import { initDb, closeDb, getSetting, setSetting, listFolders, listPhotoIdsPendingThumb } from './db'
+import { initDb, closeDb, getSetting, setSetting, listFolders, listFolderPaths, listPhotoIdsPendingThumb } from './db'
 import { registerIpc } from './ipc'
 import { isImagePath } from './scanner'
 import { startWatcher, stopAllWatchers } from './watcher'
@@ -117,28 +117,54 @@ function createWindow(): void {
   }
 }
 
+/** 校验路径位于已注册资料库文件夹内（media 协议纵深防御，防止任意路径读取） */
+function isInsideLibrary(p: string): boolean {
+  const resolved = path.resolve(p).toLowerCase()
+  const sep = path.sep
+  for (const root of listFolderPaths()) {
+    const r = path.resolve(root).toLowerCase()
+    const prefix = r.endsWith(sep) ? r : r + sep
+    if (resolved.startsWith(prefix)) return true
+  }
+  return false
+}
+
+/** 读取本地文件并附加缓存头（media/thumb 的 URL 均带版本参数，可安全 immutable） */
+async function fileResponse(p: string): Promise<Response> {
+  const resp = await net.fetch(pathToFileURL(p).toString())
+  const headers = new Headers(resp.headers)
+  headers.set('Cache-Control', 'private, max-age=31536000, immutable')
+  return new Response(resp.body, { status: resp.status, headers })
+}
+
 function registerProtocols(): void {
-  protocol.handle('media', (req) => {
+  protocol.handle('media', async (req) => {
     try {
       const u = new URL(req.url)
       const p = decodeURIComponent(u.searchParams.get('p') ?? '')
-      if (!p || !isImagePath(p) || !fs.existsSync(p) || !fs.statSync(p).isFile()) {
+      if (
+        !p ||
+        !isImagePath(p) ||
+        !isInsideLibrary(p) ||
+        !fs.existsSync(p) ||
+        !fs.statSync(p).isFile()
+      ) {
         return new Response(null, { status: 404 })
       }
-      return net.fetch(pathToFileURL(p).toString())
+      return await fileResponse(p)
     } catch {
       return new Response(null, { status: 400 })
     }
   })
 
-  protocol.handle('thumb', (req) => {
+  protocol.handle('thumb', async (req) => {
     try {
       const u = new URL(req.url)
       const name = u.hostname === 't' ? u.pathname.slice(1) : u.hostname + u.pathname
       if (!/^\d+\.webp$/.test(name)) return new Response(null, { status: 400 })
       const p = path.join(thumbsDir(), name)
       if (!fs.existsSync(p)) return new Response(null, { status: 404 })
-      return net.fetch(pathToFileURL(p).toString())
+      return await fileResponse(p)
     } catch {
       return new Response(null, { status: 400 })
     }

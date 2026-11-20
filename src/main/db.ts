@@ -191,6 +191,12 @@ export function getFolderByPath(folderPath: string): FolderInfo | undefined {
     | undefined
 }
 
+/** 已注册资料库文件夹路径（media 协议读取范围校验用） */
+export function listFolderPaths(): string[] {
+  const rows = stmt('SELECT path FROM folders').all() as { path: string }[]
+  return rows.map((r) => r.path)
+}
+
 export function addFolder(folderPath: string, name: string): number {
   const info = stmt('INSERT OR IGNORE INTO folders (path, name, added_at) VALUES (?, ?, ?)')
     .run(folderPath, name, Date.now())

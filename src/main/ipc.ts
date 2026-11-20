@@ -115,35 +115,45 @@ export function registerIpc(): void {
       const backup = await findLatestBackup(id)
       if (backup) src = backup
     }
-    try {
-      const d = await exifr.parse(src, {
-        tiff: true,
-        exif: true,
-        gps: true,
-        xmp: false,
-        icc: false,
-        iptc: false,
-        translateValues: true,
-        reviveValues: true
-      })
-      if (d) {
-        pushPair(pairs, '相机制造商', d.Make)
-        pushPair(pairs, '相机型号', d.Model)
-        pushPair(pairs, '镜头', d.LensModel ?? d.LensMake)
-        pushPair(pairs, 'ISO', d.ISO)
-        pushPair(pairs, '光圈', d.FNumber ? `f/${d.FNumber}` : undefined)
-        pushPair(pairs, '快门', d.ExposureTime ? formatShutter(d.ExposureTime) : undefined)
-        pushPair(pairs, '焦距', d.FocalLength ? `${Math.round(d.FocalLength)}mm` : undefined)
-        pushPair(pairs, '曝光补偿', d.ExposureCompensation)
-        pushPair(pairs, '白平衡', d.WhiteBalance)
-        pushPair(pairs, '闪光灯', d.Flash)
-        pushPair(pairs, '软件', d.Software)
-        if (typeof d.latitude === 'number' && typeof d.longitude === 'number') {
-          pushPair(pairs, 'GPS', `${d.latitude.toFixed(5)}, ${d.longitude.toFixed(5)}`)
+    // EXIF 解析按 源文件+mtime 缓存，避免重复查看时反复解析大文件
+    const cacheKey = `${src}|${row.mtime}`
+    const cached = exifCacheGet(cacheKey)
+    if (cached) {
+      pairs.push(...cached)
+    } else {
+      const exifPairs: MetaPair[] = []
+      try {
+        const d = await exifr.parse(src, {
+          tiff: true,
+          exif: true,
+          gps: true,
+          xmp: false,
+          icc: false,
+          iptc: false,
+          translateValues: true,
+          reviveValues: true
+        })
+        if (d) {
+          pushPair(exifPairs, '相机制造商', d.Make)
+          pushPair(exifPairs, '相机型号', d.Model)
+          pushPair(exifPairs, '镜头', d.LensModel ?? d.LensMake)
+          pushPair(exifPairs, 'ISO', d.ISO)
+          pushPair(exifPairs, '光圈', d.FNumber ? `f/${d.FNumber}` : undefined)
+          pushPair(exifPairs, '快门', d.ExposureTime ? formatShutter(d.ExposureTime) : undefined)
+          pushPair(exifPairs, '焦距', d.FocalLength ? `${Math.round(d.FocalLength)}mm` : undefined)
+          pushPair(exifPairs, '曝光补偿', d.ExposureCompensation)
+          pushPair(exifPairs, '白平衡', d.WhiteBalance)
+          pushPair(exifPairs, '闪光灯', d.Flash)
+          pushPair(exifPairs, '软件', d.Software)
+          if (typeof d.latitude === 'number' && typeof d.longitude === 'number') {
+            pushPair(exifPairs, 'GPS', `${d.latitude.toFixed(5)}, ${d.longitude.toFixed(5)}`)
+          }
         }
+      } catch {
+        /* exif 不可用时仅显示文件信息 */
       }
-    } catch {
-      /* exif 不可用时仅显示文件信息 */
+      exifCachePut(cacheKey, exifPairs)
+      pairs.push(...exifPairs)
     }
     return { pairs }
   })
@@ -279,6 +289,28 @@ export function registerIpc(): void {
 }
 
 /* ---------- helpers ---------- */
+
+/** EXIF 解析结果 LRU 缓存（键 path|mtime，重复查看同一照片免重复解析大文件） */
+const EXIF_CACHE_MAX = 200
+const exifCache = new Map<string, MetaPair[]>()
+
+function exifCacheGet(key: string): MetaPair[] | undefined {
+  const hit = exifCache.get(key)
+  if (hit !== undefined) {
+    // LRU：命中后移到最新位置
+    exifCache.delete(key)
+    exifCache.set(key, hit)
+  }
+  return hit
+}
+
+function exifCachePut(key: string, pairs: MetaPair[]): void {
+  exifCache.set(key, pairs)
+  if (exifCache.size > EXIF_CACHE_MAX) {
+    const oldest = exifCache.keys().next().value
+    if (oldest !== undefined) exifCache.delete(oldest)
+  }
+}
 
 function pushPair(pairs: MetaPair[], label: string, value: unknown): void {
   if (value === undefined || value === null || value === '') return

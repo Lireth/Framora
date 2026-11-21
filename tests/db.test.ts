@@ -4,9 +4,10 @@
  * 每个用例使用独立临时 userData 目录，避免跨用例状态污染。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import Database from 'better-sqlite3'
 
 let userData: string
 
@@ -81,6 +82,43 @@ describe('迁移与设置', () => {
     const id = seed(f, 'p0')
     db.setPhotoPhash(id, 7, 9) // v5 列存在
     expect(db.libraryStats().total).toBe(1)
+  })
+})
+
+describe('迁移守卫与备份策略', () => {
+  it('版本号错位的历史库重跑迁移幂等（加列/触发器守卫生效）', async () => {
+    const f = newFolder('C:\\pics')
+    const id = seed(f, 'guard-1')
+    db.closeDb()
+    // 模拟 schema 领先、user_version 落后的历史库：迁移会重跑 v6..v8
+    const raw = new Database(path.join(userData, 'framora.db'))
+    raw.pragma('user_version = 5')
+    raw.close()
+    await db.initDb()
+    // 数据保留，且 v8 相册名检索触发器重建后仍工作
+    expect(db.libraryStats().total).toBe(1)
+    const album = db.createAlbum('重跑相册', null)
+    db.batchAlbum([id], album)
+    expect(db.queryPhotos({ scope: 'all', keyword: '重跑相册' }).total).toBe(1)
+  })
+
+  it('损坏库（非数据库文件）被隔离并重建，原文件留存', async () => {
+    db.closeDb()
+    writeFileSync(path.join(userData, 'framora.db'), 'not a database at all')
+    // SQLITE_NOTADB 属损坏类错误：自动隔离 + 重建，不应抛出
+    await db.initDb()
+    expect(db.libraryStats().total).toBe(0)
+    const kept = readdirSync(userData).filter((n) => n.startsWith('framora.db.corrupt-'))
+    expect(kept).toHaveLength(1)
+  })
+
+  it('仅实际发生迁移时备份；日常启动不重复备份', async () => {
+    // beforeEach 的首次 initDb 执行 v1..v8 迁移 → 恰好一份迁移前备份
+    const dir = path.join(userData, 'db-backups')
+    expect(readdirSync(dir)).toHaveLength(1)
+    db.closeDb()
+    await db.initDb() // 已是最新版本，无迁移
+    expect(readdirSync(dir)).toHaveLength(1)
   })
 })
 

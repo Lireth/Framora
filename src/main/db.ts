@@ -34,7 +34,26 @@ function stmt(sql: string): Database.Statement {
  * Schema 迁移列表：索引即目标 user_version。
  * - v1 为初始 schema，全部使用 IF NOT EXISTS，对已存在的旧库幂等。
  * - 后续 schema 变更一律追加新迁移函数，禁止修改历史迁移。
+ * - 每步迁移整体包在事务中（见 migrate），失败即回滚且 user_version 不推进。
  */
+function addColumnIfMissing(
+  database: Database.Database,
+  table: string,
+  column: string,
+  columnDef: string
+): void {
+  const cols = database.pragma(`table_info(${table})`) as { name: string }[]
+  if (!cols.some((c) => c.name === column)) {
+    database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${columnDef}`)
+  }
+}
+
+/** 是否 SQLite 损坏类错误：仅此类错误才允许隔离重建，其余错误必须保留现场向上抛出 */
+function isCorruptError(err: unknown): boolean {
+  const code = (err as { code?: string } | null)?.code
+  return typeof code === 'string' && (code.startsWith('SQLITE_CORRUPT') || code === 'SQLITE_NOTADB')
+}
+
 const MIGRATIONS: ((db: Database.Database) => void)[] = [
   (db) => {
     db.exec(`
@@ -101,7 +120,7 @@ const MIGRATIONS: ((db: Database.Database) => void)[] = [
   },
   // v2: 全文搜索 —— search_text 冗余列 + FTS5 trigram 外部内容表 + 同步触发器
   (db) => {
-    db.exec(`ALTER TABLE photos ADD COLUMN search_text TEXT NOT NULL DEFAULT '';`)
+    addColumnIfMissing(db, 'photos', 'search_text', "TEXT NOT NULL DEFAULT ''")
     // 先回填存量数据（此时触发器尚未创建，避免产生无效 delete 条目）
     db.exec(`
       UPDATE photos SET search_text =
@@ -185,10 +204,8 @@ const MIGRATIONS: ((db: Database.Database) => void)[] = [
   },
   // v5: 感知哈希列（相似照片检测）
   (db) => {
-    db.exec(`
-      ALTER TABLE photos ADD COLUMN phash_lo INTEGER;
-      ALTER TABLE photos ADD COLUMN phash_hi INTEGER;
-    `)
+    addColumnIfMissing(db, 'photos', 'phash_lo', 'INTEGER')
+    addColumnIfMissing(db, 'photos', 'phash_hi', 'INTEGER')
   },
   // v6: 高频排序列补索引（导入时间 / 文件名大小写无关），避免大库排序全表扫描
   (db) => {
@@ -199,8 +216,8 @@ const MIGRATIONS: ((db: Database.Database) => void)[] = [
   },
   // v7: 软删除回收站（deleted_at 为空表示未删除）；部分索引仅为回收站视图加速
   (db) => {
+    addColumnIfMissing(db, 'photos', 'deleted_at', 'INTEGER')
     db.exec(`
-      ALTER TABLE photos ADD COLUMN deleted_at INTEGER;
       CREATE INDEX IF NOT EXISTS idx_photos_trash ON photos(deleted_at) WHERE deleted_at IS NOT NULL;
     `)
   },
@@ -209,6 +226,9 @@ const MIGRATIONS: ((db: Database.Database) => void)[] = [
   //     存量库重算全部搜索文本并重建索引
   (db) => {
     db.exec(`
+      DROP TRIGGER IF EXISTS album_photos_search_insert;
+      DROP TRIGGER IF EXISTS album_photos_search_delete;
+      DROP TRIGGER IF EXISTS albums_search_rename;
       CREATE TRIGGER album_photos_search_insert AFTER INSERT ON album_photos BEGIN
         UPDATE photos SET search_text = ${SEARCH_TEXT_EXPR} WHERE id = new.photo_id;
       END;
@@ -243,7 +263,10 @@ export async function initDb(): Promise<void> {
   try {
     await openAndMigrate()
   } catch (err) {
-    // 兜底：隔离损坏库文件并重建空库，照片文件本体不受影响
+    // 非损坏错误（迁移代码缺陷、磁盘满等）：保留现场与迁移前备份，向上抛出由
+    // 入口弹窗提示后退出——绝不吞掉含标签/相册的整库
+    if (!isCorruptError(err)) throw err
+    // SQLite 损坏：隔离库文件（含 wal/shm）并重建空库，照片文件本体不受影响
     quarantineCorruptDb()
     dialog.showMessageBoxSync({
       type: 'warning',
@@ -260,8 +283,11 @@ async function openAndMigrate(): Promise<void> {
   stmtCache.clear()
   db.pragma('journal_mode = WAL')
   db.pragma('synchronous = NORMAL')
-  // 迁移前先备份当前库，升级失败可回滚
-  await backupDatabase()
+  // 仅在确有迁移要执行时先备份（失败可回滚）；日常启动不再整库复制拖慢启动
+  const current = db.pragma('user_version', { simple: true }) as number
+  if (current < MIGRATIONS.length) {
+    await backupDatabase()
+  }
   migrate()
 }
 
@@ -300,10 +326,14 @@ export async function backupDatabase(): Promise<string | null> {
     return null // 备份失败不阻塞启动
   }
   try {
+    // 按 mtime 新旧排序轮换：文件名内嵌的版本号位数不定（v2 与 v10），
+    // 字典序会错排导致最新备份落入删除区间
     const names = fs
       .readdirSync(dir)
       .filter((n) => n.startsWith('framora-'))
-      .sort((a, b) => b.localeCompare(a))
+      .map((n) => ({ n, m: fs.statSync(path.join(dir, n)).mtimeMs }))
+      .sort((a, b) => b.m - a.m)
+      .map((x) => x.n)
     for (const n of names.slice(DB_BACKUP_KEEP)) {
       fs.rmSync(path.join(dir, n), { force: true })
     }

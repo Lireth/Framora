@@ -3,6 +3,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import { app, dialog } from 'electron'
 import { computePhashClusters } from './phashCluster'
+import { logError } from './log'
 import type {
   AlbumInfo,
   FolderInfo,
@@ -318,6 +319,16 @@ const MIGRATIONS: ((db: Database.Database) => void)[] = [
       END;
     `)
   },
+  // v12: 搜索文本维护改为应用层脏队列 —— 移除相册成员变更/重命名的同步触发器。
+  //      批量写入不再逐行执行两条相关子查询 + FTS 重写，而是在事务提交后统一入队，
+  //      由后台按批重算；关键词检索前会先冲刷队列，读到的始终是最新文本。
+  (db) => {
+    db.exec(`
+      DROP TRIGGER IF EXISTS album_photos_search_insert;
+      DROP TRIGGER IF EXISTS album_photos_search_delete;
+      DROP TRIGGER IF EXISTS albums_search_rename;
+    `)
+  },
 ]
 
 function migrate(): void {
@@ -543,6 +554,8 @@ export async function initDb(): Promise<void> {
 }
 
 async function openAndMigrate(): Promise<void> {
+  // 换库/重开后旧库的脏 id 不再适用
+  discardSearchTextQueue()
   db = new Database(path.join(app.getPath('userData'), 'framora.db'))
   stmtCache.clear()
   db.pragma('journal_mode = WAL')
@@ -608,6 +621,13 @@ export async function backupDatabase(): Promise<string | null> {
 }
 
 export function closeDb(): void {
+  // 退出前尽力把搜索文本落库，避免下次启动检索缺标签/相册名
+  try {
+    flushSearchText()
+  } catch (err) {
+    logError('searchText', err)
+  }
+  discardSearchTextQueue()
   try {
     db?.close()
   } catch {
@@ -617,6 +637,8 @@ export function closeDb(): void {
 
 /** 导出当前索引库为单文件备份（better-sqlite3 backup API，对 WAL 安全） */
 export async function exportBackup(destFile: string): Promise<void> {
+  // 备份必须包含最新检索文本：先同步冲刷脏队列
+  flushSearchText()
   await db.backup(destFile)
 }
 
@@ -914,14 +936,91 @@ const SEARCH_TEXT_EXPR = `
   IFNULL((SELECT group_concat(a.name, ' ') FROM album_photos ap JOIN albums a ON a.id = ap.album_id
           WHERE ap.photo_id = photos.id AND a.deleted_at IS NULL), '')`
 
-/** 重算照片的搜索文本（名称+标题+描述+标签名+相册名），FTS 触发器随之同步索引 */
+/* ---------- 搜索文本脏队列 ---------- */
+
+/** 单批重算行数：一条 UPDATE 走 json_each 参数，不受 SQLite 变量上限约束 */
+const SEARCH_TEXT_BATCH = 500
+/** 不超过该规模时同步完成，保证单张照片编辑后检索立即一致 */
+const SEARCH_TEXT_SYNC_LIMIT = 64
+
+const searchTextDirty = new Set<number>()
+let searchTextTimer: NodeJS.Immediate | null = null
+
+const SEARCH_TEXT_UPDATE_SQL = `UPDATE photos SET search_text = ${SEARCH_TEXT_EXPR}
+  WHERE id IN (SELECT value FROM json_each(?))`
+
+function updateSearchTextBatch(ids: number[]): void {
+  stmt(SEARCH_TEXT_UPDATE_SQL).run(JSON.stringify(ids))
+}
+
+/** 立即重算全部待处理照片（关键词检索、导出备份、关闭库前调用，保证读后一致） */
+export function flushSearchText(): void {
+  if (!searchTextDirty.size) return
+  const ids = [...searchTextDirty]
+  searchTextDirty.clear()
+  try {
+    const run = db.transaction(() => {
+      for (let i = 0; i < ids.length; i += SEARCH_TEXT_BATCH) {
+        updateSearchTextBatch(ids.slice(i, i + SEARCH_TEXT_BATCH))
+      }
+    })
+    run()
+  } catch (err) {
+    for (const id of ids) searchTextDirty.add(id)
+    throw err
+  }
+}
+
+/** 丢弃待处理队列：换库/关库后旧 id 对新库无意义，绝不能写入 */
+function discardSearchTextQueue(): void {
+  searchTextDirty.clear()
+  if (searchTextTimer) {
+    clearImmediate(searchTextTimer)
+    searchTextTimer = null
+  }
+}
+
+function scheduleSearchTextFlush(): void {
+  if (searchTextTimer) return
+  searchTextTimer = setImmediate(() => {
+    searchTextTimer = null
+    const ids: number[] = []
+    for (const id of searchTextDirty) {
+      ids.push(id)
+      if (ids.length >= SEARCH_TEXT_BATCH) break
+    }
+    for (const id of ids) searchTextDirty.delete(id)
+    try {
+      if (ids.length) db.transaction(() => updateSearchTextBatch(ids))()
+    } catch (err) {
+      // 后台失败放回队列，留给下一次检索/关闭前重试，避免定时器空转
+      for (const id of ids) searchTextDirty.add(id)
+      logError('searchText', err)
+      return
+    }
+    if (searchTextDirty.size) scheduleSearchTextFlush()
+  })
+}
+
+/** 标记搜索文本待重算（名称+标题+描述+可见标签名+可见相册名）；FTS 触发器随更新同步 */
 export function recomputeSearchText(ids: number[]): void {
   if (!ids.length) return
-  const run = db.transaction(() => {
-    const up = stmt(`UPDATE photos SET search_text = ${SEARCH_TEXT_EXPR} WHERE id = ?`)
-    for (const id of ids) up.run(id)
-  })
-  run()
+  for (const id of ids) searchTextDirty.add(id)
+  // 事务内不能另开事务：交给事件循环在提交后处理
+  if (db.inTransaction || searchTextDirty.size > SEARCH_TEXT_SYNC_LIMIT) {
+    scheduleSearchTextFlush()
+    return
+  }
+  flushSearchText()
+}
+
+/** 检索前冲刷队列；失败时降级为略旧文本，不让搜索本身报错 */
+function flushSearchTextForRead(): void {
+  try {
+    flushSearchText()
+  } catch (err) {
+    logError('searchText', err)
+  }
 }
 
 export function updatePhotoFileFields(
@@ -1133,7 +1232,10 @@ function buildOrderSql(q: PhotoQuery): string {
 }
 
 export function queryPhotos(q: PhotoQuery): QueryResult {
-  const { whereSql, params } = buildPhotoFilter(resolveSmartFilters(q))
+  const resolved = resolveSmartFilters(q)
+  // 检索前冲刷脏队列：批量打标签/入相册后立刻搜索也能命中最新文本
+  if (resolved.keyword?.trim()) flushSearchTextForRead()
+  const { whereSql, params } = buildPhotoFilter(resolved)
   const orderSql = buildOrderSql(q)
   const limit = Math.min(q.limit ?? 50000, 100000)
   const offset = Math.max(0, Math.floor(q.offset ?? 0))
@@ -1156,7 +1258,9 @@ export function queryPhotos(q: PhotoQuery): QueryResult {
 
 /** 返回匹配查询条件的全部照片 id（“全选”等批量操作用，不受分页限制） */
 export function queryPhotoIds(q: PhotoQuery): number[] {
-  const { whereSql, params } = buildPhotoFilter(resolveSmartFilters(q))
+  const resolved = resolveSmartFilters(q)
+  if (resolved.keyword?.trim()) flushSearchTextForRead()
+  const { whereSql, params } = buildPhotoFilter(resolved)
   const rows = stmt(`SELECT p.id FROM photos p ${whereSql} LIMIT 200000`).all(params) as {
     id: number
   }[]
@@ -1319,14 +1423,23 @@ export function setPhotoTags(photoId: number, tagIds: number[]): void {
 }
 
 export function batchTags(ids: number[], addTagIds: number[], removeTagIds: number[]): void {
+  if (!ids.length) return
+  // 集合写入：每条语句处理整批 id（json_each 无变量上限），避免 ids × tags 次往返
+  const idSet = JSON.stringify(ids)
   const run = db.transaction(() => {
-    const add = stmt(
-      'INSERT OR IGNORE INTO photo_tags (photo_id, tag_id) SELECT ?, id FROM tags WHERE id = ? AND deleted_at IS NULL',
-    )
-    const del = stmt('DELETE FROM photo_tags WHERE photo_id = ? AND tag_id = ?')
-    for (const pid of ids) {
-      for (const t of removeTagIds) del.run(pid, t)
-      for (const t of addTagIds) add.run(pid, t)
+    for (const tagId of removeTagIds) {
+      stmt(
+        'DELETE FROM photo_tags WHERE tag_id = ? AND photo_id IN (SELECT value FROM json_each(?))',
+      ).run(tagId, idSet)
+    }
+    for (const tagId of addTagIds) {
+      // 只接受未删除标签：陈旧 UI 传入的已删 id 静默丢弃，避免恢复后意外复活关系
+      stmt(
+        `INSERT OR IGNORE INTO photo_tags (photo_id, tag_id)
+         SELECT p.id, ? FROM photos p
+         WHERE p.id IN (SELECT value FROM json_each(?))
+           AND EXISTS (SELECT 1 FROM tags WHERE id = ? AND deleted_at IS NULL)`,
+      ).run(tagId, idSet, tagId)
     }
   })
   run()
@@ -1334,11 +1447,11 @@ export function batchTags(ids: number[], addTagIds: number[], removeTagIds: numb
 }
 
 export function batchRate(ids: number[], rating: number): void {
-  const run = db.transaction(() => {
-    const up = stmt('UPDATE photos SET rating = ? WHERE id = ?')
-    for (const id of ids) up.run(rating, id)
-  })
-  run()
+  if (!ids.length) return
+  stmt('UPDATE photos SET rating = ? WHERE id IN (SELECT value FROM json_each(?))').run(
+    rating,
+    JSON.stringify(ids),
+  )
 }
 
 /* ---------- albums ---------- */
@@ -1365,6 +1478,13 @@ export function createAlbum(name: string, color: string | null): number {
 
 export function renameAlbum(id: number, name: string): void {
   stmt('UPDATE albums SET name = ? WHERE id = ? AND deleted_at IS NULL').run(name, id)
+  // 相册名参与检索：成员可能很多，交给脏队列后台重算（v12 起不再由触发器逐行更新）
+  const affected = (
+    stmt('SELECT photo_id FROM album_photos WHERE album_id = ?').all(id) as {
+      photo_id: number
+    }[]
+  ).map((r) => r.photo_id)
+  recomputeSearchText(affected)
 }
 
 function countAlbumPhotos(albumId: number): number {
@@ -1406,23 +1526,29 @@ export function restoreAlbum(id: number): { name: string; photos: number } | nul
 }
 
 export function batchAlbum(ids: number[], albumId: number | null): void {
-  const run = db.transaction(() => {
-    if (albumId === null) {
-      const del = stmt('DELETE FROM album_photos WHERE photo_id = ?')
-      for (const id of ids) del.run(id)
-    } else {
-      // 已删除相册不接收新成员（陈旧 UI 传入的 id 静默忽略）
-      const ins = stmt(
-        'INSERT OR IGNORE INTO album_photos (album_id, photo_id) SELECT ?, ? WHERE EXISTS (SELECT 1 FROM albums WHERE id = ? AND deleted_at IS NULL)',
-      )
-      for (const id of ids) ins.run(albumId, id, albumId)
-    }
-  })
-  run()
+  if (!ids.length) return
+  const idSet = JSON.stringify(ids)
+  if (albumId === null) {
+    stmt('DELETE FROM album_photos WHERE photo_id IN (SELECT value FROM json_each(?))').run(idSet)
+  } else {
+    // 已删除相册不接收新成员（陈旧 UI 传入的 id 静默忽略）
+    const visible = stmt('SELECT 1 FROM albums WHERE id = ? AND deleted_at IS NULL').get(albumId)
+    if (!visible) return
+    stmt(
+      `INSERT OR IGNORE INTO album_photos (album_id, photo_id)
+       SELECT ?, p.id FROM photos p WHERE p.id IN (SELECT value FROM json_each(?))`,
+    ).run(albumId, idSet)
+  }
+  // 相册名参与检索文本；成员变更不再由触发器逐行重算，统一入队后台刷新
+  recomputeSearchText(ids)
 }
 
 export function removeFromAlbum(photoId: number, albumId: number): void {
-  stmt('DELETE FROM album_photos WHERE photo_id = ? AND album_id = ?').run(photoId, albumId)
+  const changed = stmt('DELETE FROM album_photos WHERE photo_id = ? AND album_id = ?').run(
+    photoId,
+    albumId,
+  ).changes
+  if (changed) recomputeSearchText([photoId])
 }
 
 /* ---------- stats ---------- */
@@ -1432,33 +1558,22 @@ export function removeFromAlbum(photoId: number, albumId: number): void {
 /** 软删除：索引移入回收站视图，磁盘文件保留在原位置；返回实际更新的行数 */
 export function softDeletePhotos(ids: number[]): number {
   if (!ids.length) return 0
-  const now = Date.now()
-  let n = 0
-  const run = db.transaction(() => {
-    const up = stmt('UPDATE photos SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL')
-    for (const id of ids) {
-      n += up.run(now, id).changes
-    }
-  })
-  run()
+  const info = stmt(
+    'UPDATE photos SET deleted_at = ? WHERE deleted_at IS NULL AND id IN (SELECT value FROM json_each(?))',
+  ).run(Date.now(), JSON.stringify(ids))
   // 已删行不再参与相似聚类
   markPhashDirty()
-  return n
+  return info.changes
 }
 
 /** 还原：清除 deleted_at，照片立即回到原作用域 */
 export function restorePhotos(ids: number[]): number {
   if (!ids.length) return 0
-  let n = 0
-  const run = db.transaction(() => {
-    const up = stmt('UPDATE photos SET deleted_at = NULL WHERE id = ? AND deleted_at IS NOT NULL')
-    for (const id of ids) {
-      n += up.run(id).changes
-    }
-  })
-  run()
+  const info = stmt(
+    'UPDATE photos SET deleted_at = NULL WHERE deleted_at IS NOT NULL AND id IN (SELECT value FROM json_each(?))',
+  ).run(JSON.stringify(ids))
   markPhashDirty()
-  return n
+  return info.changes
 }
 
 /** 按路径查找已在回收站中的照片（watcher 检测到文件重新出现时自动还原用） */

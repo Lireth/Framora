@@ -562,6 +562,18 @@ describe('dupCache 失效语义（第一批修复回归）', () => {
     expect(clusters.flat().sort((x, y) => x - y)).toEqual([a, b, c, d].sort((x, y) => x - y))
   })
 
+  it('哈希持续置脏时复用同一在途聚类，不排队叠加全量计算', async () => {
+    const f = newFolder('C:\\pics')
+    dupPair(f, 7)
+    const p1 = db.duplicateClusters()
+    db.markPhashDirty()
+    const p2 = db.duplicateClusters()
+    const [r1, r2] = await Promise.all([p1, p2])
+    expect(r1).toBe(r2)
+    // 结果代次已过期，不写入缓存：下一次查询必须重算
+    expect(await db.duplicateClusters()).not.toBe(r1)
+  })
+
   it('queryDuplicates 按簇顺序分页', async () => {
     const f = newFolder('C:\\pics')
     const [a, b] = dupPair(f, 5)

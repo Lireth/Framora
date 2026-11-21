@@ -1543,7 +1543,7 @@ export function listPhashes(): { id: number; lo: number; hi: number }[] {
 let dupClustersCache: number[][] | null = null
 /** 置脏代次：计算期间再次置脏时，本次结果作废不缓存，下次查询重算 */
 let dupGen = 0
-let dupInflight: { gen: number; promise: Promise<number[][]> } | null = null
+let dupInflight: Promise<number[][]> | null = null
 
 export function markPhashDirty(): void {
   dupGen++
@@ -1556,18 +1556,21 @@ export function markPhashDirty(): void {
  */
 export async function duplicateClusters(): Promise<number[][]> {
   if (dupClustersCache) return dupClustersCache
-  if (dupInflight && dupInflight.gen === dupGen) return dupInflight.promise
+  // 已有计算在跑时直接复用：哈希补算期间置脏非常频繁，若每个代次都新起一次
+  // 全量聚类，worker 队列会堆积多次秒级任务。这里允许返回略旧结果（不缓存），
+  // 下一次查询自然用最新代次重算。
+  if (dupInflight) return dupInflight
   const myGen = dupGen
   const promise = (async (): Promise<number[][]> => {
     const rows = listPhashes().sort((a, b) => a.id - b.id)
     return (await computePhashClusters(rows)).filter((c) => c.length >= 2)
   })()
-  dupInflight = { gen: myGen, promise }
+  dupInflight = promise
   let result: number[][]
   try {
     result = await promise
   } finally {
-    if (dupInflight?.promise === promise) dupInflight = null
+    if (dupInflight === promise) dupInflight = null
   }
   // 计算期间哈希/缺失状态变化：本次结果可能略旧，直接返回但不缓存
   if (myGen !== dupGen) return result

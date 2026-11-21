@@ -354,6 +354,33 @@ await invoke('storage:setLimits', storageBefore.limits)
 await page.keyboard.press('Escape')
 console.log('storage panel: ok')
 
+/* 17. 相似聚类（P1-2）：分块索引在 worker 中计算，簇查询与「保留最佳」选择一致 */
+await page.evaluate(() => {
+  const row = [...document.querySelectorAll('aside button')].find((b) =>
+    b.textContent.trim().startsWith('疑似重复')
+  )
+  row?.click()
+})
+await sleep(2000)
+const dupPage = await invoke('photos:query', { scope: 'duplicates', limit: 5 })
+console.log('duplicates:', JSON.stringify({ total: dupPage.total, shown: dupPage.items.length }))
+if (dupPage.total <= 0) fail('测试图库应产生疑似重复簇（同色系渐变图哈希相近）')
+const dupGrid = await page.evaluate(
+  () => document.querySelectorAll('[data-testid="photo-grid"] img').length
+)
+if (dupGrid === 0) fail('疑似重复视图未渲染照片')
+const redundant = await invoke('duplicates:selectRedundant', 'best')
+if (redundant.clusters <= 0 || redundant.ids.length <= 0) fail('保留最佳未返回冗余项')
+if (redundant.ids.length !== dupPage.total - redundant.clusters) {
+  fail(
+    `每组应保留 1 张：簇 ${redundant.clusters}，重复 ${dupPage.total}，冗余 ${redundant.ids.length}`
+  )
+}
+const dupToolbar = await page.evaluate(() => document.body.innerText.includes('保留最佳'))
+if (!dupToolbar) fail('疑似重复视图缺少「保留最佳」操作')
+await shot(page, '10-duplicates.png')
+console.log('duplicate clustering: ok')
+
 writeFileSync(path.join(OUT, 'result.json'), JSON.stringify({ ok: process.exitCode == null }))
 console.log('screenshots at', OUT)
 browser.disconnect()

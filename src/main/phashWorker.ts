@@ -1,7 +1,7 @@
 /**
- * 相似聚类 worker：接收 phash 行，执行贪心聚类后回传结果。
+ * 相似聚类 worker：接收 phash 行，执行分块索引贪心聚类后回传结果。
  * 独立构建入口（electron-vite main.rollupOptions.input → out/main/phashWorker.js），
- * 由主进程 phashCluster.ts 经 worker_threads 加载，将 O(n·k) 聚类移出主进程。
+ * 由主进程 phashCluster.ts 经 worker_threads 加载，将聚类计算移出主进程。
  */
 import { parentPort } from 'node:worker_threads'
 import { clusterPhashes, type PhashRow } from './phashCore'

@@ -331,10 +331,199 @@ function migrate(): void {
   }
 }
 
+/* ---------- 备份导入：校验、原子替换与中断恢复 ---------- */
+
+/** 备份必须包含的核心表（v1 基线）；后续版本新增的表允许缺失，由迁移补齐 */
+const CORE_TABLES = [
+  'folders',
+  'photos',
+  'tags',
+  'photo_tags',
+  'albums',
+  'album_photos',
+  'settings',
+] as const
+
+interface BackupProbe {
+  version: number
+  size: number
+}
+
+/** 备份校验失败（区别于底层 SQLite 异常，用于保留可读中文提示） */
+class BackupError extends Error {}
+
+/**
+ * 只读探测备份：核心表、schema 版本上界、integrity_check。
+ * 任何一项失败都在关闭当前索引库之前抛出，调用方仍可继续使用原库。
+ */
+function probeBackupFile(file: string): BackupProbe {
+  let st: fs.Stats
+  try {
+    st = fs.statSync(file)
+  } catch {
+    throw new BackupError('备份文件不存在或不可访问')
+  }
+  if (!st.isFile()) throw new BackupError('所选路径不是文件')
+  if (st.size <= 0) throw new BackupError('备份文件为空')
+  // 未合并的 WAL 意味着备份可能缺少最近写入；官方导出为单文件，不包含 -wal
+  try {
+    const wal = fs.statSync(`${file}-wal`)
+    if (wal.size > 0) {
+      throw new BackupError(
+        '检测到未合并的 WAL 文件，该文件可能不是完整备份。请正常退出应用后重新导出索引库备份。'
+      )
+    }
+  } catch (err) {
+    if (err instanceof BackupError) throw err
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw new BackupError(`无法检查备份的 WAL 状态：${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  let probe: Database.Database
+  try {
+    probe = new Database(file, { readonly: true, fileMustExist: true })
+  } catch (err) {
+    throw new BackupError(
+      `无法打开备份文件：${err instanceof Error ? err.message : String(err)}`
+    )
+  }
+  try {
+    const version = probe.pragma('user_version', { simple: true }) as number
+    if (!Number.isInteger(version) || version < 0) {
+      throw new BackupError('备份的 schema 版本无效')
+    }
+    if (version > MIGRATIONS.length) {
+      throw new BackupError(
+        `备份由更新版本的拾帧创建（schema v${version}），当前应用最高支持 v${MIGRATIONS.length}。请先升级应用后再导入。`
+      )
+    }
+    const tables = new Set(
+      (
+        probe.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as {
+          name: string
+        }[]
+      ).map((r) => r.name)
+    )
+    const missing = CORE_TABLES.filter((t) => !tables.has(t))
+    if (missing.length) {
+      throw new BackupError(`备份缺少必要数据表：${missing.join('、')}`)
+    }
+    const rows = probe.pragma('integrity_check') as Record<string, unknown>[]
+    const messages = rows.map((r) => String(r['integrity_check'] ?? Object.values(r)[0] ?? ''))
+    if (messages.length !== 1 || messages[0] !== 'ok') {
+      throw new BackupError(
+        `备份完整性校验失败：${messages.slice(0, 3).join('；') || '未知错误'}`
+      )
+    }
+    return { version, size: st.size }
+  } catch (err) {
+    if (err instanceof BackupError) throw err
+    throw new BackupError(
+      `无法读取备份文件（可能已损坏）：${err instanceof Error ? err.message : String(err)}`
+    )
+  } finally {
+    probe.close()
+  }
+}
+
+/** 落盘后 fsync，确保 rename 之前数据已写入磁盘（不支持的后端放行） */
+async function fsyncFile(file: string): Promise<void> {
+  const fh = await fs.promises.open(file, 'r+')
+  try {
+    await fh.sync()
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    if (code !== 'EINVAL' && code !== 'ENOTSUP') throw err
+  } finally {
+    await fh.close()
+  }
+}
+
+function latestFile(names: string[], prefix: string): string | null {
+  const hits = names
+    .filter((n) => n.startsWith(prefix) && !n.endsWith('-wal') && !n.endsWith('-shm'))
+    .sort()
+  return hits.length ? hits[hits.length - 1] : null
+}
+
+/**
+ * 启动时恢复被中断的备份导入：
+ * - 目标库缺失且存在完整临时副本（校验后已 fsync）→ 提升为正式库；
+ * - 否则回退到最近一次 .pre-import 原库；
+ * - 目标库存在时清掉残留临时文件。
+ */
+function recoverInterruptedImport(): void {
+  const dir = app.getPath('userData')
+  const target = path.join(dir, 'framora.db')
+  let names: string[]
+  try {
+    names = fs.readdirSync(dir)
+  } catch {
+    return
+  }
+  const temps = names.filter((n) => n.startsWith('framora.db.importing-'))
+  const removeTargetSidecars = (): void => {
+    for (const suffix of ['-wal', '-shm']) {
+      try {
+        fs.rmSync(`${target}${suffix}`, { force: true })
+      } catch {
+        /* 单个边车文件清理失败忽略 */
+      }
+    }
+  }
+  const removeTemps = (): void => {
+    for (const n of temps) {
+      try {
+        fs.rmSync(path.join(dir, n), { force: true })
+      } catch {
+        /* 单个临时文件清理失败忽略 */
+      }
+    }
+  }
+
+  if (!fs.existsSync(target)) {
+    const temp = latestFile(names, 'framora.db.importing-')
+    if (temp) {
+      try {
+        // 临时副本是单文件、已 checkpoint；清除可能残留的旧边车，避免被套用到新库
+        removeTargetSidecars()
+        fs.renameSync(path.join(dir, temp), target)
+        removeTemps()
+        return
+      } catch {
+        /* 提升失败：继续尝试原库回退 */
+      }
+    }
+    const pre = latestFile(names, 'framora.db.pre-import-')
+    if (pre) {
+      try {
+        for (const suffix of ['-wal', '-shm']) {
+          const sib = path.join(dir, `${pre}${suffix}`)
+          if (!fs.existsSync(sib)) continue
+          try {
+            fs.rmSync(`${target}${suffix}`, { force: true })
+          } catch {
+            /* ignore */
+          }
+          fs.renameSync(sib, `${target}${suffix}`)
+        }
+        fs.renameSync(path.join(dir, pre), target)
+        removeTemps()
+        return
+      } catch {
+        /* 回退失败：交给 initDb 的常规重建路径 */
+      }
+    }
+  }
+  removeTemps()
+}
+
 export async function initDb(): Promise<void> {
   const userData = app.getPath('userData')
   fs.mkdirSync(path.join(userData, 'thumbs'), { recursive: true })
   fs.mkdirSync(path.join(userData, 'backups'), { recursive: true })
+  recoverInterruptedImport()
   try {
     await openAndMigrate()
   } catch (err) {
@@ -431,34 +620,96 @@ export async function exportBackup(destFile: string): Promise<void> {
   await db.backup(destFile)
 }
 
-/**
- * 用备份文件替换当前索引库：校验 → 保留现库为 .pre-import-<ts> → 复制 → 重开并迁移。
- * 照片文件本体不受影响；导入后调用方需重挂 watcher 并补建缺失缩略图。
- */
-export async function importBackup(srcFile: string): Promise<void> {
-  const probe = new Database(srcFile, { readonly: true })
-  try {
-    const t = probe
-      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='photos'")
-      .get()
-    if (!t) throw new Error('所选文件不是有效的 Framora 索引库备份')
-  } finally {
-    probe.close()
-  }
-  closeDb()
-  const target = path.join(app.getPath('userData'), 'framora.db')
-  const stamp = Date.now()
-  for (const suffix of ['', '-wal', '-shm']) {
-    const src = target + suffix
+/** 恢复被移动的原库并重开；无论成功与否都以异常结束（调用方处于失败分支） */
+async function restoreMovedDb(
+  moved: { src: string; dest: string }[],
+  cause: unknown
+): Promise<never> {
+  for (const f of [...moved].reverse()) {
     try {
-      if (fs.existsSync(src)) fs.renameSync(src, `${target}.pre-import-${stamp}${suffix}`)
+      fs.renameSync(f.dest, f.src)
     } catch {
-      /* 单个改名失败不阻塞导入 */
+      /* 单个文件恢复失败：继续尝试其余文件与重开 */
     }
   }
-  fs.copyFileSync(srcFile, target)
-  await openAndMigrate()
-  markPhashDirty()
+  try {
+    await openAndMigrate()
+  } catch (reopenErr) {
+    throw new Error(
+      `导入失败，且恢复原索引库时出错：${cause instanceof Error ? cause.message : String(cause)}；${reopenErr instanceof Error ? reopenErr.message : String(reopenErr)}`,
+      { cause: reopenErr }
+    )
+  }
+  throw new Error(
+    `导入失败，已恢复原索引库：${cause instanceof Error ? cause.message : String(cause)}`
+  )
+}
+
+/**
+ * 用备份文件替换当前索引库：
+ * 只读校验（核心表 / 版本上界 / integrity_check）→ 同卷临时副本 + fsync →
+ * 关闭原库 → 原库改名为 .pre-import → 临时副本 rename 为正式库 → 重开并迁移。
+ * 任一步失败都会回滚并重开原库；照片文件本体不受影响。
+ */
+export async function importBackup(srcFile: string): Promise<void> {
+  const target = path.join(app.getPath('userData'), 'framora.db')
+  if (path.resolve(srcFile).toLowerCase() === path.resolve(target).toLowerCase()) {
+    throw new Error('不能导入当前正在使用的索引库，请先使用“导出索引库备份”生成备份文件。')
+  }
+  // 校验在关闭当前库之前完成：失败时应用继续使用原库
+  const probe = probeBackupFile(srcFile)
+  const stamp = Date.now()
+  const temp = `${target}.importing-${stamp}`
+
+  try {
+    await fs.promises.copyFile(srcFile, temp)
+    const copied = await fs.promises.stat(temp)
+    if (copied.size !== probe.size) throw new Error('备份复制不完整，已取消导入')
+    await fsyncFile(temp)
+  } catch (err) {
+    await fs.promises.rm(temp, { force: true }).catch(() => undefined)
+    throw err
+  }
+
+  closeDb()
+  const moved: { src: string; dest: string }[] = []
+  try {
+    try {
+      for (const suffix of ['', '-wal', '-shm']) {
+        const src = `${target}${suffix}`
+        if (!fs.existsSync(src)) continue
+        const dest = `${target}.pre-import-${stamp}${suffix}`
+        fs.renameSync(src, dest)
+        moved.push({ src, dest })
+      }
+      // 同卷 rename 原子生效：任何时刻正式库要么是旧文件，要么是完整新文件
+      fs.renameSync(temp, target)
+    } catch (err) {
+      await restoreMovedDb(moved, err)
+    }
+
+    try {
+      await openAndMigrate()
+      markPhashDirty()
+    } catch (err) {
+      closeDb()
+      // 清除可能半开的新库（含 WAL/SHM）后恢复旧库
+      for (const suffix of ['', '-wal', '-shm']) {
+        try {
+          fs.rmSync(`${target}${suffix}`, { force: true })
+        } catch {
+          /* 单个文件删除失败：继续尝试回滚 */
+        }
+      }
+      await restoreMovedDb(moved, err)
+    }
+  } finally {
+    try {
+      if (fs.existsSync(temp)) fs.rmSync(temp, { force: true })
+    } catch {
+      /* 临时文件清理失败不影响结果 */
+    }
+  }
 }
 
 /* ---------- settings ---------- */

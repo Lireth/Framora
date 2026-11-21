@@ -120,6 +120,26 @@ let refreshPhotosTimer: ReturnType<typeof setTimeout> | null = null
 let viewStateTimer: ReturnType<typeof setTimeout> | null = null
 let thumbBuffer: { id: number; status: 'ok' | 'fail' }[] = []
 let thumbRaf: number | null = null
+/** 缩略图事件早于照片列表到达时的暂存（导入期间列表尚未刷新）；列表加载时按 id 合并 */
+const pendingThumb = new Map<number, 'ok' | 'fail'>()
+
+function mergePendingThumb(items: PhotoLite[]): PhotoLite[] {
+  if (!pendingThumb.size) return items
+  const now = Date.now()
+  let touched = false
+  const out = items.map((p) => {
+    const st = pendingThumb.get(p.id)
+    if (!st) return p
+    pendingThumb.delete(p.id)
+    touched = true
+    return {
+      ...p,
+      thumb_status: (st === 'ok' ? 1 : 2) as 0 | 1 | 2,
+      thumb_ts: now
+    }
+  })
+  return touched ? out : items
+}
 
 /** 防抖持久化视图状态（scope/tile/sort/dir），启动时恢复 */
 function persistViewState(): void {
@@ -379,17 +399,18 @@ export const useStore = create<AppState>((set, get) => ({
       if (JSON.stringify(buildQuery(get())) !== JSON.stringify(snapshot)) {
         return // 过滤条件已变化，丢弃过期结果
       }
+      const items = mergePendingThumb(r.items)
       // 仅在过滤条件变化时按已加载结果裁剪选择集，后台数据刷新不破坏既有选择
       const selection = queryChanged
         ? (() => {
-            const valid = new Set(r.items.map((p) => p.id))
+            const valid = new Set(items.map((p) => p.id))
             return new Set([...get().selection].filter((id) => valid.has(id)))
           })()
         : get().selection
       set({
-        photos: r.items,
+        photos: items,
         total: r.total,
-        hasMore: r.items.length < r.total,
+        hasMore: items.length < r.total,
         loading: false,
         selection,
         lastQueryKey: queryKey,
@@ -413,7 +434,7 @@ export const useStore = create<AppState>((set, get) => ({
         return
       }
       const loaded = new Set(photos.map((p) => p.id))
-      const fresh = r.items.filter((p) => !loaded.has(p.id))
+      const fresh = mergePendingThumb(r.items).filter((p) => !loaded.has(p.id))
       const merged = [...photos, ...fresh]
       set({
         photos: merged,
@@ -574,10 +595,17 @@ export const useStore = create<AppState>((set, get) => ({
       const map = new Map(updates.map((u) => [u.id, u.status]))
       const now = Date.now()
       const photos = get().photos
+      const known = new Set(photos.map((p) => p.id))
+      // 事件早于列表到达：暂存，待 refreshPhotos / loadMorePhotos 按 id 合并
+      for (const u of updates) {
+        if (!known.has(u.id)) pendingThumb.set(u.id, u.status)
+      }
+      if (pendingThumb.size > 5000) pendingThumb.clear()
       let touched = false
       const next = photos.map((p) => {
         const st = map.get(p.id)
         if (!st) return p
+        pendingThumb.delete(p.id)
         touched = true
         return {
           ...p,

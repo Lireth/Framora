@@ -59,6 +59,7 @@ export function SettingsModal(): React.JSX.Element | null {
   const [rebuildOpen, setRebuildOpen] = useState(false)
   const [clearBackupsOpen, setClearBackupsOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
+  const [importing, setImporting] = useState(false)
   const [upd, setUpd] = useState<UpdateUi>({ kind: 'idle' })
 
   // 更新流程事件 → UI 状态机
@@ -211,21 +212,28 @@ export function SettingsModal(): React.JSX.Element | null {
                       useStore.getState().toast('error', e instanceof Error ? e.message : '导出失败')
                     )
                 }
-                className="flex items-center gap-1.5 rounded-md border border-line px-3 py-1.5 text-[12px] text-ink2 hover:bg-hover hover:text-ink"
+                disabled={importing}
+                className="flex items-center gap-1.5 rounded-md border border-line px-3 py-1.5 text-[12px] text-ink2 hover:bg-hover hover:text-ink disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <Download size={13} /> 导出索引库备份
               </button>
               <button
                 onClick={() => setImportOpen(true)}
-                className="flex items-center gap-1.5 rounded-md border border-line px-3 py-1.5 text-[12px] text-ink2 hover:bg-hover hover:text-ink"
+                disabled={importing}
+                className="flex items-center gap-1.5 rounded-md border border-line px-3 py-1.5 text-[12px] text-ink2 hover:bg-hover hover:text-ink disabled:cursor-not-allowed disabled:opacity-50"
               >
-                <Upload size={13} /> 从备份导入索引库
+                <Upload size={13} /> {importing ? '正在校验并导入…' : '从备份导入索引库'}
               </button>
             </div>
             <p className="mt-1.5 text-[11px] text-ink3">
               备份仅含索引与整理成果（评分 / 标签 / 相册），不含照片文件；换机时配合照片文件一起迁移。
-              导入会替换当前索引库，原库将自动保留为 .pre-import 文件。
+              导入会先校验版本与完整性，再原子替换当前索引库；原库自动保留为 .pre-import 文件。
             </p>
+            {importing && (
+              <p className="mt-1 text-[11px] text-accent">
+                正在校验备份完整性并切换索引库，请勿关闭应用…
+              </p>
+            )}
           </div>
 
           <div>
@@ -329,11 +337,13 @@ export function SettingsModal(): React.JSX.Element | null {
       <ConfirmDialog
         open={importOpen}
         title="从备份导入索引库"
-        message="将用备份文件替换当前索引库（评分 / 标签 / 相册等整理成果）。照片文件不受影响，原库会自动保留。若备份中的照片路径与本机不一致，需重新导入对应文件夹。继续吗？"
+        message="将先校验备份的 schema 版本与完整性，通过后用其替换当前索引库（评分 / 标签 / 相册等整理成果）。照片文件不受影响，原库会自动保留；若备份中的照片路径与本机不一致，需重新导入对应文件夹。继续吗？"
         confirmText="选择备份文件"
         danger
         onClose={() => setImportOpen(false)}
         onConfirm={() => {
+          setImportOpen(false)
+          setImporting(true)
           api
             .importBackup()
             .then((r) => {
@@ -347,6 +357,7 @@ export function SettingsModal(): React.JSX.Element | null {
             .catch((e) =>
               useStore.getState().toast('error', e instanceof Error ? e.message : '导入失败')
             )
+            .finally(() => setImporting(false))
         }}
       />
     </>

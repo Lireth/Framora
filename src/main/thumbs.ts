@@ -24,6 +24,10 @@ export function bumpThumbGeneration(): void {
   generation++
 }
 
+/** 瞬时失败重试（短暂文件锁/杀毒扫描等）：有限次数 + 递增退避；耗尽后进入失败态 */
+const THUMB_RETRY_DELAYS = [1000, 3000]
+const thumbRetries = new Map<number, number>()
+
 export function thumbsDir(): string {
   return path.join(app.getPath('userData'), 'thumbs')
 }
@@ -137,17 +141,30 @@ async function run(id: number): Promise<void> {
       if (preview) fs.promises.rm(previewPath(id), { force: true }).catch(() => undefined)
       return
     }
-    setPhotoDimsAndDate(id, meta.width ?? null, meta.height ?? null, takenAt)
+    // 入库宽高为显示尺寸：EXIF 方向 5-8 存储时旋转 90°，宽高互换
+    // （与缩略图 .rotate() 及查看器的视觉一致，详情面板/导出模板直接可信）
+    const swap = (meta.orientation ?? 1) >= 5 && (meta.orientation ?? 1) <= 8
+    const w = swap ? (meta.height ?? null) : (meta.width ?? null)
+    const h = swap ? (meta.width ?? null) : (meta.height ?? null)
+    setPhotoDimsAndDate(id, w, h, takenAt)
+    thumbRetries.delete(id)
     setThumbStatus(id, 1)
     enqueuePhash(id)
     emit({ id, status: 'ok' })
   } catch (err) {
     logError('thumb', err)
     // 换库后旧任务的失败不再污染新库的状态位
-    if (gen === generation) {
-      setThumbStatus(id, 2)
-      emit({ id, status: 'fail' })
+    if (gen !== generation) return
+    // 瞬时失败退避重试；耗尽后进入失败态（emit fail → 网格显示错误占位）
+    const attempts = thumbRetries.get(id) ?? 0
+    if (attempts < THUMB_RETRY_DELAYS.length) {
+      thumbRetries.set(id, attempts + 1)
+      setTimeout(() => enqueueThumb(id), THUMB_RETRY_DELAYS[attempts])
+      return
     }
+    thumbRetries.delete(id)
+    setThumbStatus(id, 2)
+    emit({ id, status: 'fail' })
   }
 }
 

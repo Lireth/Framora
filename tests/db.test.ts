@@ -4,20 +4,26 @@
  * 每个用例使用独立临时 userData 目录，避免跨用例状态污染。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import Database from 'better-sqlite3'
+import sharp from 'sharp'
 
 let userData: string
 
 vi.mock('electron', () => ({
   // getPath 仅在 initDb 等函数内被调用，届时 userData 已初始化
   app: { getPath: () => userData },
+  BrowserWindow: { getAllWindows: () => [] },
   dialog: { showMessageBoxSync: () => 0 }
 }))
 
 import * as db from '../src/main/db'
+import { bumpThumbGeneration, enqueueThumb } from '../src/main/thumbs'
+// 隔离相似哈希管线：缩略图成功后不再触发真实 phash 读取，
+// 避免 Windows 下 afterEach 清理 userData 时拇指文件仍被句柄占用（EBUSY）
+vi.mock('../src/main/phash', () => ({ enqueuePhash: vi.fn(), bumpPhashGeneration: vi.fn() }))
 
 const IMPORT_TS = Date.parse('2026-01-01T00:00:00Z')
 
@@ -64,7 +70,18 @@ beforeEach(async () => {
 
 afterEach(() => {
   db.closeDb()
-  rmSync(userData, { recursive: true, force: true })
+  try {
+    rmSync(userData, { recursive: true, force: true })
+  } catch {
+    // Windows：刚写出的缩略图可能被杀软/句柄短暂锁定，延迟重试一次，仍失败留给临时目录自清理
+    setTimeout(() => {
+      try {
+        rmSync(userData, { recursive: true, force: true })
+      } catch {
+        /* ignore */
+      }
+    }, 500)
+  }
 })
 
 describe('迁移与设置', () => {
@@ -85,8 +102,7 @@ describe('迁移与设置', () => {
   })
 })
 
-describe('迁移守卫与备份策略', () => {
-  it('版本号错位的历史库重跑迁移幂等（加列/触发器守卫生效）', async () => {
+describe('迁移守卫与备份策略', () => {  it('版本号错位的历史库重跑迁移幂等（加列/触发器守卫生效）', async () => {
     const f = newFolder('C:\\pics')
     const id = seed(f, 'guard-1')
     db.closeDb()
@@ -113,12 +129,115 @@ describe('迁移守卫与备份策略', () => {
   })
 
   it('仅实际发生迁移时备份；日常启动不重复备份', async () => {
-    // beforeEach 的首次 initDb 执行 v1..v8 迁移 → 恰好一份迁移前备份
+    // beforeEach 的首次 initDb 执行 v1..v10 迁移 → 恰好一份迁移前备份
     const dir = path.join(userData, 'db-backups')
     expect(readdirSync(dir)).toHaveLength(1)
     db.closeDb()
     await db.initDb() // 已是最新版本，无迁移
     expect(readdirSync(dir)).toHaveLength(1)
+  })
+})
+
+describe('缩略图续跑（O13）', () => {
+  it('续跑清单包含未完成与历史失败行（status 0/2），排除缺失与已删行', () => {
+    const f = newFolder('C:\\pics')
+    const a = seed(f, 'pend-0')
+    const b = seed(f, 'pend-2')
+    seed(f, 'pend-missing', { missing: true })
+    const d = seed(f, 'pend-del')
+    db.setThumbStatus(b, 2)
+    db.softDeletePhotos([d])
+    expect(db.listPhotoIdsPendingThumb().sort()).toEqual([a, b].sort())
+  })
+})
+
+describe('缩略图管线（O13 真实集成）', () => {
+  /** 写入真实图片文件并入库（行路径指向真实文件，缩略图管线可直接处理） */
+  async function makePhoto(
+    folderId: number,
+    name: string,
+    opts: { orientation?: number } = {}
+  ): Promise<number> {
+    const imgPath = path.join(userData, name)
+    const img = sharp({
+      create: opts.orientation
+        ? { width: 20, height: 40, channels: 3, background: '#7fb3d5' }
+        : { width: 60, height: 40, channels: 3, background: '#7fb3d5' }
+    })
+    if (opts.orientation) img.withMetadata({ orientation: opts.orientation })
+    await img.jpeg().toFile(imgPath)
+    return db.insertPhoto({
+      folder_id: folderId,
+      path: imgPath,
+      name,
+      ext: 'jpg',
+      size: 1000,
+      mtime: 1,
+      imported_at: IMPORT_TS
+    })
+  }
+
+  beforeEach(() => {
+    mkdirSync(path.join(userData, 'thumbs'), { recursive: true })
+  })
+
+  it('入库宽高按 EXIF 方向换算为显示尺寸', async () => {
+    const f = newFolder('C:\\pics')
+    // 像素 20×40 + orientation 6（竖存横显）→ 显示尺寸 40×20
+    const id = await makePhoto(f, 'orient-1.jpg', { orientation: 6 })
+    enqueueThumb(id)
+    await new Promise((r) => setTimeout(r, 250))
+    const row = db.getPhotoRow(id)
+    expect(row?.thumb_status).toBe(1)
+    expect(row?.width).toBe(40)
+    expect(row?.height).toBe(20)
+    expect(existsSync(path.join(userData, 'thumbs', `${id}.webp`))).toBe(true)
+  })
+
+  it('瞬时失败自动退避重试直至成功', async () => {
+    const f = newFolder('C:\\pics')
+    const id = await makePhoto(f, 'retry-1.jpg')
+    const imgPath = path.join(userData, 'retry-1.jpg')
+    // 首次尝试时源文件暂不可见（模拟短暂占用/同步窗口）
+    renameSync(imgPath, `${imgPath}.pending`)
+    enqueueThumb(id)
+    await new Promise((r) => setTimeout(r, 150))
+    expect(db.getPhotoRow(id)?.thumb_status).toBe(0) // 退避中不进入失败态
+    // 文件就位后退避重试成功
+    renameSync(`${imgPath}.pending`, imgPath)
+    await new Promise((r) => setTimeout(r, 1600))
+    const row = db.getPhotoRow(id)
+    expect(row?.thumb_status).toBe(1)
+    expect(existsSync(path.join(userData, 'thumbs', `${id}.webp`))).toBe(true)
+  })
+
+  it('重试次数耗尽后进入失败态', async () => {
+    const f = newFolder('C:\\pics')
+    // ghost 路径：每次尝试都失败（首次 + 两次退避重试 1s/3s）
+    const id = db.insertPhoto({
+      folder_id: f,
+      path: path.join(userData, 'ghost.jpg'),
+      name: 'ghost.jpg',
+      ext: 'jpg',
+      size: 1,
+      mtime: 1,
+      imported_at: IMPORT_TS
+    })
+    enqueueThumb(id)
+    await new Promise((r) => setTimeout(r, 4500))
+    expect(db.getPhotoRow(id)?.thumb_status).toBe(2)
+  })
+
+  it('换库后代次递增：在途缩略图任务写入作废', async () => {
+    const f = newFolder('C:\\pics')
+    const id = await makePhoto(f, 'gen-1.jpg')
+    // run 在 enqueueThumb 内同步启动并捕获代次，随后递增使全部写入作废
+    enqueueThumb(id)
+    bumpThumbGeneration()
+    await new Promise((r) => setTimeout(r, 200))
+    const row = db.getPhotoRow(id)
+    expect(row?.thumb_status).toBe(0)
+    expect(existsSync(path.join(userData, 'thumbs', `${id}.webp`))).toBe(false)
   })
 })
 

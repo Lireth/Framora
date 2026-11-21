@@ -1075,10 +1075,11 @@ export function listPhotoIdsForRebuild(): number[] {
   return rows.map((r) => r.id)
 }
 
-/** 上次退出时未完成缩略图生成的照片（用于启动续跑） */
+/** 上次退出时未完成或曾失败缩略图生成的照片（用于启动续跑；失败行获得自动重试机会） */
 export function listPhotoIdsPendingThumb(): number[] {
-  const rows = stmt('SELECT id FROM photos WHERE thumb_status = 0 AND missing = 0 AND deleted_at IS NULL')
-    .all() as { id: number }[]
+  const rows = stmt(
+    'SELECT id FROM photos WHERE thumb_status IN (0, 2) AND missing = 0 AND deleted_at IS NULL'
+  ).all() as { id: number }[]
   return rows.map((r) => r.id)
 }
 

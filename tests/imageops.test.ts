@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs'
 import fs from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -15,17 +15,11 @@ vi.mock('electron', () => ({
 vi.mock('../src/main/db', () => ({
   getPhotoRow: (id: number) => rows.get(id),
   updatePhotoFileFields: vi.fn(),
-  updatePhotoMeta: vi.fn(),
-  setPhotoDimsAndDate: vi.fn(),
-  setThumbStatus: vi.fn(),
-  listAllPhotoIds: vi.fn(() => []),
-  listPhotoIdsForRebuild: vi.fn(() => [])
+  updatePhotoMeta: vi.fn()
 }))
-vi.mock('../src/main/phash', () => ({ enqueuePhash: vi.fn(), bumpPhashGeneration: vi.fn() }))
 vi.mock('../src/main/thumbs', () => ({
   backupsDir: () => tmpdir(),
   enqueueThumb: vi.fn(),
-  bumpThumbGeneration: vi.fn(),
   previewPath: (id: number) => path.join(previewDir, `${id}.preview.jpg`)
 }))
 vi.mock('../src/main/scanner', () => ({
@@ -42,9 +36,7 @@ import {
   rekeyEditBackups,
   migrateLegacyEditBackups
 } from '../src/main/imageops'
-import { bumpThumbGeneration, enqueueThumb, previewPath } from '../src/main/thumbs'
-import { setThumbStatus } from '../src/main/db'
-import { enqueuePhash } from '../src/main/phash'
+import { previewPath } from '../src/main/thumbs'
 import exifr from 'exifr'
 import type { ExportOptions } from '@shared/types'
 
@@ -426,22 +418,5 @@ describe('编辑备份身份绑定（O3）', () => {
     const items = await listBackups(802)
     expect(items).toHaveLength(1)
     expect(items[0].ts).toBe(1700000000000)
-  })
-})
-
-describe('缩略图库代次（O3）', () => {
-  it('换库后代次递增：在途缩略图任务写入作废', async () => {
-    rows.clear()
-    await makeJpeg('gen-1.jpg')
-    addRow({ id: 900, file: 'gen-1.jpg' })
-    mkdirSync(path.join(tmpdir(), 'thumbs'), { recursive: true })
-    // run 在 enqueueThumb 内同步启动并捕获代次，随后递增使全部写入作废
-    enqueueThumb(900)
-    bumpThumbGeneration()
-    await new Promise((r) => setTimeout(r, 120))
-    expect(existsSync(path.join(tmpdir(), 'thumbs', '900.webp'))).toBe(false)
-    expect(existsSync(previewPath(900))).toBe(false)
-    expect(vi.mocked(setThumbStatus)).not.toHaveBeenCalled()
-    expect(vi.mocked(enqueuePhash)).not.toHaveBeenCalled()
   })
 })

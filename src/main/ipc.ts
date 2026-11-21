@@ -558,19 +558,35 @@ export function registerIpc(): void {
   ipcMain.handle('app:dragOutPhotos', async (_e, ids: number[]) => {
     const win = BrowserWindow.getAllWindows()[0]
     if (!win || !ids.length) return
-    const row = db.getPhotoRow(ids[0])
-    if (!row || !fs.existsSync(row.path)) return
-    // 生成 48px 拖拽图标（优先用缩略图），随后启动原生 OS 拖拽
-    const iconPath = path.join(app.getPath('userData'), 'drag-icon.png')
-    let icon = iconPath
+    // 解析全部有效行：文件已不存在的项跳过（多选拖出允许部分成功）
+    const rows = ids.flatMap((id) => {
+      const row = db.getPhotoRow(id)
+      return row && fs.existsSync(row.path) ? [row] : []
+    })
+    if (!rows.length) return
+    // 生成 48px 拖拽图标（优先用首张缩略图），随后启动原生 OS 拖拽；
+    // 文件名带时间戳避免连续拖拽互相覆盖，超过 1 分钟的旧图标顺手清理
+    const userData = app.getPath('userData')
+    for (const f of fs.readdirSync(userData)) {
+      const m = /^drag-icon-(\d+)\.png$/.exec(f)
+      if (m && Date.now() - Number(m[1]) > 60_000) {
+        fs.rmSync(path.join(userData, f), { force: true })
+      }
+    }
+    const iconPath = path.join(userData, `drag-icon-${Date.now()}.png`)
     try {
-      const src = fs.existsSync(thumbPath(row.id)) ? thumbPath(row.id) : row.path
+      const src = fs.existsSync(thumbPath(rows[0].id)) ? thumbPath(rows[0].id) : rows[0].path
       await sharp(src, { failOn: 'none' }).rotate().resize(48, 48, { fit: 'inside' }).png().toFile(iconPath)
     } catch {
-      icon = path.join(app.getAppPath(), 'build', 'icon.png')
-      if (!fs.existsSync(icon)) return
+      // 打包产物不含 build/ 目录（files 仅打包 out/**），应用图标兜底会缺失；
+      // 合成占位图标，保证拖拽手势不会静默失效
+      await sharp({ create: { width: 48, height: 48, channels: 3, background: '#e0b36a' } })
+        .png()
+        .toFile(iconPath)
+        .catch(() => undefined)
+      if (!fs.existsSync(iconPath)) return
     }
-    win.webContents.startDrag({ file: row.path, files: [row.path], icon })
+    win.webContents.startDrag({ file: rows[0].path, files: rows.map((r) => r.path), icon: iconPath })
   })
 
   /* ---------- update（手动检查，隐私优先） ---------- */

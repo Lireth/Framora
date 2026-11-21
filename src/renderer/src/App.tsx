@@ -24,6 +24,20 @@ export default function App(): React.JSX.Element {
     document.documentElement.classList.toggle('dark', theme === 'dark')
   }, [theme])
 
+  /* 阻止文件拖放的窗口默认行为：Chromium 会把拖入的文件当作导航目标打开。
+     应用自身的原生拖拽（网格/查看器拖出）也可能落在窗口内（如侧边栏之外），必须拦截 */
+  useEffect(() => {
+    const prevent = (e: DragEvent): void => {
+      e.preventDefault()
+    }
+    document.addEventListener('dragover', prevent)
+    document.addEventListener('drop', prevent)
+    return () => {
+      document.removeEventListener('dragover', prevent)
+      document.removeEventListener('drop', prevent)
+    }
+  }, [])
+
   /* 初始化 + 主进程事件订阅 */
   useEffect(() => {
     useStore.getState().init()

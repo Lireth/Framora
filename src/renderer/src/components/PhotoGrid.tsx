@@ -102,11 +102,14 @@ const Tile = React.memo(function Tile({
       style={{ width: tileW, height: tileH }}
       draggable={!p.missing}
       onDragStart={(e) => {
-        // 选中集合整体拖拽，否则只拖当前瓦片
+        // 选中集合整体拖拽，否则只拖当前瓦片；改为原生 OS 拖拽（携带真实文件路径）后
+        // 同一手势既可拖出窗口到资源管理器，也可放回侧边栏相册/标签（经拖拽会话匹配）
         const ids = useStore.getState().selection.has(p.id) ? [...useStore.getState().selection] : [p.id]
-        e.dataTransfer.setData('application/x-framora-photos', JSON.stringify(ids))
-        e.dataTransfer.effectAllowed = 'copyMove'
+        e.preventDefault()
+        useStore.getState().setDraggingPhotos(ids)
+        void api.dragOutPhotos(ids).catch(() => undefined)
       }}
+      onDragEnd={() => useStore.getState().setDraggingPhotos(null)}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       onClick={(e) =>

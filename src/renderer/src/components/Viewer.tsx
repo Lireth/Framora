@@ -717,8 +717,10 @@ export function Viewer(): React.JSX.Element {
           draggable
           onDragStart={(e) => {
             e.preventDefault()
-            // 放大状态下拖拽留给平移，仅在原始视图下把原文件拖出到资源管理器
+            // 放大状态下拖拽留给平移，仅在原始视图下把原文件拖出到资源管理器；
+            // 同时登记拖拽会话，使该拖拽也可放回侧边栏相册/标签
             if (zoom !== 1) return
+            useStore.getState().setDraggingPhotos([photo.id])
             void api.dragOutPhotos([photo.id]).catch(() => undefined)
           }}
           style={{

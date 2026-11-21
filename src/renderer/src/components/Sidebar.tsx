@@ -105,6 +105,15 @@ function NavRow({
           ? (e) => {
               e.preventDefault()
               setDragOver(false)
+              // 应用自身发起的原生拖拽（网格瓦片/查看器）携带的 id 集合；
+              // at 时间戳 10s 内有效，防止拖拽异常中断后的残留会话误配
+              const s = useStore.getState()
+              const dragging = s.draggingPhotos
+              if (dragging && dragging.ids.length && Date.now() - dragging.at < 10000) {
+                s.setDraggingPhotos(null)
+                onDropPhotos?.(dragging.ids)
+                return
+              }
               try {
                 const raw = e.dataTransfer.getData('application/x-framora-photos')
                 const ids = JSON.parse(raw) as unknown

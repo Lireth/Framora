@@ -66,6 +66,8 @@ interface AppState extends Filters {
   exportIds: number[] | null
   confirmDeleteOpen: boolean
   helpOpen: boolean
+  /** 当前原生拖拽携带的照片 id（瓦片/查看器拖出会话），at 为发起时间戳供新鲜度校验 */
+  draggingPhotos: { ids: number[]; at: number } | null
   appVersion: string
 
   init: () => Promise<void>
@@ -99,6 +101,7 @@ interface AppState extends Filters {
   closeExport: () => void
   setConfirmDeleteOpen: (v: boolean) => void
   setHelpOpen: (v: boolean) => void
+  setDraggingPhotos: (ids: number[] | null) => void
   applyThumbEvents: (list: { id: number; status: 'ok' | 'fail' }[]) => void
   patchPhoto: (id: number, patch: Partial<PhotoLite> & { mtime?: number }) => void
 }
@@ -200,6 +203,7 @@ export const useStore = create<AppState>((set, get) => ({
   exportIds: null,
   confirmDeleteOpen: false,
   helpOpen: false,
+  draggingPhotos: null,
   appVersion: '',
 
   init: async () => {
@@ -485,6 +489,9 @@ export const useStore = create<AppState>((set, get) => ({
   setConfirmDeleteOpen: (v) => set({ confirmDeleteOpen: v }),
 
   setHelpOpen: (v) => set({ helpOpen: v }),
+
+  setDraggingPhotos: (ids) =>
+    set({ draggingPhotos: ids && ids.length ? { ids, at: Date.now() } : null }),
 
   applyThumbEvents: (list) => {
     thumbBuffer.push(...list)

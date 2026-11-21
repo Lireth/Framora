@@ -417,7 +417,8 @@ export const SHORTCUT_GROUPS: { title: string; items: ShortcutEntry[] }[] = [
       { keys: '方向键', desc: '移动选中项' },
       { keys: 'Enter / 空格', desc: '打开查看器（单选时）' },
       { keys: 'Delete', desc: '删除所选（确认后移入回收站）' },
-      { keys: 'Esc', desc: '清除选择' }
+      { keys: 'Esc', desc: '清除选择' },
+      { keys: '拖拽', desc: '拖入侧边栏相册/标签，或拖出窗口到资源管理器' }
     ]
   },
   {
@@ -431,6 +432,7 @@ export const SHORTCUT_GROUPS: { title: string; items: ShortcutEntry[] }[] = [
       { keys: 'r / R', desc: '预览向右 / 向左旋转 90°' },
       { keys: '+ / − / 0', desc: '放大 / 缩小 / 复位缩放' },
       { keys: 'F', desc: '切换全屏' },
+      { keys: '拖拽', desc: '拖出窗口到资源管理器，或放回侧边栏相册' },
       { keys: 'Esc / 空格', desc: '关闭查看器' }
     ]
   }
@@ -441,7 +443,7 @@ export function ShortcutHelpModal(): React.JSX.Element {
   const open = useStore((s) => s.helpOpen)
   const setHelpOpen = useStore((s) => s.setHelpOpen)
   return (
-    <Modal open={open} onClose={() => setHelpOpen(false)} title="键盘快捷键" width={460}>
+    <Modal open={open} onClose={() => setHelpOpen(false)} title="快捷键与拖拽" width={460}>
       <div className="space-y-4">
         {SHORTCUT_GROUPS.map((g) => (
           <div key={g.title}>

@@ -242,6 +242,34 @@ const MIGRATIONS: ((db: Database.Database) => void)[] = [
     `)
     db.exec(`UPDATE photos SET search_text = ${SEARCH_TEXT_EXPR};`)
     db.exec(`INSERT INTO photos_fts(photos_fts) VALUES ('rebuild');`)
+  },
+  // v9: 路径大小写归一化 —— Windows 文件系统不区分大小写，仅改大小写的重命名
+  //     不得产生重复行。先合并历史遗留的大小写重复（重复文件夹下照片归入保留行；
+  //     重复照片行保留优先未删除中最早的一张，冗余行的标签/相册引用一并清理），
+  //     再建立大小写不敏感唯一索引；路径等值查询统一 COLLATE NOCASE
+  (db) => {
+    db.exec(`
+      UPDATE photos SET folder_id = (
+        SELECT MIN(k.id) FROM folders k
+        WHERE k.path = (SELECT f.path FROM folders f WHERE f.id = photos.folder_id) COLLATE NOCASE
+      )
+      WHERE folder_id NOT IN (SELECT MIN(id) FROM folders GROUP BY path COLLATE NOCASE);
+      DELETE FROM folders WHERE id NOT IN (SELECT MIN(id) FROM folders GROUP BY path COLLATE NOCASE);
+      DELETE FROM photo_tags WHERE photo_id IN (
+        SELECT id FROM (SELECT id, ROW_NUMBER() OVER (
+          PARTITION BY path COLLATE NOCASE ORDER BY deleted_at IS NOT NULL, id
+        ) AS rn FROM photos) WHERE rn > 1);
+      DELETE FROM album_photos WHERE photo_id IN (
+        SELECT id FROM (SELECT id, ROW_NUMBER() OVER (
+          PARTITION BY path COLLATE NOCASE ORDER BY deleted_at IS NOT NULL, id
+        ) AS rn FROM photos) WHERE rn > 1);
+      DELETE FROM photos WHERE id IN (
+        SELECT id FROM (SELECT id, ROW_NUMBER() OVER (
+          PARTITION BY path COLLATE NOCASE ORDER BY deleted_at IS NOT NULL, id
+        ) AS rn FROM photos) WHERE rn > 1);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_photos_path_ci ON photos(path COLLATE NOCASE);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_folders_path_ci ON folders(path COLLATE NOCASE);
+    `)
   }
 ]
 
@@ -412,7 +440,8 @@ export function listFolders(): FolderInfo[] {
 }
 
 export function getFolderByPath(folderPath: string): FolderInfo | undefined {
-  return stmt('SELECT * FROM folders WHERE path = ?').get(folderPath) as
+  // 路径匹配大小写不敏感（Windows FS 语义），走 idx_folders_path_ci
+  return stmt('SELECT * FROM folders WHERE path = ? COLLATE NOCASE').get(folderPath) as
     | FolderInfo
     | undefined
 }
@@ -475,9 +504,10 @@ export function getPhotoRows(ids: number[]): { id: number; path: string }[] {
 }
 
 export function findPhotoByPath(photoPath: string): PhotoLite | undefined {
-  return stmt(`SELECT ${PHOTO_LITE_COLS} FROM photos WHERE path = ?`).get(photoPath) as
-    | PhotoLite
-    | undefined
+  // 路径匹配大小写不敏感（Windows FS 语义），走 idx_photos_path_ci
+  return stmt(`SELECT ${PHOTO_LITE_COLS} FROM photos WHERE path = ? COLLATE NOCASE`).get(
+    photoPath
+  ) as PhotoLite | undefined
 }
 
 export function listPhotoRowsByFolder(folderId: number): { id: number; path: string; mtime: number; size: number; missing: number }[] {
@@ -501,7 +531,8 @@ export function insertPhoto(p: {
   return Number(info.lastInsertRowid)
 }
 
-/** 批量插入（单事务），返回新照片 id 列表 */
+/** 批量插入（单事务），返回实际新插入的照片 id 列表；
+ *  与监听写入并发时同路径冲突（含大小写变体）按幂等忽略处理，不拖垮整批 */
 export function insertPhotosBatch(
   rows: {
     folder_id: number
@@ -513,17 +544,18 @@ export function insertPhotosBatch(
     imported_at: number
   }[]
 ): number[] {
-  const run = db.transaction(() =>
-    rows.map(
-      (p) =>
-        Number(
-          stmt(
-            `INSERT INTO photos (folder_id, path, name, ext, size, mtime, imported_at)
-             VALUES (@folder_id, @path, @name, @ext, @size, @mtime, @imported_at)`
-          ).run(p).lastInsertRowid
-        )
+  const run = db.transaction((): number[] => {
+    const ids: number[] = []
+    const ins = stmt(
+      `INSERT OR IGNORE INTO photos (folder_id, path, name, ext, size, mtime, imported_at)
+       VALUES (@folder_id, @path, @name, @ext, @size, @mtime, @imported_at)`
     )
-  )
+    for (const r of rows) {
+      const info = ins.run(r)
+      if (info.changes > 0) ids.push(Number(info.lastInsertRowid))
+    }
+    return ids
+  })
   return run()
 }
 
@@ -987,7 +1019,7 @@ export function restorePhotos(ids: number[]): number {
 
 /** 按路径查找已在回收站中的照片（watcher 检测到文件重新出现时自动还原用） */
 export function findDeletedPhotoId(photoPath: string): number | null {
-  const row = stmt('SELECT id FROM photos WHERE path = ? AND deleted_at IS NOT NULL').get(
+  const row = stmt('SELECT id FROM photos WHERE path = ? COLLATE NOCASE AND deleted_at IS NOT NULL').get(
     photoPath
   ) as { id: number } | undefined
   return row?.id ?? null

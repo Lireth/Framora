@@ -11,7 +11,8 @@ import {
   listPhotoRowsByFolder,
   restorePhotos,
   updatePhotoFileFields,
-  updatePhotoFilesBatch
+  updatePhotoFilesBatch,
+  updatePhotoPath
 } from './db'
 import { enqueueThumb } from './thumbs'
 import { logError } from './log'
@@ -191,7 +192,8 @@ export async function importFolder(folderPath: string): Promise<ImportResult> {
       updatePhotoFilesBatch(updates.slice(i, i + BATCH))
     }
     if (restores.length) updatePhotoFilesBatch(restores)
-    added = inserts.length
+    // added 以实际入库为准：批量插入对并发冲突（含大小写变体）幂等忽略，可能少于预插行数
+    added = newIds.length
     updated = updates.length
 
     // 4. 统一入队缩略图生成
@@ -237,7 +239,16 @@ export function trackNewFile(folderId: number, filePath: string): void {
     broadcastWatch({ type: 'add', folderId })
     return
   }
-  if (findPhotoByPath(filePath)) return
+  const existing = findPhotoByPath(filePath)
+  if (existing) {
+    // 大小写不敏感命中：仅改大小写的重命名会走到这里，把索引刷新为磁盘上的
+    // 实际大小写（文件名变化同时经 updatePhotoPath 重算搜索文本）；
+    // 缺失标记的恢复语义不在本函数处理
+    if (existing.path !== filePath) {
+      updatePhotoPath(existing.id, filePath, path.basename(filePath))
+    }
+    return
+  }
   fs.promises
     .stat(filePath)
     .then((s) => {

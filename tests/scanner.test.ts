@@ -7,19 +7,29 @@ import sharp from 'sharp'
 vi.mock('electron', () => ({ BrowserWindow: { getAllWindows: () => [] } }))
 vi.mock('../src/main/db', () => ({
   addFolder: vi.fn(),
+  findDeletedPhotoId: vi.fn(() => null),
   findPhotoByPath: vi.fn(),
   getFolderByPath: vi.fn(),
   insertPhoto: vi.fn(),
   insertPhotosBatch: vi.fn(() => [10]),
   listPhotoRowsByFolder: vi.fn(() => []),
   updatePhotoFileFields: vi.fn(),
-  updatePhotoFilesBatch: vi.fn()
+  updatePhotoFilesBatch: vi.fn(),
+  updatePhotoPath: vi.fn()
 }))
 vi.mock('../src/main/thumbs', () => ({ enqueueThumb: vi.fn() }))
 
 import { IMAGE_EXTS } from '@shared/formats'
-import { cancelScan, importFolder, isImagePath, trackDeletedFile } from '../src/main/scanner'
-import { addFolder, findPhotoByPath, getFolderByPath, insertPhotosBatch, updatePhotoFileFields } from '../src/main/db'
+import { cancelScan, importFolder, isImagePath, trackDeletedFile, trackNewFile } from '../src/main/scanner'
+import {
+  addFolder,
+  findPhotoByPath,
+  getFolderByPath,
+  insertPhoto,
+  insertPhotosBatch,
+  updatePhotoFileFields,
+  updatePhotoPath
+} from '../src/main/db'
 
 describe('isImagePath', () => {
   it('识别全部支持的扩展名（大小写不敏感）', () => {
@@ -51,6 +61,28 @@ describe('trackDeletedFile', () => {
     vi.mocked(findPhotoByPath).mockReturnValue(undefined)
     trackDeletedFile(1, 'C:\\pic\\ghost.jpg')
     expect(updatePhotoFileFields).not.toHaveBeenCalled()
+  })
+})
+
+describe('trackNewFile 路径大小写归一', () => {
+  beforeEach(() => {
+    vi.mocked(findPhotoByPath).mockReset()
+    vi.mocked(updatePhotoPath).mockReset()
+    vi.mocked(insertPhoto).mockReset()
+  })
+
+  it('仅改大小写的重命名：刷新既有行为磁盘实际大小写，不产生新行', () => {
+    vi.mocked(findPhotoByPath).mockReturnValueOnce({ id: 42, path: 'C:\\pic\\A.JPG' } as never)
+    trackNewFile(1, 'C:\\pic\\a.jpg')
+    expect(updatePhotoPath).toHaveBeenCalledWith(42, 'C:\\pic\\a.jpg', 'a.jpg')
+    expect(insertPhoto).not.toHaveBeenCalled()
+  })
+
+  it('路径大小写完全一致时保持原状（不触发无谓重算）', () => {
+    vi.mocked(findPhotoByPath).mockReturnValueOnce({ id: 43, path: 'C:\\pic\\a.jpg' } as never)
+    trackNewFile(1, 'C:\\pic\\a.jpg')
+    expect(updatePhotoPath).not.toHaveBeenCalled()
+    expect(insertPhoto).not.toHaveBeenCalled()
   })
 })
 

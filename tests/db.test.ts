@@ -122,6 +122,81 @@ describe('迁移守卫与备份策略', () => {
   })
 })
 
+describe('路径大小写归一化', () => {
+  it('路径等值匹配大小写不敏感（照片与文件夹）', () => {
+    const f = newFolder('C:\\Pics')
+    const id = seed(f, 'Case1')
+    expect(db.findPhotoByPath('c:\\pics\\CASE1.JPG')?.id).toBe(id)
+    // 变体重注册文件夹返回同一行，不产生重复资料库
+    expect(db.addFolder('c:\\PICS', 'pics')).toBe(f)
+    expect(db.listFolders()).toHaveLength(1)
+  })
+
+  it('批量插入对大小写冲突行幂等忽略，返回实际新增 id', () => {
+    const f = newFolder('C:\\pics')
+    seed(f, 'Dup1')
+    const ids = db.insertPhotosBatch([
+      {
+        folder_id: f,
+        path: 'C:\\pics\\dup1.jpg',
+        name: 'dup1.jpg',
+        ext: 'jpg',
+        size: 1000,
+        mtime: 1,
+        imported_at: IMPORT_TS
+      },
+      {
+        folder_id: f,
+        path: 'C:\\pics\\fresh2.jpg',
+        name: 'fresh2.jpg',
+        ext: 'jpg',
+        size: 1000,
+        mtime: 1,
+        imported_at: IMPORT_TS
+      }
+    ])
+    expect(ids).toHaveLength(1)
+    expect(db.libraryStats().total).toBe(2)
+  })
+
+  it('v9 迁移合并大小写重复行并建立唯一约束', async () => {
+    const f = newFolder('C:\\pics')
+    seed(f, 'Case1')
+    db.closeDb()
+    // 绕过应用层注入大小写变体重复行：先移除 CI 索引模拟 v9 之前的历史库，
+    // 再将 user_version 回退到 8，让 initDb 重跑 v9 迁移
+    const raw = new Database(path.join(userData, 'framora.db'))
+    raw.exec('DROP INDEX IF EXISTS idx_photos_path_ci; DROP INDEX IF EXISTS idx_folders_path_ci;')
+    raw
+      .prepare(
+        `INSERT INTO photos (folder_id, path, name, ext, size, mtime, imported_at, search_text)
+         VALUES (?, ?, ?, 'jpg', 1000, 1, ?, '')`
+      )
+      .run(f, 'C:\\PICS\\case1.jpg', 'case1.jpg', IMPORT_TS)
+    raw.pragma('user_version = 8')
+    raw.close()
+    await db.initDb()
+    // 重复行被合并：保留最早未删除行，检索仍按大小写不敏感命中
+    expect(db.libraryStats().total).toBe(1)
+    expect(db.findPhotoByPath('c:\\pics\\CASE1.JPG')).toBeDefined()
+    // 大小写不敏感唯一索引生效（BINARY 索引拦不住该变体）
+    expect(() =>
+      db.insertPhoto({
+        folder_id: f,
+        path: 'C:\\Pics\\case1.jpg',
+        name: 'case1.jpg',
+        ext: 'jpg',
+        size: 1,
+        mtime: 1,
+        imported_at: IMPORT_TS
+      })
+    ).toThrow()
+    // 回收站按路径还原同样大小写不敏感
+    db.softDeletePhotos([db.findPhotoByPath('C:\\pics\\Case1.jpg')!.id])
+    expect(db.findDeletedPhotoId('C:\\PICS\\CASE1.jpg')).not.toBeNull()
+  })
+})
+
 describe('queryPhotos 分页与总数', () => {
   it('limit/offset 正确切片且 total 为全量', () => {
     const f = newFolder('C:\\pics')

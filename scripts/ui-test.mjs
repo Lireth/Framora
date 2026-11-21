@@ -420,6 +420,101 @@ if (!dropFolder || dropFolder.count !== 2) fail('拖入的文件夹未注册或�
 await shot(page, '12-drop-imported.png')
 console.log('drag-drop import: ok')
 
+/* 19. 智能相册条件编辑（P1-5）：从标签视图保存条件，再经右键编辑名称/条件 */
+await page.evaluate(() => {
+  const row = [...document.querySelectorAll('aside button')].find((b) =>
+    b.textContent.trim().startsWith('测试标签')
+  )
+  row?.click()
+})
+await sleep(900)
+await page.evaluate(() => {
+  const btn = [...document.querySelectorAll('button')].find(
+    (b) => b.title === '保存当前筛选为智能相册'
+  )
+  btn?.click()
+})
+await sleep(500)
+if (!(await page.evaluate(() => document.body.innerText.includes('保存为智能相册')))) {
+  fail('智能相册编辑器未打开')
+}
+await page.type('input[placeholder="例如：2024 旅行精选"]', '高分测试精选', { delay: 20 })
+await page.evaluate(() => {
+  const chip = [...document.querySelectorAll('button')].find(
+    (b) => b.textContent.trim() === '5★ 以上'
+  )
+  chip?.click()
+})
+await page.evaluate(() => {
+  const btns = [...document.querySelectorAll('button')].filter((b) => b.textContent.trim() === '保存')
+  btns[btns.length - 1]?.click()
+})
+await sleep(1400)
+const smart = (await invoke('smartAlbums:list')).find((a) => a.name === '高分测试精选')
+if (!smart) fail('智能相册未保存')
+if (smart.query.minRating !== 5) fail('智能相册未保存星级条件')
+if (!Array.isArray(smart.query.tagIds) || smart.query.tagIds.length !== 1) {
+  fail('智能相册未保存标签作用域')
+}
+const smartTotal = await invoke('photos:query', { scope: 'smart', scopeId: smart.id }).then(
+  (r) => r.total
+)
+if (smartTotal !== 300) fail(`智能相册结果应为 300，实际 ${smartTotal}`)
+
+await page.evaluate(() => {
+  const row = [...document.querySelectorAll('aside button')].find(
+    (b) => b.textContent.trim() === '高分测试精选'
+  )
+  if (!row) return
+  const r = row.getBoundingClientRect()
+  row.dispatchEvent(
+    new MouseEvent('contextmenu', {
+      bubbles: true,
+      cancelable: true,
+      clientX: r.left + 20,
+      clientY: r.top + 10
+    })
+  )
+})
+await sleep(300)
+await page.evaluate(() => {
+  const item = [...document.querySelectorAll('button')].find(
+    (b) => b.textContent.trim() === '编辑条件…'
+  )
+  item?.click()
+})
+await sleep(500)
+if (!(await page.evaluate(() => document.body.innerText.includes('编辑智能相册')))) {
+  fail('编辑智能相册入口未打开')
+}
+await page.evaluate(() => {
+  const input = document.querySelector('input[placeholder="例如：2024 旅行精选"]')
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+  setter.call(input, '高分精选改名')
+  input.dispatchEvent(new Event('input', { bubbles: true }))
+})
+await page.evaluate(() => {
+  const btns = [...document.querySelectorAll('button')].filter((b) => b.textContent.trim() === '保存')
+  btns[btns.length - 1]?.click()
+})
+await sleep(1400)
+const renamed = (await invoke('smartAlbums:list')).find((a) => a.name === '高分精选改名')
+if (!renamed) fail('智能相册改名未保存')
+if (renamed.query.minRating !== 5) fail('编辑后星级条件丢失')
+await page.evaluate(() => {
+  const row = [...document.querySelectorAll('aside button')].find(
+    (b) => b.textContent.trim() === '高分精选改名'
+  )
+  row?.click()
+})
+await sleep(900)
+const renamedTotal = await invoke('photos:query', { scope: 'smart', scopeId: renamed.id }).then(
+  (r) => r.total
+)
+if (renamedTotal !== 300) fail(`编辑后智能相册结果应为 300，实际 ${renamedTotal}`)
+await shot(page, '13-smart-album.png')
+console.log('smart album edit: ok')
+
 writeFileSync(path.join(OUT, 'result.json'), JSON.stringify({ ok: process.exitCode == null }))
 console.log('screenshots at', OUT)
 browser.disconnect()

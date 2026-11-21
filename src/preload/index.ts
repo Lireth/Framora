@@ -77,6 +77,7 @@ const CALLABLE = new Set([
   'smartAlbums:list',
   'smartAlbums:create',
   'smartAlbums:rename',
+  'smartAlbums:update',
   'smartAlbums:delete',
   'window:setTheme',
   'window:minimize',

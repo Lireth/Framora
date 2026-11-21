@@ -507,6 +507,120 @@ describe('智能相册（保存的搜索条件）', () => {
   })
 })
 
+describe('智能相册条件模型（P1-5）', () => {
+  const ids = (r: { items: { id: number }[] }): number[] =>
+    r.items.map((p) => p.id).sort((a, b) => a - b)
+
+  function setup(): {
+    fB: number
+    tagTrip: number
+    tagFamily: number
+    albumBest: number
+    p1: number
+    p2: number
+    p3: number
+    p4: number
+  } {
+    const fA = newFolder('C:\\pics\\a')
+    const fB = newFolder('C:\\pics\\b')
+    const tagTrip = db.createTag('旅行', null).id
+    const tagFamily = db.createTag('家人', null).id
+    const albumBest = db.createAlbum('精选', null)
+    const albumOther = db.createAlbum('另一册', null)
+
+    const p1 = seed(fA, 'p1', { rating: 5, title: '海边' })
+    const p2 = seed(fA, 'p2', { rating: 3 })
+    const p3 = seed(fB, 'p3', { rating: 5 })
+    const p4 = seed(fB, 'p4', { rating: 5 })
+    db.setPhotoTags(p1, [tagTrip, tagFamily])
+    db.setPhotoTags(p2, [tagTrip])
+    db.setPhotoTags(p3, [tagTrip, tagFamily])
+    db.batchAlbum([p1, p2], albumBest)
+    db.batchAlbum([p3], albumOther)
+    return { fB, tagTrip, tagFamily, albumBest, p1, p2, p3, p4 }
+  }
+
+  it('多标签 AND、多相册 OR、文件夹限定、未加标签与星级取交集', () => {
+    const { fB, tagTrip, tagFamily, albumBest, p1, p2, p3, p4 } = setup()
+
+    expect(ids(db.queryPhotos({ scope: 'all', tagIds: [tagTrip, tagFamily], minRating: 5 })))
+      .toEqual([p1, p3].sort((a, b) => a - b))
+
+    expect(ids(db.queryPhotos({ scope: 'all', tagIds: [tagTrip], albumIds: [albumBest] })))
+      .toEqual([p1, p2].sort((a, b) => a - b))
+
+    expect(
+      ids(db.queryPhotos({ scope: 'all', tagIds: [tagTrip, tagFamily], folderIds: [fB] })),
+    ).toEqual([p3])
+
+    expect(ids(db.queryPhotos({ scope: 'all', untagged: true, minRating: 5 }))).toEqual([p4])
+
+    expect(ids(db.queryPhotos({ scope: 'all', keyword: '海边', tagIds: [tagTrip] }))).toEqual([p1])
+  })
+
+  it('已删除标签/相册不再参与条件匹配，恢复后回归', () => {
+    const { tagTrip, tagFamily, albumBest, p1, p2, p3 } = setup()
+    db.deleteTag(tagFamily)
+    expect(ids(db.queryPhotos({ scope: 'all', tagIds: [tagTrip, tagFamily] }))).toEqual([])
+    db.restoreTag(tagFamily)
+    expect(ids(db.queryPhotos({ scope: 'all', tagIds: [tagTrip, tagFamily] }))).toEqual(
+      [p1, p3].sort((a, b) => a - b),
+    )
+
+    db.deleteAlbum(albumBest)
+    expect(ids(db.queryPhotos({ scope: 'all', albumIds: [albumBest] }))).toEqual([])
+    db.restoreAlbum(albumBest)
+    expect(ids(db.queryPhotos({ scope: 'all', albumIds: [albumBest] }))).toEqual(
+      [p1, p2].sort((a, b) => a - b),
+    )
+  })
+
+  it('保存/更新条件可回读，smart scope 使用新条件', () => {
+    const { fB, tagTrip, albumBest, p1, p2, p3, p4 } = setup()
+    const sa = db.createSmartAlbum('动态', {
+      tagIds: [tagTrip],
+      albumIds: [albumBest],
+    })
+    const info = db.listSmartAlbums().find((a) => a.id === sa)
+    expect(info?.query.tagIds).toEqual([tagTrip])
+    expect(ids(db.queryPhotos({ scope: 'smart', scopeId: sa }))).toEqual(
+      [p1, p2].sort((a, b) => a - b),
+    )
+    expect(db.queryPhotoIds({ scope: 'smart', scopeId: sa }).sort((a, b) => a - b)).toEqual(
+      [p1, p2].sort((a, b) => a - b),
+    )
+
+    db.updateSmartAlbum(sa, '改名', { minRating: 5, folderIds: [fB] })
+    const updated = db.listSmartAlbums().find((a) => a.id === sa)
+    expect(updated?.name).toBe('改名')
+    expect(updated?.query.folderIds).toEqual([fB])
+    expect(ids(db.queryPhotos({ scope: 'smart', scopeId: sa }))).toEqual(
+      [p3, p4].sort((a, b) => a - b),
+    )
+  })
+
+  it('保存的排序覆盖工具栏排序；未保存排序时沿用工具栏', () => {
+    const f = newFolder('C:\\pics\\sort')
+    seed(f, 'b')
+    seed(f, 'a')
+    seed(f, 'c')
+
+    const fixed = db.createSmartAlbum('按名', { minRating: 0, sort: 'name', dir: 'asc' })
+    expect(
+      db.queryPhotos({ scope: 'smart', scopeId: fixed, sort: 'size', dir: 'desc' }).items.map(
+        (p) => p.name,
+      ),
+    ).toEqual(['a.jpg', 'b.jpg', 'c.jpg'])
+
+    const loose = db.createSmartAlbum('沿用', { sort: undefined })
+    expect(
+      db.queryPhotos({ scope: 'smart', scopeId: loose, sort: 'name', dir: 'desc' }).items.map(
+        (p) => p.name,
+      ),
+    ).toEqual(['c.jpg', 'b.jpg', 'a.jpg'])
+  })
+})
+
 describe('dupCache 失效语义（第一批修复回归）', () => {
   function dupPair(f: number, lo: number): [number, number] {
     const a = seed(f, `dup-${lo}-a`)

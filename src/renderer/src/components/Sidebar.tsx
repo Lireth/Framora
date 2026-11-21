@@ -21,7 +21,14 @@ import { importFolderAction } from '../lib/actions'
 import { cn, ConfirmDialog, ContextMenu, type MenuItem } from './ui'
 import { useState } from 'react'
 import { formatCount, thumbUrl } from '../lib/format'
-import type { AlbumInfo, FolderInfo, TagInfo } from '@shared/types'
+import { SmartAlbumDialog } from './SmartAlbumDialog'
+import type {
+  AlbumInfo,
+  FolderInfo,
+  SmartAlbumInfo,
+  SmartAlbumQuery,
+  TagInfo,
+} from '@shared/types'
 
 /** 标签/相册颜色预设 */
 const COLOR_PRESETS = [
@@ -52,6 +59,43 @@ function colorMenu(onPick: (color: string | null) => void): MenuItem[] {
   ]
 }
 
+const SORT_LABELS: Record<string, string> = {
+  taken: '拍摄时间',
+  imported: '导入时间',
+  name: '文件名',
+  rating: '星级',
+  size: '文件大小',
+}
+
+/** 智能相册条件摘要（悬停提示用）：名称缺失时回退为 id，便于诊断失效引用 */
+function smartSummary(
+  q: SmartAlbumQuery,
+  tags: TagInfo[],
+  albums: AlbumInfo[],
+  folders: FolderInfo[],
+): string {
+  const parts: string[] = []
+  if (q.keyword) parts.push(`关键词「${q.keyword}」`)
+  if (q.dateFrom || q.dateTo) parts.push(`日期 ${q.dateFrom || '…'} 至 ${q.dateTo || '…'}`)
+  if (q.minRating) parts.push(`${q.minRating}★ 以上`)
+  if (q.tagIds?.length) {
+    parts.push(q.tagIds.map((id) => `#${tags.find((t) => t.id === id)?.name ?? id}`).join(' '))
+  }
+  if (q.albumIds?.length) {
+    parts.push(
+      `相册：${q.albumIds.map((id) => albums.find((a) => a.id === id)?.name ?? id).join(' / ')}`,
+    )
+  }
+  if (q.folderIds?.length) {
+    parts.push(
+      `文件夹：${q.folderIds.map((id) => folders.find((f) => f.id === id)?.name ?? id).join(' / ')}`,
+    )
+  }
+  if (q.untagged) parts.push('未加标签')
+  if (q.sort) parts.push(`${SORT_LABELS[q.sort] ?? q.sort}${q.dir === 'asc' ? '升序' : '降序'}`)
+  return parts.length ? parts.join(' · ') : '未设置条件'
+}
+
 function SectionHeader({
   title,
   action,
@@ -72,6 +116,7 @@ function SectionHeader({
 function NavRow({
   icon,
   label,
+  title,
   count,
   active,
   onClick,
@@ -81,6 +126,8 @@ function NavRow({
 }: {
   icon: React.ReactNode
   label: string
+  /** 悬停提示（智能相册用于展示保存的条件摘要） */
+  title?: string
   count?: number
   active: boolean
   onClick: () => void
@@ -92,6 +139,7 @@ function NavRow({
   const [dragOver, setDragOver] = useState(false)
   return (
     <button
+      title={title}
       onClick={onClick}
       onContextMenu={onContextMenu}
       onDragOver={
@@ -161,6 +209,11 @@ export function Sidebar(): React.JSX.Element {
     name: string
   } | null>(null)
   const [renameValue, setRenameValue] = useState('')
+  /** 智能相册编辑器：album=null 表示用 draft（当前筛选）新建 */
+  const [smartEdit, setSmartEdit] = useState<{
+    album: SmartAlbumInfo | null
+    draft: SmartAlbumQuery
+  } | null>(null)
   /** 待确认的破坏性元数据删除（文件夹/标签/相册） */
   const [confirmRemove, setConfirmRemove] = useState<{
     kind: 'folder' | 'tag' | 'album'
@@ -292,13 +345,18 @@ export function Sidebar(): React.JSX.Element {
 
   const smartAlbums = useStore((s) => s.smartAlbums)
 
-  const smartMenu = (id: number, name: string): MenuItem[] => [
+  const smartMenu = (sa: SmartAlbumInfo): MenuItem[] => [
+    {
+      label: '编辑条件…',
+      icon: <SlidersHorizontal size={13} />,
+      onClick: () => setSmartEdit({ album: sa, draft: sa.query }),
+    },
     {
       label: '重命名',
       icon: <Pencil size={13} />,
       onClick: () => {
-        setRename({ kind: 'smart', id, name })
-        setRenameValue(name)
+        setRename({ kind: 'smart', id: sa.id, name: sa.name })
+        setRenameValue(sa.name)
       },
     },
     { separator: true },
@@ -307,9 +365,9 @@ export function Sidebar(): React.JSX.Element {
       icon: <Trash2 size={13} />,
       danger: true,
       onClick: async () => {
-        await api.deleteSmartAlbum(id).catch(() => undefined)
+        await api.deleteSmartAlbum(sa.id).catch(() => undefined)
         useStore.getState().toast('success', '智能相册已删除')
-        if (useStore.getState().scope === 'smart' && useStore.getState().scopeId === id) {
+        if (useStore.getState().scope === 'smart' && useStore.getState().scopeId === sa.id) {
           useStore.getState().setScope('all')
         }
         useStore.getState().refreshLibrary()
@@ -318,15 +376,35 @@ export function Sidebar(): React.JSX.Element {
     },
   ]
 
-  /** 把工具栏当前的筛选条件保存为智能相册 */
+  /** 把当前视图的筛选条件（含标签/相册/文件夹作用域）带进智能相册编辑器 */
   const saveCurrentFiltersAsSmart = (): void => {
     const s = useStore.getState()
-    if (!s.keyword && !s.dateFrom && !s.dateTo && !s.minRating) {
-      s.toast('info', '请先在工具栏设置筛选条件（关键词 / 日期 / 星级）')
+    const q: SmartAlbumQuery = {
+      keyword: s.keyword.trim() || undefined,
+      dateFrom: s.dateFrom || undefined,
+      dateTo: s.dateTo || undefined,
+      minRating: s.minRating || undefined,
+      sort: s.sort,
+      dir: s.dir,
+    }
+    if (s.scope === 'tag' && s.scopeId) q.tagIds = [s.scopeId]
+    else if (s.scope === 'album' && s.scopeId) q.albumIds = [s.scopeId]
+    else if (s.scope === 'folder' && s.scopeId) q.folderIds = [s.scopeId]
+    else if (s.scope === 'untagged') q.untagged = true
+    const hasFilter =
+      !!q.keyword ||
+      !!q.dateFrom ||
+      !!q.dateTo ||
+      !!q.minRating ||
+      !!q.tagIds?.length ||
+      !!q.albumIds?.length ||
+      !!q.folderIds?.length ||
+      !!q.untagged
+    if (!hasFilter) {
+      s.toast('info', '请先设置筛选条件，或进入标签 / 相册 / 文件夹视图再保存')
       return
     }
-    setRename({ kind: 'smart', id: -1, name: '' })
-    setRenameValue('')
+    setSmartEdit({ album: null, draft: q })
   }
 
   return (
@@ -482,11 +560,12 @@ export function Sidebar(): React.JSX.Element {
           key={sa.id}
           icon={<SlidersHorizontal size={15} />}
           label={sa.name}
+          title={smartSummary(sa.query, tags, albums, folders)}
           active={scope === 'smart' && scopeId === sa.id}
           onClick={() => setScope('smart', sa.id)}
           onContextMenu={(e) => {
             e.preventDefault()
-            setMenu({ x: e.clientX, y: e.clientY, items: smartMenu(sa.id, sa.name) })
+            setMenu({ x: e.clientX, y: e.clientY, items: smartMenu(sa) })
           }}
         />
       ))}
@@ -584,18 +663,8 @@ export function Sidebar(): React.JSX.Element {
                 if (rename.id === -1) await api.createAlbum(name, null)
                 else await api.renameAlbum(rename.id, name)
               } else if (rename.kind === 'smart') {
-                if (rename.id === -1) {
-                  const s = useStore.getState()
-                  await api.createSmartAlbum(name, {
-                    keyword: s.keyword || undefined,
-                    dateFrom: s.dateFrom || undefined,
-                    dateTo: s.dateTo || undefined,
-                    minRating: s.minRating || undefined,
-                  })
-                  useStore.getState().toast('success', '智能相册已保存')
-                } else {
-                  await api.renameSmartAlbum(rename.id, name)
-                }
+                // 新建走 SmartAlbumDialog；此处仅处理重命名
+                if (rename.id !== -1) await api.renameSmartAlbum(rename.id, name)
               } else {
                 if (rename.id === -1) await api.createTag(name, null)
                 else await api.renameTag(rename.id, name)
@@ -607,6 +676,13 @@ export function Sidebar(): React.JSX.Element {
           }}
         />
       )}
+
+      <SmartAlbumDialog
+        open={!!smartEdit}
+        album={smartEdit?.album ?? null}
+        draft={smartEdit?.draft ?? null}
+        onClose={() => setSmartEdit(null)}
+      />
     </aside>
   )
 }

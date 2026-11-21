@@ -1196,6 +1196,39 @@ function buildPhotoFilter(q: PhotoQuery): { whereSql: string; params: Record<str
       params.kw = `%${kw}%`
     }
   }
+  // 智能相册的附加条件：多标签 AND（每个标签一个 EXISTS），多相册/文件夹 OR
+  if (q.tagIds?.length) {
+    q.tagIds.forEach((id, i) => {
+      where.push(
+        `EXISTS (SELECT 1 FROM photo_tags pt JOIN tags t ON t.id = pt.tag_id
+          WHERE pt.photo_id = p.id AND pt.tag_id = @tag${i} AND t.deleted_at IS NULL)`,
+      )
+      params[`tag${i}`] = id
+    })
+  }
+  if (q.albumIds?.length) {
+    const marks = q.albumIds.map((id, i) => {
+      params[`album${i}`] = id
+      return `@album${i}`
+    })
+    where.push(
+      `EXISTS (SELECT 1 FROM album_photos ap JOIN albums a ON a.id = ap.album_id
+        WHERE ap.photo_id = p.id AND ap.album_id IN (${marks.join(', ')}) AND a.deleted_at IS NULL)`,
+    )
+  }
+  if (q.folderIds?.length) {
+    const marks = q.folderIds.map((id, i) => {
+      params[`folder${i}`] = id
+      return `@folder${i}`
+    })
+    where.push(`p.folder_id IN (${marks.join(', ')})`)
+  }
+  if (q.untagged) {
+    where.push(
+      `NOT EXISTS (SELECT 1 FROM photo_tags pt JOIN tags t ON t.id = pt.tag_id
+        WHERE pt.photo_id = p.id AND t.deleted_at IS NULL)`,
+    )
+  }
   if (q.dateFrom) {
     where.push('COALESCE(p.taken_at, p.imported_at) >= @dateFrom')
     params.dateFrom = new Date(`${q.dateFrom}T00:00:00`).getTime()
@@ -1236,7 +1269,8 @@ export function queryPhotos(q: PhotoQuery): QueryResult {
   // 检索前冲刷脏队列：批量打标签/入相册后立刻搜索也能命中最新文本
   if (resolved.keyword?.trim()) flushSearchTextForRead()
   const { whereSql, params } = buildPhotoFilter(resolved)
-  const orderSql = buildOrderSql(q)
+  // 排序也取解析后的条件：智能相册可固定自己的排序方式
+  const orderSql = buildOrderSql(resolved)
   const limit = Math.min(q.limit ?? 50000, 100000)
   const offset = Math.max(0, Math.floor(q.offset ?? 0))
   // 窗口函数在单次查询中同时返回总数，避免额外的 COUNT 扫描
@@ -1278,6 +1312,12 @@ function resolveSmartFilters(q: PhotoQuery): PhotoQuery {
         dateFrom: saved.dateFrom,
         dateTo: saved.dateTo,
         minRating: saved.minRating,
+        tagIds: saved.tagIds,
+        albumIds: saved.albumIds,
+        folderIds: saved.folderIds,
+        untagged: saved.untagged,
+        sort: saved.sort ?? q.sort,
+        dir: saved.dir ?? q.dir,
       }
     }
   }
@@ -1287,21 +1327,25 @@ function resolveSmartFilters(q: PhotoQuery): PhotoQuery {
 /* ---------- smart albums ---------- */
 
 export function listSmartAlbums(): SmartAlbumInfo[] {
-  return stmt(
-    'SELECT id, name, color, created_at FROM smart_albums ORDER BY created_at ASC',
-  ).all() as SmartAlbumInfo[]
+  const rows = stmt(
+    'SELECT id, name, color, created_at, query FROM smart_albums ORDER BY created_at ASC',
+  ).all() as (Omit<SmartAlbumInfo, 'query'> & { query: string })[]
+  return rows.map((r) => ({ ...r, query: parseSmartQuery(r.query) }))
+}
+
+function parseSmartQuery(raw: string): SmartAlbumQuery {
+  try {
+    const q = JSON.parse(raw) as SmartAlbumQuery
+    return typeof q === 'object' && q !== null ? q : {}
+  } catch {
+    return {}
+  }
 }
 
 export function getSmartAlbumQuery(id: number): SmartAlbumQuery | undefined {
   const row = stmt('SELECT query FROM smart_albums WHERE id = ?').get(id) as
     { query: string } | undefined
-  if (!row) return undefined
-  try {
-    const q = JSON.parse(row.query) as SmartAlbumQuery
-    return typeof q === 'object' && q !== null ? q : undefined
-  } catch {
-    return undefined
-  }
+  return row ? parseSmartQuery(row.query) : undefined
 }
 
 export function createSmartAlbum(name: string, query: SmartAlbumQuery): number {
@@ -1313,6 +1357,15 @@ export function createSmartAlbum(name: string, query: SmartAlbumQuery): number {
 
 export function renameSmartAlbum(id: number, name: string): void {
   stmt('UPDATE smart_albums SET name = ? WHERE id = ?').run(name, id)
+}
+
+/** 编辑智能相册：名称与条件一并更新，下次查询按新条件解析 */
+export function updateSmartAlbum(id: number, name: string, query: SmartAlbumQuery): void {
+  stmt('UPDATE smart_albums SET name = ?, query = ? WHERE id = ?').run(
+    name,
+    JSON.stringify(query),
+    id,
+  )
 }
 
 export function deleteSmartAlbum(id: number): void {

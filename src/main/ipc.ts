@@ -689,6 +689,11 @@ export function registerIpc(): void {
   ipcMain.handle('smartAlbums:rename', (_e, id: number, name: string) =>
     db.renameSmartAlbum(id, name.trim()),
   )
+  ipcMain.handle(
+    'smartAlbums:update',
+    (_e, id: number, name: string, query: SmartAlbumQuery) =>
+      db.updateSmartAlbum(id, name.trim(), query),
+  )
   ipcMain.handle('smartAlbums:delete', (_e, id: number) => db.deleteSmartAlbum(id))
 
   /* ---------- window / theme ---------- */

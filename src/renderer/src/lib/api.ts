@@ -135,6 +135,8 @@ export const api = {
     call('smartAlbums:create', name, query),
   renameSmartAlbum: (id: number, name: string): Promise<void> =>
     call('smartAlbums:rename', id, name),
+  updateSmartAlbum: (id: number, name: string, query: SmartAlbumQuery): Promise<void> =>
+    call('smartAlbums:update', id, name, query),
   deleteSmartAlbum: (id: number): Promise<void> => call('smartAlbums:delete', id),
 
   setTheme: (mode: ThemeMode): Promise<void> => call('window:setTheme', mode),

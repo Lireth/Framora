@@ -73,6 +73,14 @@ export interface PhotoQuery {
   dateFrom?: string
   dateTo?: string
   minRating?: number
+  /** 必须同时包含这些标签（AND；已删除标签自动忽略） */
+  tagIds?: number[]
+  /** 属于其中任一相册（OR） */
+  albumIds?: number[]
+  /** 限定在这些文件夹内（OR） */
+  folderIds?: number[]
+  /** 仅返回未加标签的照片 */
+  untagged?: boolean
   sort?: 'taken' | 'imported' | 'name' | 'rating' | 'size'
   dir?: 'asc' | 'desc'
   limit?: number
@@ -122,6 +130,8 @@ export interface SmartAlbumInfo {
   name: string
   color: string | null
   created_at: number
+  /** 保存的筛选条件（编辑与条件摘要用） */
+  query: SmartAlbumQuery
 }
 
 /** 智能相册保存的筛选条件 */
@@ -130,6 +140,17 @@ export interface SmartAlbumQuery {
   dateFrom?: string
   dateTo?: string
   minRating?: number
+  /** 必须同时包含这些标签（AND） */
+  tagIds?: number[]
+  /** 属于其中任一相册（OR） */
+  albumIds?: number[]
+  /** 限定在这些文件夹内（OR） */
+  folderIds?: number[]
+  /** 仅未加标签 */
+  untagged?: boolean
+  /** 保存时固定排序；缺省则沿用工具栏当前排序 */
+  sort?: 'taken' | 'imported' | 'name' | 'rating' | 'size'
+  dir?: 'asc' | 'desc'
 }
 
 export interface MetaPair {

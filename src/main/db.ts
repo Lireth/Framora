@@ -203,6 +203,25 @@ const MIGRATIONS: ((db: Database.Database) => void)[] = [
       ALTER TABLE photos ADD COLUMN deleted_at INTEGER;
       CREATE INDEX IF NOT EXISTS idx_photos_trash ON photos(deleted_at) WHERE deleted_at IS NOT NULL;
     `)
+  },
+  // v8: 相册名参与检索 —— search_text 纳入相册名；成员变更与相册重命名经触发器联动重算
+  //     （FTS 外部内容表的 photos_fts_update 触发器随后自动同步索引），
+  //     存量库重算全部搜索文本并重建索引
+  (db) => {
+    db.exec(`
+      CREATE TRIGGER album_photos_search_insert AFTER INSERT ON album_photos BEGIN
+        UPDATE photos SET search_text = ${SEARCH_TEXT_EXPR} WHERE id = new.photo_id;
+      END;
+      CREATE TRIGGER album_photos_search_delete AFTER DELETE ON album_photos BEGIN
+        UPDATE photos SET search_text = ${SEARCH_TEXT_EXPR} WHERE id = old.photo_id;
+      END;
+      CREATE TRIGGER albums_search_rename AFTER UPDATE OF name ON albums BEGIN
+        UPDATE photos SET search_text = ${SEARCH_TEXT_EXPR}
+          WHERE id IN (SELECT photo_id FROM album_photos WHERE album_id = new.id);
+      END;
+    `)
+    db.exec(`UPDATE photos SET search_text = ${SEARCH_TEXT_EXPR};`)
+    db.exec(`INSERT INTO photos_fts(photos_fts) VALUES ('rebuild');`)
   }
 ]
 
@@ -491,9 +510,11 @@ export function updatePhotoFilesBatch(
 const SEARCH_TEXT_EXPR = `
   name || ' ' || IFNULL(title, '') || ' ' || IFNULL(description, '') || ' ' ||
   IFNULL((SELECT group_concat(t.name, ' ') FROM photo_tags pt JOIN tags t ON t.id = pt.tag_id
-          WHERE pt.photo_id = photos.id), '')`
+          WHERE pt.photo_id = photos.id), '') || ' ' ||
+  IFNULL((SELECT group_concat(a.name, ' ') FROM album_photos ap JOIN albums a ON a.id = ap.album_id
+          WHERE ap.photo_id = photos.id), '')`
 
-/** 重算照片的搜索文本（名称+标题+描述+标签名），FTS 触发器随之同步索引 */
+/** 重算照片的搜索文本（名称+标题+描述+标签名+相册名），FTS 触发器随之同步索引 */
 export function recomputeSearchText(ids: number[]): void {
   if (!ids.length) return
   const run = db.transaction(() => {
@@ -658,13 +679,9 @@ function buildPhotoFilter(q: PhotoQuery): { whereSql: string; params: Record<str
       where.push('p.id IN (SELECT rowid FROM photos_fts WHERE photos_fts MATCH @fts)')
       params.fts = `"${kw.replace(/"/g, '""')}"`
     } else {
-      const like = `%${kw}%`
-      where.push(
-        `(p.name LIKE @kw OR IFNULL(p.title,'') LIKE @kw OR IFNULL(p.description,'') LIKE @kw
-          OR EXISTS (SELECT 1 FROM photo_tags pt JOIN tags t ON t.id = pt.tag_id
-                     WHERE pt.photo_id = p.id AND t.name LIKE @kw))`
-      )
-      params.kw = like
+      // 短词走 LIKE：直接对冗余列匹配（与 FTS 同一文本源，覆盖名称/标题/描述/标签/相册）
+      where.push('p.search_text LIKE @kw')
+      params.kw = `%${kw}%`
     }
   }
   if (q.dateFrom) {

@@ -128,6 +128,29 @@ describe('关键词检索（FTS + LIKE 双路径）', () => {
     expect(db.queryPhotos({ scope: 'all', keyword: '旅行记' }).total).toBe(1)
   })
 
+  it('相册名参与检索（成员变更与重命名经触发器联动）', () => {
+    const f = newFolder('C:\\pics')
+    const a = seed(f, 'IMG_1')
+    seed(f, 'IMG_2')
+    const album = db.createAlbum('海边旅拍', null)
+    db.batchAlbum([a], album)
+    // ≥3 字走 FTS：命中相册名，且未入相册的照片不误中
+    expect(db.queryPhotos({ scope: 'all', keyword: '海边旅拍' }).total).toBe(1)
+    // <3 字走 LIKE：对 search_text 冗余列匹配，同样命中相册名
+    expect(db.queryPhotos({ scope: 'all', keyword: '旅拍' }).total).toBe(1)
+    // 相册重命名后旧名不再命中、新名命中（albums_search_rename 触发器）
+    db.renameAlbum(album, '雪山旅拍')
+    expect(db.queryPhotos({ scope: 'all', keyword: '海边旅拍' }).total).toBe(0)
+    expect(db.queryPhotos({ scope: 'all', keyword: '雪山旅拍' }).total).toBe(1)
+    // 移出相册后不再命中（album_photos_search_delete 触发器）
+    db.removeFromAlbum(a, album)
+    expect(db.queryPhotos({ scope: 'all', keyword: '雪山旅拍' }).total).toBe(0)
+    // 智能相册的关键词条件共享同一过滤管线
+    const sa = db.createSmartAlbum('雪山智能', { keyword: '雪山旅拍' })
+    db.batchAlbum([a], album)
+    expect(db.queryPhotos({ scope: 'smart', scopeId: sa }).items[0].id).toBe(a)
+  })
+
   it('FTS 短语引号被转义，不触发语法错误', () => {
     const f = newFolder('C:\\pics')
     seed(f, 'IMG_1', { title: 'normal' })

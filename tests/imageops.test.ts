@@ -16,17 +16,24 @@ vi.mock('../src/main/db', () => ({
   updatePhotoFileFields: vi.fn(),
   updatePhotoMeta: vi.fn()
 }))
-vi.mock('../src/main/thumbs', () => ({ backupsDir: () => tmpdir(), enqueueThumb: vi.fn() }))
+vi.mock('../src/main/thumbs', () => ({
+  backupsDir: () => tmpdir(),
+  enqueueThumb: vi.fn(),
+  previewPath: (id: number) => path.join(previewDir, `${id}.preview.jpg`)
+}))
 vi.mock('../src/main/scanner', () => ({
   broadcastExport: (e: { done: number; total: number }) => broadcasts.push(e)
 }))
 
 import { exportPhotos, pickName, saveEdits, cancelExport } from '../src/main/imageops'
+import { previewPath } from '../src/main/thumbs'
 import exifr from 'exifr'
 import type { ExportOptions } from '@shared/types'
 
 let srcDir: string
 let destDir: string
+/** RAW 嵌入预览缓存目录（mock 的 previewPath 落点，随测试运行重建） */
+let previewDir: string
 
 interface RowInit {
   id: number
@@ -69,9 +76,34 @@ async function makeExifJpeg(name: string): Promise<void> {
     .toFile(path.join(srcDir, name))
 }
 
+/**
+ * 仿真 RAW 源：真实 CR2/NEF 为 TIFF 容器（libvips 无 libraw 时解码失败），内嵌全尺寸 JPEG 预览。
+ * 用 TIFF 魔数 + 填充字节 + 嵌入 JPEG 与之同构：sharp 直接解码必然失败，
+ * rawPreview 的字节级扫描可提取到嵌入段。嵌入图使用高斯噪声保证压缩后体积
+ * 超过 rawPreview 的 MIN_PREVIEW_BYTES（1024）有效段门槛（纯色图会被判定为伪标记丢弃）。
+ */
+async function makeFakeRaw(name: string, w = 600, h = 400): Promise<string> {
+  const jpeg = await sharp({
+    create: {
+      width: w,
+      height: h,
+      channels: 3,
+      background: '#000000',
+      noise: { type: 'gaussian', mean: 128, sigma: 30 }
+    }
+  })
+    .jpeg()
+    .toBuffer()
+  const p = path.join(srcDir, name)
+  // 填充字节 0x41/0x42 不构成 JPEG 标记（FFD8/FFD9），不会干扰嵌入段扫描
+  writeFileSync(p, Buffer.concat([Buffer.alloc(2048, 0x41), jpeg, Buffer.alloc(1024, 0x42)]))
+  return p
+}
+
 beforeAll(async () => {
   srcDir = mkdtempSync(path.join(tmpdir(), 'framora-exp-src-'))
   destDir = mkdtempSync(path.join(tmpdir(), 'framora-exp-dest-'))
+  previewDir = mkdtempSync(path.join(tmpdir(), 'framora-preview-'))
   await makeJpeg('a.jpg')
 })
 
@@ -176,6 +208,81 @@ describe('exportPhotos（两阶段并行导出回归）', () => {
     cancelExport()
     const r = await pending
     expect(r).toEqual({ exported: 0, failed: 0, cancelled: true })
+  })
+})
+
+describe('RAW 导出（嵌入预览转码）', () => {
+  /** 前置校验：仿真 RAW 与真实 CR2/NEF 同构 —— sharp 直接解码必然失败（libvips 无 libraw） */
+  it('仿真 RAW 无法被 sharp 直接解码（模拟保真）', async () => {
+    await makeFakeRaw('raw-check.cr2')
+    await expect(sharp(path.join(srcDir, 'raw-check.cr2')).metadata()).rejects.toThrow()
+  })
+
+  it('RAW 导出 JPEG：经嵌入预览转码成功并回填预览缓存', async () => {
+    rows.clear()
+    broadcasts.length = 0
+    await makeFakeRaw('r1.cr2')
+    addRow({ id: 600, file: 'r1.cr2', ext: 'cr2' })
+    const dest = mkdtempSync(path.join(tmpdir(), 'framora-exp-raw1-'))
+    const r = await exportPhotos([600], dest, { format: 'jpeg' } as ExportOptions)
+    expect(r).toEqual({ exported: 1, failed: 0 })
+    const meta = await sharp(path.join(dest, 'r1.jpg')).metadata()
+    expect(meta.format).toBe('jpeg')
+    expect(meta.width).toBe(600)
+    // 按需提取的预览同步回填缓存，后续查看器/再导出可直接命中
+    expect((await sharp(previewPath(600)).metadata()).format).toBe('jpeg')
+  })
+
+  it('RAW 原格式无变换 = 逐字节复制 RAW 本体', async () => {
+    rows.clear()
+    const rawPath = await makeFakeRaw('r2.nef')
+    addRow({ id: 601, file: 'r2.nef', ext: 'nef' })
+    const dest = mkdtempSync(path.join(tmpdir(), 'framora-exp-raw2-'))
+    const r = await exportPhotos([601], dest, { format: 'original' } as ExportOptions)
+    expect(r).toEqual({ exported: 1, failed: 0 })
+    expect(readFileSync(path.join(dest, 'r2.nef'))).toEqual(readFileSync(rawPath))
+  })
+
+  it('RAW 原格式 + 尺寸限制：走预览转码且输出 jpg 扩展名（非 RAW 扩展名）', async () => {
+    rows.clear()
+    await makeFakeRaw('r3.arw')
+    addRow({ id: 602, file: 'r3.arw', ext: 'arw' })
+    const dest = mkdtempSync(path.join(tmpdir(), 'framora-exp-raw3-'))
+    const r = await exportPhotos([602], dest, {
+      format: 'original',
+      maxSide: 100
+    } as ExportOptions)
+    expect(r).toEqual({ exported: 1, failed: 0 })
+    const meta = await sharp(path.join(dest, 'r3.jpg')).metadata()
+    expect(Math.max(meta.width ?? 0, meta.height ?? 0)).toBeLessThanOrEqual(100)
+  })
+
+  it('RAW 预览缓存命中：优先使用已缓存预览而非重新提取', async () => {
+    rows.clear()
+    await makeFakeRaw('r4.cr2') // 嵌入 600×400
+    // 缓存预置 80×60：导出尺寸以此为准即可证明命中缓存
+    await sharp({ create: { width: 80, height: 60, channels: 3, background: '#e74c3c' } })
+      .jpeg()
+      .toFile(previewPath(603))
+    addRow({ id: 603, file: 'r4.cr2', ext: 'cr2' })
+    const dest = mkdtempSync(path.join(tmpdir(), 'framora-exp-raw4-'))
+    const r = await exportPhotos([603], dest, { format: 'jpeg' } as ExportOptions)
+    expect(r).toEqual({ exported: 1, failed: 0 })
+    const meta = await sharp(path.join(dest, 'r4.jpg')).metadata()
+    expect(meta.width).toBe(80)
+    expect(meta.height).toBe(60)
+  })
+
+  it('RAW 无嵌入预览时计入 failed 且仍广播进度', async () => {
+    rows.clear()
+    broadcasts.length = 0
+    // 纯填充字节：既无嵌入 JPEG 段也无 EXIF 缩略图
+    writeFileSync(path.join(srcDir, 'r5.cr2'), Buffer.alloc(4096, 0x41))
+    addRow({ id: 604, file: 'r5.cr2', ext: 'cr2' })
+    const dest = mkdtempSync(path.join(tmpdir(), 'framora-exp-raw5-'))
+    const r = await exportPhotos([604], dest, { format: 'jpeg' } as ExportOptions)
+    expect(r).toEqual({ exported: 0, failed: 1 })
+    expect(broadcasts).toEqual([{ done: 1, total: 1 }])
   })
 })
 

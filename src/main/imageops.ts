@@ -2,7 +2,8 @@ import path from 'node:path'
 import fs from 'node:fs'
 import sharp from 'sharp'
 import { getPhotoRow, updatePhotoFileFields, updatePhotoMeta } from './db'
-import { backupsDir, enqueueThumb } from './thumbs'
+import { backupsDir, enqueueThumb, previewPath } from './thumbs'
+import { extractRawPreview } from './rawPreview'
 import { broadcastExport } from './scanner'
 import { logError } from './log'
 import { isRawExt } from '@shared/formats'
@@ -32,6 +33,8 @@ export function applyTemplate(
 
 interface ExportTask {
   src: string
+  /** RAW 转码源对应的原始 RAW 文件路径：预览缓存缺失时按需提取嵌入预览 */
+  rawSource?: string
   outPath: string
   /** 原格式无变换：直接复制，跳过编码管线 */
   noTransform: boolean
@@ -85,17 +88,22 @@ export async function exportPhotos(
       const base = applyTemplate(opts.nameTemplate ?? '{name}', row, i)
       const noTransform =
         fmt === 'original' && !opts.maxSide && !row.orientation && !row.flip_h && !row.flip_v
+      // sharp 预编译 libvips 不含 libraw，无法解码 RAW 本体；需转码时改用嵌入预览（JPEG）作为源
+      const rawPreviewSrc = !noTransform && isRawExt(row.ext)
       let ext = row.ext
       if (!noTransform) {
         if (fmt === 'jpeg') ext = 'jpg'
         else if (fmt === 'webp') ext = 'webp'
         else if (fmt === 'avif') ext = 'avif'
         else if (fmt === 'png') ext = 'png'
+        // original 保持 RAW 扩展名会产出 JPEG 内容配 RAW 扩展名的文件，统一落为 jpg
+        else if (rawPreviewSrc) ext = 'jpg'
       }
       const { outPath } = pickName(destDir, base, ext, used)
       used.add(outPath.toLowerCase())
       tasks.push({
-        src: row.path,
+        src: rawPreviewSrc ? previewPath(row.id) : row.path,
+        rawSource: rawPreviewSrc ? row.path : undefined,
         outPath,
         noTransform,
         orientation: row.orientation,
@@ -117,9 +125,18 @@ export async function exportPhotos(
           if (t.noTransform) {
             await fs.promises.copyFile(t.src, t.outPath)
           } else {
+            // RAW 转码源为嵌入预览；缓存缺失（旧索引导入/清理过 thumbs）时按需提取：
+            // 直接以缓冲转码不依赖落盘，回填缓存尽力而为（供查看器后续复用）
+            let srcInput: string | Buffer = t.src
+            if (t.rawSource && !fs.existsSync(t.src)) {
+              const preview = await extractRawPreview(t.rawSource)
+              if (!preview || !preview.length) throw new Error('RAW 文件无可提取的嵌入预览')
+              srcInput = preview
+              await fs.promises.writeFile(t.src, preview).catch(() => undefined)
+            }
             // withMetadata 保留 EXIF/ICC 等元数据；像素已按 EXIF/应用方向烘焙为正立，
             // Orientation 必须显式重写为 1，避免其他软件按旧方向二次旋转
-            let pipe = sharp(t.src, { failOn: 'none' }).rotate().withMetadata({ orientation: 1 })
+            let pipe = sharp(srcInput, { failOn: 'none' }).rotate().withMetadata({ orientation: 1 })
             if (t.orientation) pipe = pipe.rotate(t.orientation)
             if (t.flipH) pipe = pipe.flop()
             if (t.flipV) pipe = pipe.flip()

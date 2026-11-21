@@ -2,13 +2,23 @@ import path from 'node:path'
 import fs from 'node:fs'
 import { BrowserWindow, Menu, app, dialog, nativeTheme, net, protocol, screen } from 'electron'
 import { pathToFileURL } from 'node:url'
-import { initDb, closeDb, getSetting, setSetting, listFolders, listFolderPaths, listPhotoIdsPendingThumb } from './db'
+import {
+  initDb,
+  closeDb,
+  getSetting,
+  setSetting,
+  listFolders,
+  listFolderPaths,
+  listPhotoIdsPendingThumb,
+} from './db'
 import { themeBackground } from './theme'
 import type { ThemeMode } from '@shared/types'
 import { registerIpc } from './ipc'
 import { isImagePath } from './scanner'
 import { startWatcher, stopAllWatchers } from './watcher'
 import { thumbsDir, enqueueThumb } from './thumbs'
+import { ensurePreview, isPreviewFileName, previewIdFromName } from './previewService'
+import { enforceStorageBudgets } from './storage'
 import { initLogging, logError } from './log'
 import { resumePhash } from './phash'
 
@@ -186,7 +196,14 @@ function registerProtocols(): void {
       const name = u.hostname === 't' ? u.pathname.slice(1) : u.hostname + u.pathname
       if (!/^\d+(\.webp|\.preview\.jpg)$/.test(name)) return new Response(null, { status: 400 })
       const p = path.join(thumbsDir(), name)
+      // 预览缓存按预算淘汰后，首次查看时即时从 RAW 嵌入段重建
+      if (!fs.existsSync(p) && isPreviewFileName(name)) {
+        const id = previewIdFromName(name)
+        if (id !== null) await ensurePreview(id, p)
+      }
       if (!fs.existsSync(p)) return new Response(null, { status: 404 })
+      // mtime 近似 LRU：用户实际看过的预览在预算淘汰时优先保留
+      fs.promises.utimes(p, new Date(), new Date()).catch(() => undefined)
       return await fileResponse(p)
     } catch {
       return new Response(null, { status: 400 })
@@ -235,6 +252,14 @@ if (!gotLock) {
     }
     // 为缺少感知哈希的存量照片补算（相似检测）
     resumePhash()
+    // 启动 5 秒后按预算收敛一次缓存，避免与缩略图续跑争抢磁盘；失败不阻塞应用
+    setTimeout(() => {
+      try {
+        enforceStorageBudgets()
+      } catch (err) {
+        logError('storage', err)
+      }
+    }, 5000)
   })
 
   app.on('window-all-closed', () => {

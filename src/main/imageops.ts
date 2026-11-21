@@ -2,13 +2,14 @@ import path from 'node:path'
 import fs from 'node:fs'
 import { createHash } from 'node:crypto'
 import sharp from 'sharp'
-import { getPhotoRow, updatePhotoFileFields, updatePhotoMeta } from './db'
+import { getPhotoRow, getSetting, updatePhotoFileFields, updatePhotoMeta } from './db'
 import { backupsDir, enqueueThumb, previewPath } from './thumbs'
 import { extractRawPreview } from './rawPreview'
 import { broadcastExport } from './scanner'
 import { logError } from './log'
+import { assertFreeSpace } from './disk'
 import { isRawExt } from '@shared/formats'
-import type { BackupInfo, ExportOptions, ExportResult } from '@shared/types'
+import type { BackupInfo, CleanupResult, ExportOptions, ExportResult } from '@shared/types'
 
 function clamp(v: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, v))
@@ -245,6 +246,135 @@ export async function clearAllBackups(): Promise<number> {
   return removed
 }
 
+/* ---------- 编辑备份预算 ---------- */
+
+const BACKUP_BUDGET_KEY = 'backupBudgetMb'
+/** 默认 4 GB：足够容纳大量单次编辑备份；超限时优先删除较早的历史版本 */
+export const DEFAULT_BACKUP_BUDGET_MB = 4096
+
+const BACKUP_NAME_RE = /^(\d+)-([0-9a-f]{8})-(\d+)\.([a-z0-9]+)$/i
+const LEGACY_BACKUP_NAME_RE = /^(\d+)-(\d+)\.([a-z0-9]+)$/i
+
+interface BackupEntry {
+  name: string
+  path: string
+  size: number
+  mtimeMs: number
+  /** 同一照片 + 路径哈希为一组：组内至少保留最新一份 */
+  group: string
+  ts: number
+}
+
+function readBackupEntries(): BackupEntry[] {
+  const dir = backupsDir()
+  let names: string[]
+  try {
+    names = fs.readdirSync(dir)
+  } catch {
+    return []
+  }
+  const out: BackupEntry[] = []
+  for (const name of names) {
+    const p = path.join(dir, name)
+    try {
+      const st = fs.statSync(p)
+      if (!st.isFile()) continue
+      const modern = BACKUP_NAME_RE.exec(name)
+      const legacy = LEGACY_BACKUP_NAME_RE.exec(name)
+      const id = modern ? Number(modern[1]) : legacy ? Number(legacy[1]) : null
+      const hash = modern ? modern[2].toLowerCase() : 'legacy'
+      const ts = modern ? Number(modern[3]) : legacy ? Number(legacy[2]) : st.mtimeMs
+      out.push({
+        name,
+        path: p,
+        size: st.size,
+        mtimeMs: st.mtimeMs,
+        group: id === null ? name : `${id}-${hash}`,
+        ts,
+      })
+    } catch {
+      /* 单文件不可读忽略 */
+    }
+  }
+  return out
+}
+
+/** 编辑备份占用（含历史版本） */
+export function backupStats(): { bytes: number; files: number } {
+  const entries = readBackupEntries()
+  return {
+    bytes: entries.reduce((n, e) => n + e.size, 0),
+    files: entries.length,
+  }
+}
+
+export function backupBudgetMb(): number {
+  try {
+    const raw = getSetting(BACKUP_BUDGET_KEY)
+    if (raw === null || raw === '') return DEFAULT_BACKUP_BUDGET_MB
+    const n = Number(raw)
+    return Number.isFinite(n) && n >= 0 ? Math.floor(n) : DEFAULT_BACKUP_BUDGET_MB
+  } catch {
+    return DEFAULT_BACKUP_BUDGET_MB
+  }
+}
+
+/**
+ * 按总预算清理备份历史：每组（照片 + 路径哈希）保留最新一份，
+ * 其余按时间从旧到新删除，直到低于预算。预算为 0 时不限制。
+ * 即使"最新一份"总量已超预算，也不会继续删除——保证每张编辑过的照片仍可撤销。
+ */
+export function enforceBackupBudget(): CleanupResult {
+  const budget = backupBudgetMb() * 1024 * 1024
+  if (!budget) return { deleted: 0, bytes: 0 }
+  const entries = readBackupEntries()
+  if (!entries.length) return { deleted: 0, bytes: 0 }
+  let total = entries.reduce((n, e) => n + e.size, 0)
+  if (total <= budget) return { deleted: 0, bytes: 0 }
+
+  const newest = new Map<string, BackupEntry>()
+  for (const e of entries) {
+    const cur = newest.get(e.group)
+    if (!cur || e.ts > cur.ts || (e.ts === cur.ts && e.mtimeMs > cur.mtimeMs)) {
+      newest.set(e.group, e)
+    }
+  }
+  const keep = new Set([...newest.values()].map((e) => e.name))
+  const candidates = entries
+    .filter((e) => !keep.has(e.name))
+    .sort((a, b) => a.ts - b.ts || a.mtimeMs - b.mtimeMs || a.name.localeCompare(b.name))
+
+  let deleted = 0
+  let bytes = 0
+  for (const e of candidates) {
+    if (total <= budget) break
+    try {
+      fs.rmSync(e.path, { force: true })
+      total -= e.size
+      bytes += e.size
+      deleted++
+    } catch {
+      /* 被占用或已删除：跳过 */
+    }
+  }
+  return { deleted, bytes }
+}
+
+let backupBudgetTimer: ReturnType<typeof setTimeout> | null = null
+
+/** 保存编辑后延迟检查总预算：合并连续写回，避免每次保存都全目录扫描 */
+export function scheduleBackupBudgetCheck(delay = 3000): void {
+  if (backupBudgetTimer) clearTimeout(backupBudgetTimer)
+  backupBudgetTimer = setTimeout(() => {
+    backupBudgetTimer = null
+    try {
+      enforceBackupBudget()
+    } catch (err) {
+      logError('backupBudget', err)
+    }
+  }, delay)
+}
+
 /** 路径变更（批量重命名）后把该照片的编辑备份重绑定到新路径哈希，历史保持可恢复（O3） */
 export function rekeyEditBackups(id: number, newPath: string): void {
   const hash = pathHash(newPath)
@@ -348,6 +478,14 @@ export async function saveEdits(
   if (isRawExt(row.ext)) throw new Error('RAW 文件不支持写回编辑，请使用导出转换格式')
   const backupName = backupNameOf(id, row.path, Date.now(), path.extname(row.path))
   const backupPath = path.join(backupsDir(), backupName)
+  // 备份副本与临时编码输出分别落在两个目录，需各自探测余量，避免写到一半 ENOSPC
+  const srcStat = await fs.promises.stat(row.path)
+  await assertFreeSpace(backupsDir(), srcStat.size + 64 * 1024 * 1024, '保存编辑备份')
+  await assertFreeSpace(
+    path.dirname(row.path),
+    srcStat.size + 64 * 1024 * 1024,
+    '写入编辑结果'
+  )
   await fs.promises.copyFile(row.path, backupPath)
   void prunePhotoBackups(id)
 
@@ -407,6 +545,7 @@ export async function saveEdits(
   updatePhotoFileFields(id, { size: st.size, mtime: Math.round(st.mtimeMs) })
   updatePhotoMeta(id, { orientation: 0, flip_h: 0, flip_v: 0 })
   enqueueThumb(id)
+  scheduleBackupBudgetCheck()
 }
 
 export async function listBackups(id: number): Promise<BackupInfo[]> {
@@ -457,6 +596,12 @@ export async function revertEdits(id: number, backupName?: string): Promise<void
   }
   // tmp 写入后经 atomicReplace 原子落位（直接覆盖已存在文件在 Windows 上可能因目标被占用报 UNKNOWN）
   const tmp = `${row.path}.framora-revert-tmp${path.extname(row.path)}`
+  const backupStat = await fs.promises.stat(latest)
+  await assertFreeSpace(
+    path.dirname(row.path),
+    backupStat.size * 2 + 32 * 1024 * 1024,
+    '恢复编辑'
+  )
   try {
     await fs.promises.copyFile(latest, tmp)
     await atomicReplace(row.path, tmp)

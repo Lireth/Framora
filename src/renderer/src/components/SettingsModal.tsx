@@ -15,6 +15,7 @@ import {
 import { useStore } from '../store'
 import { api, onEvent } from '../lib/api'
 import { cn, ConfirmDialog, Modal, PrimaryButton } from './ui'
+import { StoragePanel } from './StoragePanel'
 import type { UpdateState } from '@shared/types'
 
 /** 更新流程 UI 状态机（主进程事件流驱动） */
@@ -102,7 +103,13 @@ export function SettingsModal(): React.JSX.Element | null {
 
   return (
     <>
-      <Modal open={open} onClose={() => setOpen(false)} title="设置" width={460}>
+      <Modal
+        open={open}
+        onClose={() => setOpen(false)}
+        title="设置"
+        width={500}
+        footer={<PrimaryButton onClick={() => setOpen(false)}>完成</PrimaryButton>}
+      >
         <div className="space-y-5 text-[13px]">
           <div>
             <p className="mb-2 font-medium">外观</p>
@@ -130,6 +137,8 @@ export function SettingsModal(): React.JSX.Element | null {
               ))}
             </div>
           </div>
+
+          <StoragePanel open={open} />
 
           <div>
             <p className="mb-2 font-medium">缓存维护</p>
@@ -285,9 +294,6 @@ export function SettingsModal(): React.JSX.Element | null {
               </div>
             </div>
           </div>
-        </div>
-        <div className="mt-5 flex justify-end">
-          <PrimaryButton onClick={() => setOpen(false)}>完成</PrimaryButton>
         </div>
       </Modal>
 

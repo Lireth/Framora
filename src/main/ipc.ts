@@ -40,6 +40,12 @@ import {
 import { logsDir, logError } from './log'
 import { listFolders } from './db'
 import {
+  cleanAllPreviews,
+  enforceStorageBudgets,
+  setStorageLimits,
+  storageStats,
+} from './storage'
+import {
   cancelUpdateDownload,
   checkForUpdates,
   downloadUpdate,
@@ -54,6 +60,7 @@ import type {
   MetaPair,
   PhotoQuery,
   SmartAlbumQuery,
+  StorageLimits,
   ThemeMode,
   UndoEntry,
   UndoKind,
@@ -133,6 +140,12 @@ export function registerIpc(): void {
   ipcMain.handle('settings:set', (_e, key: string, value: string) => {
     db.setSetting(key, value)
   })
+
+  /* ---------- storage（占用统计与预算清理） ---------- */
+  ipcMain.handle('storage:stats', () => storageStats())
+  ipcMain.handle('storage:setLimits', (_e, limits: StorageLimits) => setStorageLimits(limits))
+  ipcMain.handle('storage:cleanPreviews', () => cleanAllPreviews())
+  ipcMain.handle('storage:enforce', () => enforceStorageBudgets())
 
   /* ---------- dialogs ---------- */
   ipcMain.handle('dialog:pickFolder', async () => {

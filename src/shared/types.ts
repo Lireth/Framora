@@ -278,3 +278,45 @@ export const UNDO_KIND_LABEL: Record<UndoKind, string> = {
   tag: '标签',
   album: '相册',
 }
+
+/* ---------- 存储占用与预算 ---------- */
+
+export interface StorageBucket {
+  bytes: number
+  files: number
+}
+
+export interface StorageLimits {
+  /** RAW 预览缓存上限（MB）；0 = 不限制 */
+  previewBudgetMb: number
+  /** 编辑备份总上限（MB）；0 = 不限制；超限时每张照片至少保留最近一份 */
+  backupBudgetMb: number
+}
+
+export interface StorageStats {
+  /** 索引库主文件 + WAL/SHM */
+  db: StorageBucket
+  /** 512px WebP 缩略图 */
+  thumbs: StorageBucket
+  /** RAW 全尺寸嵌入预览缓存 */
+  previews: StorageBucket
+  /** 编辑备份 */
+  backups: StorageBucket
+  logs: StorageBucket
+  /** 迁移/导入前的索引库备份 */
+  dbBackups: StorageBucket
+  totalBytes: number
+  /** 数据目录所在卷的可用字节；无法获取时为 null */
+  freeBytes: number | null
+  limits: StorageLimits
+}
+
+export interface CleanupResult {
+  deleted: number
+  bytes: number
+}
+
+export interface StorageEnforceResult {
+  previews: CleanupResult
+  backups: CleanupResult
+}

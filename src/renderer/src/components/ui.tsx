@@ -129,15 +129,19 @@ export function Modal({
       }}
     >
       <div
-        className="rounded-win border border-line bg-raised shadow-2xl animate-popIn"
+        className="flex max-h-[calc(100vh-80px)] flex-col rounded-win border border-line bg-raised shadow-2xl animate-popIn"
         style={{ width }}
       >
-        <div className="flex items-center justify-between border-b border-line px-4 py-3">
+        <div className="flex shrink-0 items-center justify-between border-b border-line px-4 py-3">
           <h2 className="text-sm font-semibold">{title}</h2>
           <IconButton icon={<X size={15} />} label="关闭" onClick={onClose} />
         </div>
-        <div className="px-4 py-4">{children}</div>
-        {footer && <div className="flex justify-end gap-2 border-t border-line px-4 py-3">{footer}</div>}
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">{children}</div>
+        {footer && (
+          <div className="flex shrink-0 justify-end gap-2 border-t border-line px-4 py-3">
+            {footer}
+          </div>
+        )}
       </div>
     </div>
   )

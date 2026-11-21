@@ -314,6 +314,46 @@ if (statsRestored.total !== statsBefore.total) {
 if (await invoke('undo:peek')) fail('撤销栈应在全部撤销后清空')
 console.log('folder undo: ok')
 
+/* 16. 存储与维护面板：统计可用、预算清理确认与预算写入 */
+const storageBefore = await invoke('storage:stats')
+if (!storageBefore || typeof storageBefore.totalBytes !== 'number' || storageBefore.totalBytes <= 0) {
+  fail('存储统计不可用')
+}
+await page.evaluate(() => {
+  const btn = [...document.querySelectorAll('button')].find((b) => b.title === '设置')
+  btn?.click()
+})
+await sleep(700)
+const settingsText = await page.evaluate(() => document.body.innerText)
+if (!settingsText.includes('存储与维护') || !settingsText.includes('RAW 预览缓存上限')) {
+  fail('设置页未渲染存储面板')
+}
+await page.evaluate(() => {
+  const btn = [...document.querySelectorAll('button')].find(
+    (b) => b.textContent.trim() === '按预算清理'
+  )
+  btn?.click()
+})
+await sleep(300)
+const enforceConfirm = await page.evaluate(() => document.body.innerText)
+if (!enforceConfirm.includes('每张照片至少保留最近一份备份')) {
+  fail('按预算清理缺少确认说明')
+}
+await page.evaluate(() => {
+  const btn = [...document.querySelectorAll('button')].find(
+    (b) => b.textContent.trim() === '开始清理'
+  )
+  btn?.click()
+})
+await sleep(700)
+const savedLimits = await invoke('storage:setLimits', { previewBudgetMb: 0, backupBudgetMb: 0 })
+if (savedLimits.previewBudgetMb !== 0 || savedLimits.backupBudgetMb !== 0) {
+  fail('存储预算未生效')
+}
+await invoke('storage:setLimits', storageBefore.limits)
+await page.keyboard.press('Escape')
+console.log('storage panel: ok')
+
 writeFileSync(path.join(OUT, 'result.json'), JSON.stringify({ ok: process.exitCode == null }))
 console.log('screenshots at', OUT)
 browser.disconnect()

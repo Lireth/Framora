@@ -1,4 +1,5 @@
-import { useEffect } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { ImagePlus } from 'lucide-react'
 import { useStore, scheduleLibraryRefresh, schedulePhotosRefresh, pushThumbEvent } from './store'
 import { onEvent } from './lib/api'
 import type { ScanEvent, ThumbEvent, WatchEvent } from '@shared/types'
@@ -13,28 +14,93 @@ import { Viewer } from './components/Viewer'
 import { SettingsModal } from './components/SettingsModal'
 import { ExportDialog } from './components/ExportDialog'
 import { ShortcutHelpModal, Toasts } from './components/ui'
-import { deleteViewerPhotoAction, rateViewerPhotoAction } from './lib/actions'
+import {
+  deleteViewerPhotoAction,
+  importDroppedPaths,
+  rateViewerPhotoAction,
+} from './lib/actions'
 
 export default function App(): React.JSX.Element {
   const resolvedTheme = useStore((s) => s.resolvedTheme)
   const detailOpen = useStore((s) => s.detailOpen)
   const viewerOpen = useStore((s) => s.viewerOpen)
+  const [dropActive, setDropActive] = useState(false)
+  /** dragenter/dragleave 成对计数：仅在真正离开窗口时收起投放层 */
+  const dropDepth = useRef(0)
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', resolvedTheme === 'dark')
   }, [resolvedTheme])
 
-  /* 阻止文件拖放的窗口默认行为：Chromium 会把拖入的文件当作导航目标打开。
-     应用自身的原生拖拽（网格/查看器拖出）也可能落在窗口内（如侧边栏之外），必须拦截 */
+  /* 资源管理器拖放导入：拖入文件/文件夹时显示投放提示，松开后复用导入管线；
+     应用自身的照片拖拽（原生 OS 拖拽）不触发导入。始终 preventDefault，避免
+     Chromium 把拖入文件当作导航目标打开。 */
   useEffect(() => {
-    const prevent = (e: DragEvent): void => {
-      e.preventDefault()
+    const isPhotoDrag = (): boolean => {
+      const d = useStore.getState().draggingPhotos
+      return !!d && Date.now() - d.at < 10000
     }
-    document.addEventListener('dragover', prevent)
-    document.addEventListener('drop', prevent)
+    const hasFiles = (e: DragEvent): boolean =>
+      Array.from(e.dataTransfer?.types ?? []).some((t) => t.toLowerCase() === 'files')
+
+    const onDragEnter = (e: DragEvent): void => {
+      if (!hasFiles(e) || isPhotoDrag()) return
+      e.preventDefault()
+      dropDepth.current++
+      setDropActive(true)
+    }
+    const onDragOver = (e: DragEvent): void => {
+      e.preventDefault()
+      if (e.dataTransfer) {
+        e.dataTransfer.dropEffect = hasFiles(e) && !isPhotoDrag() ? 'copy' : 'none'
+      }
+    }
+    const onDragLeave = (): void => {
+      dropDepth.current = Math.max(0, dropDepth.current - 1)
+      if (dropDepth.current === 0) setDropActive(false)
+    }
+    const onDrop = (e: DragEvent): void => {
+      e.preventDefault()
+      dropDepth.current = 0
+      setDropActive(false)
+      const s = useStore.getState()
+      const files = Array.from(e.dataTransfer?.files ?? [])
+      if (!files.length) return
+      const paths: string[] = []
+      for (const f of files) {
+        const p = window.framora.getPathForFile(f)
+        if (p) paths.push(p)
+      }
+      if (!paths.length) {
+        s.toast('error', '无法读取拖入内容的路径')
+        return
+      }
+
+      const dragging = s.draggingPhotos
+      if (dragging && Date.now() - dragging.at < 10000) {
+        const known = new Set(dragging.paths.map((p) => p.toLowerCase()))
+        const dropped = paths.map((p) => p.toLowerCase())
+        // 路径未覆盖全部拖拽项（跨页选择）时无法精确比对，按应用内拖拽处理
+        const incomplete = dragging.paths.length < dragging.ids.length
+        // 应用内照片拖拽回落到窗口空白处：拖入路径全部属于本次拖拽，不当作文件导入
+        if (incomplete || !known.size || dropped.every((p) => known.has(p))) {
+          s.setDraggingPhotos(null)
+          return
+        }
+      }
+      s.setDraggingPhotos(null)
+      void importDroppedPaths(paths)
+    }
+
+    document.addEventListener('dragenter', onDragEnter)
+    document.addEventListener('dragover', onDragOver)
+    document.addEventListener('dragleave', onDragLeave)
+    document.addEventListener('drop', onDrop)
     return () => {
-      document.removeEventListener('dragover', prevent)
-      document.removeEventListener('drop', prevent)
+      document.removeEventListener('dragenter', onDragEnter)
+      document.removeEventListener('dragover', onDragOver)
+      document.removeEventListener('dragleave', onDragLeave)
+      document.removeEventListener('drop', onDrop)
     }
   }, [])
 
@@ -179,6 +245,17 @@ export default function App(): React.JSX.Element {
       <SettingsModal />
       <ExportDialog />
       <ShortcutHelpModal />
+      {dropActive && (
+        <div className="pointer-events-none fixed inset-0 z-[60] flex items-center justify-center bg-black/45 backdrop-blur-[2px] animate-fadeIn">
+          <div className="flex flex-col items-center gap-3 rounded-2xl border-2 border-dashed border-[var(--c-accent)] bg-raised px-12 py-9 text-center shadow-2xl">
+            <ImagePlus size={34} className="text-accent" />
+            <p className="text-sm font-medium">松开以导入照片</p>
+            <p className="max-w-[320px] text-[12px] leading-5 text-ink3">
+              文件夹将加入资料库并自动扫描；照片自动分流
+            </p>
+          </div>
+        </div>
+      )}
       <Toasts />
     </div>
   )

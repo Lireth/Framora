@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
 // 首帧主题：preload 先于页面脚本与首次绘制运行，且不受 CSP 限制。
 // 读取 localStorage 镜像（store 每次切换主题时写入）提前应用 .dark 类，
@@ -119,6 +119,17 @@ const api = {
     ipcRenderer.on(channel, listener)
     return () => {
       ipcRenderer.removeListener(channel, listener)
+    }
+  },
+  /**
+   * 拖入文件/文件夹的绝对路径。Electron 32 起 File.path 已移除，必须经 webUtils 解析；
+   * 无路径（浏览器合成 File、受保护虚拟文件）时返回空串，由调用方跳过。
+   */
+  getPathForFile: (file: File): string => {
+    try {
+      return webUtils.getPathForFile(file)
+    } catch {
+      return ''
     }
   },
 }

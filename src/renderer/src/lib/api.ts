@@ -32,7 +32,12 @@ type On = (channel: string, cb: (data: unknown) => void) => () => void
 
 declare global {
   interface Window {
-    framora: { invoke: Invoke; on: On }
+    framora: {
+      invoke: Invoke
+      on: On
+      /** 拖入文件/文件夹的绝对路径；无法解析时为空串 */
+      getPathForFile: (file: File) => string
+    }
   }
 }
 

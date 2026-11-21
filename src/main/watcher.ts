@@ -18,7 +18,7 @@ export async function startWatcher(folderId: number, root: string): Promise<void
   const isImage = isImagePath
   watcher
     .on('add', (p) => {
-      if (isImage(p)) trackNewFile(folderId, p)
+      if (isImage(p)) void trackNewFile(folderId, p)
     })
     .on('change', (p) => {
       if (isImage(p)) trackChangedFile(folderId, p)

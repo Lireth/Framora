@@ -108,6 +108,8 @@ function NavRow({
         droppable
           ? (e) => {
               e.preventDefault()
+              // 阻止冒泡到窗口级拖放导入：照片入相册/标签不是文件导入
+              e.stopPropagation()
               setDragOver(false)
               // 应用自身发起的原生拖拽（网格瓦片/查看器）携带的 id 集合；
               // at 时间戳 10s 内有效，防止拖拽异常中断后的残留会话误配

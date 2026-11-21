@@ -70,8 +70,8 @@ interface AppState extends Filters {
   exportIds: number[] | null
   confirmDeleteOpen: boolean
   helpOpen: boolean
-  /** 当前原生拖拽携带的照片 id（瓦片/查看器拖出会话），at 为发起时间戳供新鲜度校验 */
-  draggingPhotos: { ids: number[]; at: number } | null
+  /** 当前原生拖拽携带的照片 id 与路径（瓦片/查看器拖出会话），at 为发起时间戳供新鲜度校验 */
+  draggingPhotos: { ids: number[]; paths: string[]; at: number } | null
   appVersion: string
   /** 最近一次可撤销的元数据删除（文件夹/标签/相册） */
   undoEntry: UndoEntry | null
@@ -109,7 +109,7 @@ interface AppState extends Filters {
   closeExport: () => void
   setConfirmDeleteOpen: (v: boolean) => void
   setHelpOpen: (v: boolean) => void
-  setDraggingPhotos: (ids: number[] | null) => void
+  setDraggingPhotos: (ids: number[] | null, paths?: string[]) => void
   applyThumbEvents: (list: { id: number; status: 'ok' | 'fail' }[]) => void
   patchPhoto: (id: number, patch: Partial<PhotoLite> & { mtime?: number }) => void
 }
@@ -119,7 +119,7 @@ let refreshLibraryTimer: ReturnType<typeof setTimeout> | null = null
 let refreshPhotosTimer: ReturnType<typeof setTimeout> | null = null
 let viewStateTimer: ReturnType<typeof setTimeout> | null = null
 let thumbBuffer: { id: number; status: 'ok' | 'fail' }[] = []
-let thumbRaf: number | null = null
+let thumbTimer: ReturnType<typeof setTimeout> | null = null
 /** 缩略图事件早于照片列表到达时的暂存（导入期间列表尚未刷新）；列表加载时按 id 合并 */
 const pendingThumb = new Map<number, 'ok' | 'fail'>()
 
@@ -581,14 +581,27 @@ export const useStore = create<AppState>((set, get) => ({
 
   setHelpOpen: (v) => set({ helpOpen: v }),
 
-  setDraggingPhotos: (ids) =>
-    set({ draggingPhotos: ids && ids.length ? { ids, at: Date.now() } : null }),
+  setDraggingPhotos: (ids, paths) => {
+    if (!ids || !ids.length) {
+      set({ draggingPhotos: null })
+      return
+    }
+    // 记录拖出文件的绝对路径：窗口级 drop 据此区分「应用内照片拖拽」与「资源管理器拖入」
+    const byId = new Map(get().photos.map((p) => [p.id, p.path]))
+    const known = paths ?? ids.flatMap((id) => {
+      const p = byId.get(id)
+      return p ? [p] : []
+    })
+    set({ draggingPhotos: { ids, paths: known, at: Date.now() } })
+  },
 
   applyThumbEvents: (list) => {
     thumbBuffer.push(...list)
-    if (thumbRaf !== null) return
-    thumbRaf = requestAnimationFrame(() => {
-      thumbRaf = null
+    if (thumbTimer !== null) return
+    // 不用 rAF 合批：窗口被遮挡/最小化时 Chromium 会暂停帧回调，
+    // 缩略图事件会一直积压，网格停在骨架屏
+    thumbTimer = setTimeout(() => {
+      thumbTimer = null
       const updates = thumbBuffer
       thumbBuffer = []
       if (!updates.length) return
@@ -614,7 +627,7 @@ export const useStore = create<AppState>((set, get) => ({
         }
       })
       if (touched) set({ photos: next })
-    })
+    }, 32)
   },
 
   patchPhoto: (id, patch) => {

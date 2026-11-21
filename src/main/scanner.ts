@@ -252,15 +252,15 @@ function isSuppressed(p: string): boolean {
   return suppressedPaths.has(p.toLowerCase())
 }
 
-/** 单文件新增（来自文件监听） */
-export function trackNewFile(folderId: number, filePath: string): void {
-  if (isSuppressed(filePath)) return
+/** 单文件新增（来自文件监听/导入）；返回是否真正新增（或从回收站还原）了索引行 */
+export async function trackNewFile(folderId: number, filePath: string): Promise<boolean> {
+  if (isSuppressed(filePath)) return false
   // 回收站中的照片文件重新出现（用户从系统回收站放回等）：自动还原
   const deletedId = findDeletedPhotoId(filePath)
   if (deletedId !== null) {
     restorePhotos([deletedId])
     broadcastWatch({ type: 'add', folderId })
-    return
+    return true
   }
   const existing = findPhotoByPath(filePath)
   if (existing) {
@@ -275,32 +275,34 @@ export function trackNewFile(folderId: number, filePath: string): void {
       enqueueThumb(existing.id)
       broadcastWatch({ type: 'change', folderId, id: existing.id })
     }
-    return
+    return false
   }
-  fs.promises
-    .stat(filePath)
-    .then((s) => {
-      const id = insertPhoto({
-        folder_id: folderId,
-        path: filePath,
-        name: path.basename(filePath),
-        ext: path.extname(filePath).toLowerCase().slice(1),
-        size: s.size,
-        mtime: Math.round(s.mtimeMs),
-        imported_at: Date.now(),
-      })
-      enqueueThumb(id)
-      const row = findPhotoByPath(filePath)
-      broadcastWatch({ type: 'add', folderId, photo: row ?? undefined })
+  try {
+    const s = await fs.promises.stat(filePath)
+    const id = insertPhoto({
+      folder_id: folderId,
+      path: filePath,
+      name: path.basename(filePath),
+      ext: path.extname(filePath).toLowerCase().slice(1),
+      size: s.size,
+      mtime: Math.round(s.mtimeMs),
+      imported_at: Date.now(),
     })
-    .catch((err) => logError('trackNewFile', err))
+    enqueueThumb(id)
+    const row = findPhotoByPath(filePath)
+    broadcastWatch({ type: 'add', folderId, photo: row ?? undefined })
+    return true
+  } catch (err) {
+    logError('trackNewFile', err)
+    return false
+  }
 }
 
 export function trackChangedFile(folderId: number, filePath: string): void {
   if (isSuppressed(filePath)) return
   const row = findPhotoByPath(filePath)
   if (!row) {
-    trackNewFile(folderId, filePath)
+    void trackNewFile(folderId, filePath)
     return
   }
   fs.promises

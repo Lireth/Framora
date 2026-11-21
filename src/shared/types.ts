@@ -219,6 +219,8 @@ export interface ImportFilesResult {
   indexed: number
   /** 资料库外复制到目标文件夹后入库的数量 */
   copied: number
+  /** 拖入/选择时一并导入（或重扫）的文件夹数量 */
+  folders: number
   /** 非图片 / 复制失败 / 取消目标选择而跳过的数量 */
   skipped: number
 }

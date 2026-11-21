@@ -189,17 +189,58 @@ export function registerIpc(): void {
   })
 
   ipcMain.handle('library:importFiles', async (_e, filePaths: string[]) => {
-    // 资料库内文件直接入库；库外文件复制到用户选择的目标文件夹后入库（复制式导入）
-    const folders = listFolders()
-    const internal: { folderId: number; path: string }[] = []
-    const external: string[] = []
+    // 拖入/选择可能混合文件与文件夹：按真实类型分流（渲染层拿不到可靠的目录标记）
+    const dirs: string[] = []
+    const files: string[] = []
     let skipped = 0
+    const seen = new Set<string>()
     for (const p of filePaths) {
-      if (!isImagePath(p)) {
-        skipped++
+      const key = path.resolve(p).toLowerCase()
+      if (seen.has(key)) continue
+      seen.add(key)
+      // 图片扩展名直接按文件处理，避免上万文件逐个 stat；其余路径再判目录
+      if (isImagePath(p)) {
+        files.push(p)
         continue
       }
-      const owner = findOwnerFolder(p, folders)
+      try {
+        if (fs.statSync(p).isDirectory()) dirs.push(path.resolve(p))
+        else skipped++
+      } catch {
+        skipped++
+      }
+    }
+
+    // 文件夹：已在资料库内的重扫所属根目录（不注册嵌套根）；库外则注册并监听。
+    // 先处理文件夹，随后同批拖入的子文件会自然归入新资料库，不再弹目标目录选择。
+    dirs.sort((a, b) => a.length - b.length)
+    const acceptedDirs: string[] = []
+    let folders = 0
+    for (const dir of dirs) {
+      const lower = dir.toLowerCase()
+      // 同批拖入父子目录时只处理父级，避免重复扫描
+      if (acceptedDirs.some((a) => lower === a || lower.startsWith(a + path.sep))) continue
+      acceptedDirs.push(lower)
+      try {
+        const owner = findOwnerFolder(dir, listFolders())
+        if (owner) {
+          await importFolder(owner.path)
+        } else {
+          const res = await importFolder(dir)
+          await startWatcher(res.folderId, dir)
+        }
+        folders++
+      } catch (err) {
+        logError('importFiles:folder', err)
+        skipped++
+      }
+    }
+
+    const foldersNow = listFolders()
+    const internal: { folderId: number; path: string }[] = []
+    const external: string[] = []
+    for (const p of files) {
+      const owner = findOwnerFolder(p, foldersNow)
       if (owner) internal.push({ folderId: owner.id, path: p })
       else external.push(p)
     }
@@ -235,7 +276,7 @@ export function registerIpc(): void {
           // 目标已在某资料库内则逐文件入库，避免把子目录注册成嵌套根；否则按新文件夹导入并监听
           const owner = findOwnerFolder(dest, listFolders())
           if (owner) {
-            for (const op of copiedPaths) trackNewFile(owner.id, op)
+            await Promise.all(copiedPaths.map((op) => trackNewFile(owner.id, op)))
           } else {
             const res = await importFolder(dest)
             await startWatcher(res.folderId, dest)
@@ -243,8 +284,10 @@ export function registerIpc(): void {
         }
       }
     }
-    for (const f of internal) trackNewFile(f.folderId, f.path)
-    return { indexed: internal.length, copied, skipped }
+    // 等待全部入库完成再返回，渲染进程随后刷新即可看到新行；
+    // 返回真正新增的数量（已索引/仅改名不计数）
+    const added = await Promise.all(internal.map((f) => trackNewFile(f.folderId, f.path)))
+    return { indexed: added.filter(Boolean).length, copied, skipped, folders }
   })
 
   ipcMain.handle('library:rescan', async (_e, folderId: number) => {

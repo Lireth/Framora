@@ -28,27 +28,39 @@ export async function importFolderAction(): Promise<void> {
   }
 }
 
-/** 选择单张/多张照片导入（库内直接入库，库外复制入目标文件夹） */
-export async function importFilesAction(): Promise<void> {
+/** 导入路径集合（文件与文件夹混合）：库内直接入库、库外复制，文件夹注册并扫描 */
+async function importPaths(paths: string[], quietWhenEmpty = false): Promise<void> {
   const s = useStore.getState()
+  if (!paths.length) return
   try {
-    const paths = await api.pickFiles()
-    if (!paths || !paths.length) return
     const r = await api.importFiles(paths)
     const parts: string[] = []
+    if (r.folders) parts.push(`文件夹 ${r.folders} 个`)
     if (r.indexed) parts.push(`入库 ${r.indexed} 张`)
     if (r.copied) parts.push(`复制导入 ${r.copied} 张`)
-    if (r.skipped) parts.push(`跳过 ${r.skipped} 张`)
-    if (parts.length) {
-      s.toast('success', `导入文件：${parts.join('，')}`)
-    } else {
-      s.toast('info', '导入文件：没有新增照片')
-    }
+    if (r.skipped) parts.push(`跳过 ${r.skipped} 项`)
+    if (parts.length) s.toast('success', `导入：${parts.join('，')}`)
+    else if (!quietWhenEmpty) s.toast('info', '导入：没有新增照片')
     await s.refreshLibrary()
     s.refreshPhotos()
   } catch (e) {
+    useStore.getState().toast('error', e instanceof Error ? e.message : '导入失败')
+  }
+}
+
+/** 选择单张/多张照片导入（库内直接入库，库外复制入目标文件夹） */
+export async function importFilesAction(): Promise<void> {
+  try {
+    const paths = await api.pickFiles()
+    if (paths?.length) await importPaths(paths)
+  } catch (e) {
     useStore.getState().toast('error', e instanceof Error ? e.message : '导入文件失败')
   }
+}
+
+/** 资源管理器拖入：文件走库内/库外分流，文件夹加入资料库并扫描；无新增时静默 */
+export async function importDroppedPaths(paths: string[]): Promise<void> {
+  await importPaths(paths, true)
 }
 
 /** 重复治理：按策略保留每组一张，选中其余冗余项（随后可批量删除） */

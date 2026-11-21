@@ -1,6 +1,6 @@
 /** UI 冒烟测试：连接 CDP，驱动真实窗口截图并断言关键流程 */
 import puppeteer from 'puppeteer-core'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { copyFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
@@ -59,9 +59,15 @@ for (let i = 0; i < 120; i++) {
 console.log('pending thumbs:', pendingCount)
 if (pendingCount !== 0) fail('缩略图未全部生成')
 
-/* 4. 网格渲染断言 */
-await sleep(800)
-const gridImgs = await page.evaluate(() => document.querySelectorAll('[data-testid="photo-grid"] img').length)
+/* 4. 网格渲染断言：后台窗口的定时器可能被节流，轮询等待首批缩略图事件落地 */
+let gridImgs = 0
+for (let i = 0; i < 20; i++) {
+  await sleep(400)
+  gridImgs = await page.evaluate(
+    () => document.querySelectorAll('[data-testid="photo-grid"] img').length
+  )
+  if (gridImgs > 0) break
+}
 console.log('visible grid imgs:', gridImgs)
 if (gridImgs === 0) fail('网格没有渲染出缩略图')
 await shot(page, '02-grid.png')
@@ -380,6 +386,39 @@ const dupToolbar = await page.evaluate(() => document.body.innerText.includes('�
 if (!dupToolbar) fail('疑似重复视图缺少「保留最佳」操作')
 await shot(page, '10-duplicates.png')
 console.log('duplicate clustering: ok')
+
+/* 18. 资源管理器拖放导入（P1-4）：CDP 投递真实文件路径，覆盖 webUtils 解析与文件夹分发 */
+const dropDir = path.join(tmpdir(), 'framora-drop-test')
+rmSync(dropDir, { recursive: true, force: true })
+mkdirSync(dropDir, { recursive: true })
+copyFileSync(path.join(tmpData, 'IMG_1000.jpg'), path.join(dropDir, 'drop-a.jpg'))
+copyFileSync(path.join(tmpData, 'IMG_1001.jpg'), path.join(dropDir, 'drop-b.jpg'))
+const statsBeforeDrop = await invoke('library:stats')
+const cdp = await target.createCDPSession()
+const dragData = { items: [], files: [dropDir], dragOperationsMask: 1 }
+await cdp.send('Input.dispatchDragEvent', { type: 'dragEnter', x: 600, y: 400, data: dragData })
+await sleep(400)
+const overlayShown = await page.evaluate(() => document.body.innerText.includes('松开以导入照片'))
+if (!overlayShown) fail('拖入文件时未显示投放提示')
+await shot(page, '11-drop-overlay.png')
+await cdp.send('Input.dispatchDragEvent', { type: 'dragOver', x: 600, y: 400, data: dragData })
+await sleep(150)
+await cdp.send('Input.dispatchDragEvent', { type: 'drop', x: 600, y: 400, data: dragData })
+let statsAfterDrop = statsBeforeDrop
+for (let i = 0; i < 20; i++) {
+  await sleep(500)
+  statsAfterDrop = await invoke('library:stats')
+  if (statsAfterDrop.total === statsBeforeDrop.total + 2) break
+}
+if (statsAfterDrop.total !== statsBeforeDrop.total + 2) {
+  fail(`拖入文件夹应新增 2 张，实际新增 ${statsAfterDrop.total - statsBeforeDrop.total}`)
+}
+const dropFolder = (await invoke('library:listFolders')).find(
+  (f) => f.path.toLowerCase() === dropDir.toLowerCase()
+)
+if (!dropFolder || dropFolder.count !== 2) fail('拖入的文件夹未注册或计数不符')
+await shot(page, '12-drop-imported.png')
+console.log('drag-drop import: ok')
 
 writeFileSync(path.join(OUT, 'result.json'), JSON.stringify({ ok: process.exitCode == null }))
 console.log('screenshots at', OUT)

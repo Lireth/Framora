@@ -7,6 +7,7 @@ import {
   FlipHorizontal2,
   FlipVertical2,
   History,
+  Keyboard,
   Loader2,
   Maximize,
   Pencil,
@@ -537,7 +538,7 @@ export function Viewer(): React.JSX.Element {
     setOffset({ x: 0, y: 0 })
   }, [])
 
-  /* 查看器快捷键：+/− 缩放、0 复位、F 全屏 */
+  /* 查看器快捷键：+/− 缩放、0 复位、R/r 旋转预览、F 全屏 */
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
       const t = e.target as HTMLElement
@@ -553,6 +554,10 @@ export function Viewer(): React.JSX.Element {
       } else if (k === '0') {
         e.preventDefault()
         resetZoom()
+      } else if (k === 'r' || k === 'R') {
+        e.preventDefault()
+        // 仅旋转预览（与顶栏旋转按钮一致），保存修改时才写盘
+        setEdit((prev) => ({ ...prev, rotateDelta: prev.rotateDelta + (k === 'r' ? 90 : -90) }))
       } else if (k.toLowerCase() === 'f') {
         void api.toggleFullscreen().catch(() => undefined)
       }
@@ -799,6 +804,14 @@ export function Viewer(): React.JSX.Element {
           title="切换全屏 (F)"
         >
           <Maximize size={13} />
+        </button>
+        <button
+          className="grid h-7 w-7 place-items-center rounded-full hover:bg-white/15 hover:text-white"
+          onClick={() => useStore.getState().setHelpOpen(true)}
+          aria-label="快捷键帮助 (?)"
+          title="快捷键帮助 (?)"
+        >
+          <Keyboard size={13} />
         </button>
       </div>
 

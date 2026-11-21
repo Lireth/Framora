@@ -401,6 +401,71 @@ export function ContextMenu({
   )
 }
 
+/* ---------- 快捷键帮助 ---------- */
+
+export interface ShortcutEntry {
+  keys: string
+  desc: string
+}
+
+/** 全部键盘快捷键的单一事实源：帮助浮层据此渲染，新增快捷键须同步维护 */
+export const SHORTCUT_GROUPS: { title: string; items: ShortcutEntry[] }[] = [
+  {
+    title: '网格浏览',
+    items: [
+      { keys: 'Ctrl+A', desc: '全选当前视图照片' },
+      { keys: '方向键', desc: '移动选中项' },
+      { keys: 'Enter / 空格', desc: '打开查看器（单选时）' },
+      { keys: 'Delete', desc: '删除所选（确认后移入回收站）' },
+      { keys: 'Esc', desc: '清除选择' }
+    ]
+  },
+  {
+    title: '查看器',
+    items: [
+      { keys: '← / →', desc: '上一张 / 下一张' },
+      { keys: '1 – 5', desc: '为当前照片评分' },
+      { keys: 'Delete', desc: '移入回收站并继续下一张' },
+      { keys: 'Home / End', desc: '第一张 / 最后一张' },
+      { keys: 'i', desc: '信息面板' },
+      { keys: 'r / R', desc: '预览向右 / 向左旋转 90°' },
+      { keys: '+ / − / 0', desc: '放大 / 缩小 / 复位缩放' },
+      { keys: 'F', desc: '切换全屏' },
+      { keys: 'Esc / 空格', desc: '关闭查看器' }
+    ]
+  }
+]
+
+/** 快捷键帮助浮层：`?` 键或查看器控制条按钮唤起 */
+export function ShortcutHelpModal(): React.JSX.Element {
+  const open = useStore((s) => s.helpOpen)
+  const setHelpOpen = useStore((s) => s.setHelpOpen)
+  return (
+    <Modal open={open} onClose={() => setHelpOpen(false)} title="键盘快捷键" width={460}>
+      <div className="space-y-4">
+        {SHORTCUT_GROUPS.map((g) => (
+          <div key={g.title}>
+            <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-ink3">
+              {g.title}
+            </p>
+            <div className="space-y-1">
+              {g.items.map((it) => (
+                <div key={it.keys} className="flex items-center gap-3 text-[12.5px]">
+                  <kbd className="min-w-[92px] rounded border border-line bg-panel px-2 py-0.5 text-center font-mono text-[11.5px] text-ink2">
+                    {it.keys}
+                  </kbd>
+                  <span className="text-ink2">{it.desc}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+        <p className="text-[11px] text-ink3">随时按 ? 打开此面板，Esc 关闭</p>
+      </div>
+    </Modal>
+  )
+}
+
 /* ---------- 吐司 ---------- */
 
 export function Toasts(): React.JSX.Element {

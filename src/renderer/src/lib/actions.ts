@@ -87,6 +87,55 @@ export async function deletePhotosAction(ids: number[]): Promise<void> {
   }
 }
 
+/**
+ * 查看器内删除当前照片并留在查看器继续筛选：优先前进到下一张，末张则回退上一张。
+ * 与网格删除（需确认）不同：审片流要求连续操作，且软删除本身可从回收站还原。
+ */
+export async function deleteViewerPhotoAction(): Promise<void> {
+  const s = useStore.getState()
+  if (!s.viewerOpen || s.activeId === null || s.scope === 'trash') return
+  const idx = s.photos.findIndex((p) => p.id === s.activeId)
+  if (idx < 0) return
+  const id = s.photos[idx].id
+  const nextId =
+    idx + 1 < s.photos.length ? s.photos[idx + 1].id : idx - 1 >= 0 ? s.photos[idx - 1].id : null
+  try {
+    const r = await api.deletePhotos([id])
+    if (r.failed > 0) {
+      s.toast('error', '删除失败（文件可能被其他程序占用）')
+      return
+    }
+    s.toast('success', '已移入回收站（可在回收站视图还原）')
+    // 从选择集中移除已删除项（查看器可能从多选进入，保留其余选择）
+    s.setSelection([...s.selection].filter((x) => x !== id))
+    if (nextId === null) s.closeViewer()
+    else s.setActive(nextId)
+    await s.refreshLibrary()
+    await s.refreshPhotos()
+    // 刷新后目标照片不在当前视图（查询条件被并发修改）时回退定位，避免空查看器
+    const st = useStore.getState()
+    if (st.viewerOpen && !st.photos.some((p) => p.id === st.activeId)) {
+      if (st.photos.length) st.setActive(st.photos[0].id)
+      else st.closeViewer()
+    }
+  } catch (e) {
+    s.toast('error', e instanceof Error ? e.message : '删除失败')
+  }
+}
+
+/** 查看器内快捷键评分（1-5）：与详情面板星级相同的乐观更新路径 */
+export async function rateViewerPhotoAction(rating: number): Promise<void> {
+  const s = useStore.getState()
+  if (!s.viewerOpen || s.activeId === null) return
+  const id = s.activeId
+  try {
+    await api.updateMeta(id, { rating })
+    s.patchPhoto(id, { rating })
+  } catch (e) {
+    s.toast('error', e instanceof Error ? e.message : '评分失败')
+  }
+}
+
 /** 从回收站还原所选照片 */
 export async function restorePhotosAction(ids: number[]): Promise<void> {
   if (!ids.length) return

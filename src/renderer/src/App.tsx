@@ -12,7 +12,8 @@ import { BatchBar } from './components/BatchBar'
 import { Viewer } from './components/Viewer'
 import { SettingsModal } from './components/SettingsModal'
 import { ExportDialog } from './components/ExportDialog'
-import { Toasts } from './components/ui'
+import { ShortcutHelpModal, Toasts } from './components/ui'
+import { deleteViewerPhotoAction, rateViewerPhotoAction } from './lib/actions'
 
 export default function App(): React.JSX.Element {
   const theme = useStore((s) => s.theme)
@@ -80,11 +81,37 @@ export default function App(): React.JSX.Element {
       const s = useStore.getState()
       const t = e.target as HTMLElement
       if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable) return
+      if (s.helpOpen) {
+        if (e.key === 'Escape') s.setHelpOpen(false)
+        return
+      }
+      if (s.settingsOpen || s.exportOpen || s.confirmDeleteOpen) return
+      if (e.key === '?' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault()
+        s.setHelpOpen(true)
+        return
+      }
       if (s.viewerOpen) {
         if (e.key === 'Escape') s.closeViewer()
         else if (e.key === 'ArrowLeft') s.stepViewer(-1)
         else if (e.key === 'ArrowRight') s.stepViewer(1)
-        else if (e.key === ' ' && t.tagName !== 'BUTTON') {
+        else if (e.ctrlKey || e.metaKey || e.altKey) return
+        else if (e.key === 'Home') {
+          e.preventDefault()
+          void s.jumpViewer('first')
+        } else if (e.key === 'End') {
+          e.preventDefault()
+          void s.jumpViewer('last')
+        } else if (e.key === 'Delete') {
+          e.preventDefault()
+          void deleteViewerPhotoAction()
+        } else if (e.key >= '1' && e.key <= '5') {
+          e.preventDefault()
+          void rateViewerPhotoAction(Number(e.key))
+        } else if (e.key === 'i') {
+          e.preventDefault()
+          s.toggleDetail()
+        } else if (e.key === ' ' && t.tagName !== 'BUTTON') {
           e.preventDefault()
           s.closeViewer()
         }
@@ -137,6 +164,7 @@ export default function App(): React.JSX.Element {
       {viewerOpen && <Viewer />}
       <SettingsModal />
       <ExportDialog />
+      <ShortcutHelpModal />
       <Toasts />
     </div>
   )

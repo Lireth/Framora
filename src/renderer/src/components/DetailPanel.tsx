@@ -42,6 +42,10 @@ export function DetailPanel({ inViewer }: { inViewer?: boolean }): React.JSX.Ele
   const [albumMenuOpen, setAlbumMenuOpen] = useState(false)
 
   const id = inViewer ? activeId : selection.size === 1 ? [...selection][0] : activeId
+  // 评分订阅自 store 的照片列表：快捷键等外部评分更新时星级行即时反映
+  const storeRating = useStore((s) =>
+    id === null ? undefined : s.photos.find((p) => p.id === id)?.rating
+  )
 
   useEffect(() => {
     if (id === null) {
@@ -115,7 +119,7 @@ export function DetailPanel({ inViewer }: { inViewer?: boolean }): React.JSX.Ele
         <div>
           <SectionTitle icon={<Camera size={11} />}>评分</SectionTitle>
           <StarRating
-            value={record.rating}
+            value={storeRating ?? record.rating}
             size={17}
             onChange={async (v) => {
               await api.updateMeta(record.id, { rating: v })

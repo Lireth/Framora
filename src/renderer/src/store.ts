@@ -65,6 +65,7 @@ interface AppState extends Filters {
   exportOpen: boolean
   exportIds: number[] | null
   confirmDeleteOpen: boolean
+  helpOpen: boolean
   appVersion: string
 
   init: () => Promise<void>
@@ -82,6 +83,7 @@ interface AppState extends Filters {
   closeViewer: () => void
   setActive: (id: number) => void
   stepViewer: (delta: number) => void
+  jumpViewer: (target: 'first' | 'last') => Promise<void>
   toggleDetail: () => void
   setTile: (t: 's' | 'm' | 'l') => void
   setGridCols: (n: number) => void
@@ -96,6 +98,7 @@ interface AppState extends Filters {
   openExport: (ids: number[] | null) => void
   closeExport: () => void
   setConfirmDeleteOpen: (v: boolean) => void
+  setHelpOpen: (v: boolean) => void
   applyThumbEvents: (list: { id: number; status: 'ok' | 'fail' }[]) => void
   patchPhoto: (id: number, patch: Partial<PhotoLite> & { mtime?: number }) => void
 }
@@ -196,6 +199,7 @@ export const useStore = create<AppState>((set, get) => ({
   exportOpen: false,
   exportIds: null,
   confirmDeleteOpen: false,
+  helpOpen: false,
   appVersion: '',
 
   init: async () => {
@@ -403,6 +407,23 @@ export const useStore = create<AppState>((set, get) => ({
     if (next >= photos.length - 30) void get().loadMorePhotos()
   },
 
+  /** 查看器跳转：first 定位首张；last 先串行补齐未加载分页再定位末张 */
+  jumpViewer: async (target) => {
+    if (!get().photos.length) return
+    if (target === 'first') {
+      set({ activeId: get().photos[0].id })
+      return
+    }
+    // 末张语义为整个查询结果的最后一张：串行补齐剩余分页（每页 500，上限防失控）
+    let guard = 0
+    while (get().hasMore && guard < 400) {
+      await get().loadMorePhotos()
+      guard++
+    }
+    const photos = get().photos
+    if (photos.length) set({ activeId: photos[photos.length - 1].id })
+  },
+
   toggleDetail: () => set({ detailOpen: !get().detailOpen }),
 
   setTile: (tile) => {
@@ -462,6 +483,8 @@ export const useStore = create<AppState>((set, get) => ({
   closeExport: () => set({ exportOpen: false, exportIds: null }),
 
   setConfirmDeleteOpen: (v) => set({ confirmDeleteOpen: v }),
+
+  setHelpOpen: (v) => set({ helpOpen: v }),
 
   applyThumbEvents: (list) => {
     thumbBuffer.push(...list)

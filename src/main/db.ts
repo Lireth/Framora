@@ -42,7 +42,8 @@ function addColumnIfMissing(
   column: string,
   columnDef: string
 ): void {
-  const cols = database.pragma(`table_info(${table})`) as { name: string }[]
+  // 用 table_xinfo 而非 table_info：生成列（GENERATED ALWAYS AS）只出现在 xinfo 中
+  const cols = database.pragma(`table_xinfo(${table})`) as { name: string }[]
   if (!cols.some((c) => c.name === column)) {
     database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${columnDef}`)
   }
@@ -270,6 +271,21 @@ const MIGRATIONS: ((db: Database.Database) => void)[] = [
       CREATE UNIQUE INDEX IF NOT EXISTS idx_photos_path_ci ON photos(path COLLATE NOCASE);
       CREATE UNIQUE INDEX IF NOT EXISTS idx_folders_path_ci ON folders(path COLLATE NOCASE);
     `)
+  },
+  // v10: 默认排序物化 —— sort_ts 生成列（VIRTUAL：随 taken_at/imported_at 自动跟随，零写放大）
+  //      + 索引，默认排序翻页由索引直接供序（双向均可反向扫描），万级数据免全量重排；
+  //      同时补齐 size 排序索引（rating/name/imported 在 v1/v6 已有）
+  (db) => {
+    addColumnIfMissing(
+      db,
+      'photos',
+      'sort_ts',
+      'INTEGER GENERATED ALWAYS AS (COALESCE(taken_at, imported_at)) VIRTUAL'
+    )
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_photos_sort_ts ON photos(sort_ts);
+      CREATE INDEX IF NOT EXISTS idx_photos_size ON photos(size);
+    `)
   }
 ]
 
@@ -460,7 +476,9 @@ export function addFolder(folderPath: string, name: string): number {
 }
 
 export function removeFolderRows(folderId: number): PhotoLite[] {
-  const rows = stmt('SELECT * FROM photos WHERE folder_id = ?').all(folderId) as PhotoLite[]
+  const rows = stmt(`SELECT ${PHOTO_LITE_COLS} FROM photos WHERE folder_id = ?`).all(
+    folderId
+  ) as PhotoLite[]
   const run = db.transaction(() => {
     stmt(
       `DELETE FROM photo_tags WHERE photo_id IN (SELECT id FROM photos WHERE folder_id = ?)`
@@ -776,7 +794,8 @@ function buildOrderSql(q: PhotoQuery): string {
     case 'imported':
       return `ORDER BY p.imported_at ${dir}, p.id ${dir}`
     default:
-      return `ORDER BY COALESCE(p.taken_at, p.imported_at) ${dir}, p.id ${dir}`
+      // 拍摄/导入时间排序走 v10 物化列 sort_ts（索引供序，免全量重排）
+      return `ORDER BY p.sort_ts ${dir}, p.id ${dir}`
   }
 }
 

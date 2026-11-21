@@ -325,6 +325,33 @@ describe('排序', () => {
     const items = db.queryPhotos({ scope: 'all', sort: 'taken', dir: 'asc' }).items
     expect(items[0].name).toBe('withExif.jpg')
   })
+
+  it('默认排序走 sort_ts 物化列，随 taken_at 更新自动跟随', () => {
+    const f = newFolder('C:\\pics')
+    const a = seed(f, 'may', { takenAt: Date.parse('2026-05-01T00:00:00'), importedAt: IMPORT_TS })
+    const b = seed(f, 'jan', { importedAt: Date.parse('2026-01-10T00:00:00Z') })
+    // taken_at 缺失时 sort_ts 回退导入时间（b=1 月 < a=5 月），desc 下 a 在前
+    expect(db.queryPhotos({ scope: 'all', sort: 'taken', dir: 'desc' }).items.map((p) => p.id)).toEqual([a, b])
+    // 生成列随源列自动跟随，无需显式重算
+    db.setPhotoDimsAndDate(a, 100, 100, Date.parse('2025-12-01T00:00:00'))
+    expect(db.queryPhotos({ scope: 'all', sort: 'taken', dir: 'desc' }).items.map((p) => p.id)).toEqual([b, a])
+  })
+
+  it('默认排序查询命中 sort_ts 索引（免全量重排）', async () => {
+    const f = newFolder('C:\\pics')
+    seed(f, 'plan-1')
+    db.closeDb()
+    const raw = new Database(path.join(userData, 'framora.db'))
+    const plan = raw
+      .prepare(
+        `EXPLAIN QUERY PLAN SELECT id FROM photos
+         WHERE deleted_at IS NULL ORDER BY sort_ts DESC, id DESC LIMIT 500 OFFSET 0`
+      )
+      .all() as { detail: string }[]
+    raw.close()
+    await db.initDb()
+    expect(plan.some((p) => p.detail.includes('idx_photos_sort_ts'))).toBe(true)
+  })
 })
 
 describe('智能相册（保存的搜索条件）', () => {

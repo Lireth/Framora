@@ -233,6 +233,25 @@ async function displayedDims(p: string): Promise<{ w: number; h: number }> {
   }
 }
 
+/**
+ * 原子替换目标文件（Windows 无覆盖式 rename，先 rm 再 rename 的崩溃窗口内原图会彻底消失）：
+ * 原图先移位为 .framora-old——任意时刻原图字节都存在于某个路径；
+ * 新内容落位失败时把原图放回原位（取消本次变更，不留空档）；
+ * 崩溃残留的 .framora-old 由下一次替换前的兜底清理移除。
+ */
+async function atomicReplace(target: string, src: string): Promise<void> {
+  const old = `${target}.framora-old`
+  await fs.promises.rm(old, { force: true })
+  await fs.promises.rename(target, old)
+  try {
+    await fs.promises.rename(src, target)
+  } catch (err) {
+    await fs.promises.rename(old, target).catch(() => undefined)
+    throw err
+  }
+  await fs.promises.rm(old, { force: true }).catch(() => undefined)
+}
+
 export async function saveEdits(
   id: number,
   edit: {
@@ -303,8 +322,7 @@ export async function saveEdits(
     else pipe = pipe.jpeg({ quality: 92 })
 
     await pipe.toFile(tmp)
-    await fs.promises.rm(row.path, { force: true })
-    await fs.promises.rename(tmp, row.path)
+    await atomicReplace(row.path, tmp)
   } catch (err) {
     await fs.promises.rm(tmp, { force: true }).catch(() => undefined)
     throw err
@@ -356,13 +374,11 @@ export async function revertEdits(id: number, backupName?: string): Promise<void
     files.sort((a, b) => b.localeCompare(a))
     latest = path.join(backupsDir(), files[0])
   }
-  // 与 saveEdits 相同的 tmp+rm+rename 落盘方式：直接覆盖已存在文件在 Windows 上
-  // 可能因目标被占用而报 UNKNOWN
+  // tmp 写入后经 atomicReplace 原子落位（直接覆盖已存在文件在 Windows 上可能因目标被占用报 UNKNOWN）
   const tmp = `${row.path}.framora-revert-tmp${path.extname(row.path)}`
   try {
     await fs.promises.copyFile(latest, tmp)
-    await fs.promises.rm(row.path, { force: true })
-    await fs.promises.rename(tmp, row.path)
+    await atomicReplace(row.path, tmp)
   } catch (err) {
     await fs.promises.rm(tmp, { force: true }).catch(() => undefined)
     throw err

@@ -1,4 +1,5 @@
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs'
+import fs from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
@@ -25,7 +26,7 @@ vi.mock('../src/main/scanner', () => ({
   broadcastExport: (e: { done: number; total: number }) => broadcasts.push(e)
 }))
 
-import { exportPhotos, pickName, saveEdits, cancelExport } from '../src/main/imageops'
+import { exportPhotos, pickName, saveEdits, cancelExport, revertEdits } from '../src/main/imageops'
 import { previewPath } from '../src/main/thumbs'
 import exifr from 'exifr'
 import type { ExportOptions } from '@shared/types'
@@ -316,5 +317,51 @@ describe('EXIF 元数据保留（编辑写回 / 导出重编码不丢元数据�
     expect(meta.height).toBe(20)
     const exif = await exifr.parse(p)
     expect(exif?.Make).toBe('framora-test')
+  })
+})
+
+describe('编辑写回原子性（O2 回归）', () => {
+  it('编辑写回成功后无临时/旧文件残留', async () => {
+    rows.clear()
+    await makeExifJpeg('atomic-2.jpg')
+    addRow({ id: 701, file: 'atomic-2.jpg' })
+    await saveEdits(701, { brightness: 5 })
+    expect(readdirSync(srcDir).filter((n) => n.includes('.framora-'))).toEqual([])
+    expect(existsSync(path.join(srcDir, 'atomic-2.jpg'))).toBe(true)
+  })
+
+  it('新内容落位失败时回滚原图（不留空档）', async () => {
+    rows.clear()
+    await makeExifJpeg('atomic-1.jpg')
+    addRow({ id: 700, file: 'atomic-1.jpg' })
+    const target = path.join(srcDir, 'atomic-1.jpg')
+    const before = readFileSync(target)
+    const realRename = fs.promises.rename.bind(fs.promises)
+    // 仅拦截「新图落位」一步（源为 framora-tmp 的 rename），原图移位/回滚放行
+    const spy = vi
+      .spyOn(fs.promises, 'rename')
+      .mockImplementation(async (from, to) => {
+        if (String(from).includes('.framora-tmp')) throw new Error('ELOCK: 目标被占用')
+        return realRename(from as string, to as string)
+      })
+    try {
+      await expect(saveEdits(700, { brightness: 10 })).rejects.toThrow('ELOCK')
+    } finally {
+      spy.mockRestore()
+    }
+    // 原图字节原样回到原位，tmp 与 .old 均无残留
+    expect(readFileSync(target)).toEqual(before)
+    expect(readdirSync(srcDir).filter((n) => n.includes('.framora-'))).toEqual([])
+  })
+
+  it('恢复编辑后像素回到备份版本且无残留', async () => {
+    rows.clear()
+    await makeExifJpeg('revert-1.jpg')
+    addRow({ id: 702, file: 'revert-1.jpg' })
+    const original = readFileSync(path.join(srcDir, 'revert-1.jpg'))
+    await saveEdits(702, { brightness: 30 })
+    await revertEdits(702)
+    expect(readFileSync(path.join(srcDir, 'revert-1.jpg'))).toEqual(original)
+    expect(readdirSync(srcDir).filter((n) => n.includes('.framora-'))).toEqual([])
   })
 })

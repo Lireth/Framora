@@ -1,5 +1,6 @@
 import path from 'node:path'
 import fs from 'node:fs'
+import { createHash } from 'node:crypto'
 import sharp from 'sharp'
 import { getPhotoRow, updatePhotoFileFields, updatePhotoMeta } from './db'
 import { backupsDir, enqueueThumb, previewPath } from './thumbs'
@@ -193,13 +194,34 @@ export function pickName(
 /** 每张照片保留的编辑备份上限，超出自动清理最旧的 */
 const BACKUP_KEEP = 5
 
-/** 清理指定照片超出保留数量的旧备份（按时间戳文件名倒序保留最新 N 份） */
+/**
+ * 编辑备份的身份绑定（O3）：文件名内嵌路径小写归一后的短哈希——换库（备份导入）后
+ * id 与照片错位时哈希不再匹配，旧备份不对外提供/恢复；大小写变体重命名哈希不变，
+ * 应用内批量重命名经 rekeyEditBackups 重绑定，历史保持可恢复。
+ */
+function pathHash(p: string): string {
+  return createHash('sha256').update(p.toLowerCase()).digest('hex').slice(0, 8)
+}
+
+/** 备份文件名（新）：{id}-{pathHash}-{ts}.{ext}，ext 含点 */
+function backupNameOf(id: number, p: string, ts: number, ext: string): string {
+  return `${id}-${pathHash(p)}-${ts}${ext}`
+}
+
+/** 备份文件名解析（按 id）：捕获组 1=路径哈希 2=时间戳 3=扩展名 */
+function backupNameRe(id: number): RegExp {
+  return new RegExp(`^${id}-([0-9a-f]{8})-(\\d+)\\.([a-z0-9]+)$`, 'i')
+}
+
+/** 清理指定照片超出保留数量的旧备份（按时间戳数值倒序保留最新 N 份） */
 async function prunePhotoBackups(id: number): Promise<void> {
   try {
-    const prefix = `${id}-`
-    const names = (await fs.promises.readdir(backupsDir())).filter((n) => n.startsWith(prefix))
+    const names = (await fs.promises.readdir(backupsDir())).filter((n) =>
+      backupNameRe(id).test(n)
+    )
     if (names.length <= BACKUP_KEEP) return
-    names.sort((a, b) => b.localeCompare(a))
+    const tsOf = (n: string): number => Number(backupNameRe(id).exec(n)?.[2] ?? 0)
+    names.sort((a, b) => tsOf(b) - tsOf(a))
     for (const n of names.slice(BACKUP_KEEP)) {
       await fs.promises.rm(path.join(backupsDir(), n), { force: true }).catch(() => undefined)
     }
@@ -223,6 +245,57 @@ export async function clearAllBackups(): Promise<number> {
   return removed
 }
 
+/** 路径变更（批量重命名）后把该照片的编辑备份重绑定到新路径哈希，历史保持可恢复（O3） */
+export function rekeyEditBackups(id: number, newPath: string): void {
+  const hash = pathHash(newPath)
+  let names: string[]
+  try {
+    names = fs.readdirSync(backupsDir())
+  } catch {
+    return
+  }
+  for (const n of names) {
+    const m = backupNameRe(id).exec(n)
+    if (!m || m[1].toLowerCase() === hash) continue
+    try {
+      fs.renameSync(
+        path.join(backupsDir(), n),
+        path.join(backupsDir(), `${id}-${hash}-${m[2]}.${m[3]}`)
+      )
+    } catch {
+      /* 单个失败忽略 */
+    }
+  }
+}
+
+/**
+ * 启动时把裸 id 命名的旧版编辑备份按当前库重绑定（一次性）：
+ * 行已不存在的（历史换库残留）留作孤儿文件，不再对外提供。
+ */
+export function migrateLegacyEditBackups(): void {
+  let names: string[]
+  try {
+    names = fs.readdirSync(backupsDir())
+  } catch {
+    return
+  }
+  for (const n of names) {
+    // 旧版命名：{id}-{ts}.{ext}
+    const m = /^(\d+)-(\d+)\.([a-z0-9]+)$/i.exec(n)
+    if (!m) continue
+    const row = getPhotoRow(Number(m[1]))
+    if (!row) continue
+    try {
+      fs.renameSync(
+        path.join(backupsDir(), n),
+        path.join(backupsDir(), backupNameOf(Number(m[1]), row.path, Number(m[2]), `.${m[3]}`))
+      )
+    } catch {
+      /* 单个失败忽略 */
+    }
+  }
+}
+
 /** 读取 EXIF 自动旋转后的显示像素尺寸（orientation 5-8 时宽高互换） */
 async function displayedDims(p: string): Promise<{ w: number; h: number }> {
   const meta = await sharp(p, { failOn: 'none' }).metadata()
@@ -242,11 +315,13 @@ async function displayedDims(p: string): Promise<{ w: number; h: number }> {
 async function atomicReplace(target: string, src: string): Promise<void> {
   const old = `${target}.framora-old`
   await fs.promises.rm(old, { force: true })
-  await fs.promises.rename(target, old)
+  // 目标缺失（如恢复编辑到已丢失的源文件）：跳过移位，直接落位（恢复语义允许重建文件）
+  const movedAside = fs.existsSync(target)
+  if (movedAside) await fs.promises.rename(target, old)
   try {
     await fs.promises.rename(src, target)
   } catch (err) {
-    await fs.promises.rename(old, target).catch(() => undefined)
+    if (movedAside) await fs.promises.rename(old, target).catch(() => undefined)
     throw err
   }
   await fs.promises.rm(old, { force: true }).catch(() => undefined)
@@ -271,7 +346,7 @@ export async function saveEdits(
   if (!row) throw new Error('照片不存在')
   if (!fs.existsSync(row.path)) throw new Error('源文件已丢失，无法编辑')
   if (isRawExt(row.ext)) throw new Error('RAW 文件不支持写回编辑，请使用导出转换格式')
-  const backupName = `${id}-${Date.now()}${path.extname(row.path)}`
+  const backupName = backupNameOf(id, row.path, Date.now(), path.extname(row.path))
   const backupPath = path.join(backupsDir(), backupName)
   await fs.promises.copyFile(row.path, backupPath)
   void prunePhotoBackups(id)
@@ -335,18 +410,21 @@ export async function saveEdits(
 }
 
 export async function listBackups(id: number): Promise<BackupInfo[]> {
-  const dir = backupsDir()
+  // 只列出绑定当前照片路径哈希的备份：换库后 id 错位的旧备份不对外提供（O3）
+  const row = getPhotoRow(id)
+  const hash = row ? pathHash(row.path) : null
+  if (!hash) return []
   let names: string[]
   try {
-    names = await fs.promises.readdir(dir)
+    names = await fs.promises.readdir(backupsDir())
   } catch {
     return []
   }
   const out: BackupInfo[] = []
   for (const n of names) {
-    const m = /^(\d+)-(\d+)\.[a-z0-9]+$/i.exec(n)
-    if (!m || Number(m[1]) !== id) continue
-    const st = await fs.promises.stat(path.join(dir, n)).catch(() => null)
+    const m = backupNameRe(id).exec(n)
+    if (!m || m[1].toLowerCase() !== hash) continue
+    const st = await fs.promises.stat(path.join(backupsDir(), n)).catch(() => null)
     out.push({ name: n, ts: Number(m[2]), size: st?.size ?? 0 })
   }
   out.sort((a, b) => b.ts - a.ts)
@@ -357,21 +435,24 @@ export async function listBackups(id: number): Promise<BackupInfo[]> {
 export async function revertEdits(id: number, backupName?: string): Promise<void> {
   const row = getPhotoRow(id)
   if (!row) throw new Error('照片不存在')
+  const hash = pathHash(row.path)
   let latest: string
   if (backupName !== undefined) {
-    if (!new RegExp(`^${id}-\\d+\\.[a-z0-9]+$`, 'i').test(backupName)) {
-      throw new Error('无效的备份文件名')
-    }
+    // 身份校验：备份必须绑定当前照片的路径哈希，换库错位的旧备份一律拒绝（O3）
+    const m = backupNameRe(id).exec(backupName)
+    if (!m || m[1].toLowerCase() !== hash) throw new Error('无效的备份文件名')
     latest = path.join(backupsDir(), backupName)
     if (!fs.existsSync(latest)) throw new Error('备份文件不存在')
   } else {
-    const prefix = `${id}-`
-    const files = await fs.promises
-      .readdir(backupsDir())
-      .then((names) => names.filter((n) => n.startsWith(prefix)))
-      .catch(() => [] as string[])
+    const files = (
+      await fs.promises.readdir(backupsDir()).catch(() => [] as string[])
+    ).filter((n) => {
+      const m = backupNameRe(id).exec(n)
+      return !!m && m[1].toLowerCase() === hash
+    })
     if (!files.length) throw new Error('没有可恢复的编辑备份')
-    files.sort((a, b) => b.localeCompare(a))
+    const tsOf = (n: string): number => Number(backupNameRe(id).exec(n)?.[2] ?? 0)
+    files.sort((a, b) => tsOf(b) - tsOf(a))
     latest = path.join(backupsDir(), files[0])
   }
   // tmp 写入后经 atomicReplace 原子落位（直接覆盖已存在文件在 Windows 上可能因目标被占用报 UNKNOWN）

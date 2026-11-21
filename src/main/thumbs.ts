@@ -17,6 +17,13 @@ const queue: number[] = []
 const queued = new Set<number>()
 let running = 0
 
+/** 库代次：换库（备份导入）后递增；在途任务按开始时捕获的代次校验，过期写入作废 */
+let generation = 0
+
+export function bumpThumbGeneration(): void {
+  generation++
+}
+
 export function thumbsDir(): string {
   return path.join(app.getPath('userData'), 'thumbs')
 }
@@ -101,32 +108,46 @@ async function readTakenAt(p: string): Promise<number | null> {
 async function run(id: number): Promise<void> {
   const row = getPhotoRow(id)
   if (!row || row.missing) return
+  // 换库检测基准：任务开始时捕获的库代次
+  const gen = generation
   try {
     if (!fs.existsSync(row.path)) throw new Error('file missing')
-    // RAW：优先提取最大嵌入预览（全尺寸 JPEG），缩略图兜底；落盘供查看器使用
     let input: string | Uint8Array = row.path
+    let preview: Buffer | null = null
     if (isRawExt(row.ext)) {
-      const preview = await extractRawPreview(row.path)
+      // RAW：优先提取最大嵌入预览（全尺寸 JPEG），缩略图兜底；先只读后校验，再统一落盘
+      preview = await extractRawPreview(row.path)
       if (!preview || !preview.length) throw new Error('RAW 文件无可提取的嵌入预览')
       input = preview
-      await fs.promises.writeFile(previewPath(id), preview)
     }
     // 同一实例先读头部元数据再生成缩略图，避免重复解析
     const img = sharp(input, { failOn: 'none' })
     const [meta, takenAt] = await Promise.all([img.metadata(), readTakenAt(row.path)])
+    // 库代次已变（备份导入换库）：本任务基于旧库行，全部写入作废
+    if (gen !== generation) return
+    if (preview) await fs.promises.writeFile(previewPath(id), preview)
     await img
       .rotate()
       .resize(512, 512, { fit: 'inside', withoutEnlargement: true })
       .webp({ quality: 80 })
       .toFile(thumbPath(id))
+    // 编码期间换库的残余窗口：已写出的错位产物随写随清，不污染新库
+    if (gen !== generation) {
+      fs.promises.rm(thumbPath(id), { force: true }).catch(() => undefined)
+      if (preview) fs.promises.rm(previewPath(id), { force: true }).catch(() => undefined)
+      return
+    }
     setPhotoDimsAndDate(id, meta.width ?? null, meta.height ?? null, takenAt)
     setThumbStatus(id, 1)
     enqueuePhash(id)
     emit({ id, status: 'ok' })
   } catch (err) {
     logError('thumb', err)
-    setThumbStatus(id, 2)
-    emit({ id, status: 'fail' })
+    // 换库后旧任务的失败不再污染新库的状态位
+    if (gen === generation) {
+      setThumbStatus(id, 2)
+      emit({ id, status: 'fail' })
+    }
   }
 }
 

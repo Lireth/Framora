@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs'
 import fs from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -15,19 +15,36 @@ vi.mock('electron', () => ({
 vi.mock('../src/main/db', () => ({
   getPhotoRow: (id: number) => rows.get(id),
   updatePhotoFileFields: vi.fn(),
-  updatePhotoMeta: vi.fn()
+  updatePhotoMeta: vi.fn(),
+  setPhotoDimsAndDate: vi.fn(),
+  setThumbStatus: vi.fn(),
+  listAllPhotoIds: vi.fn(() => []),
+  listPhotoIdsForRebuild: vi.fn(() => [])
 }))
+vi.mock('../src/main/phash', () => ({ enqueuePhash: vi.fn(), bumpPhashGeneration: vi.fn() }))
 vi.mock('../src/main/thumbs', () => ({
   backupsDir: () => tmpdir(),
   enqueueThumb: vi.fn(),
+  bumpThumbGeneration: vi.fn(),
   previewPath: (id: number) => path.join(previewDir, `${id}.preview.jpg`)
 }))
 vi.mock('../src/main/scanner', () => ({
   broadcastExport: (e: { done: number; total: number }) => broadcasts.push(e)
 }))
 
-import { exportPhotos, pickName, saveEdits, cancelExport, revertEdits } from '../src/main/imageops'
-import { previewPath } from '../src/main/thumbs'
+import {
+  exportPhotos,
+  pickName,
+  saveEdits,
+  cancelExport,
+  revertEdits,
+  listBackups,
+  rekeyEditBackups,
+  migrateLegacyEditBackups
+} from '../src/main/imageops'
+import { bumpThumbGeneration, enqueueThumb, previewPath } from '../src/main/thumbs'
+import { setThumbStatus } from '../src/main/db'
+import { enqueuePhash } from '../src/main/phash'
 import exifr from 'exifr'
 import type { ExportOptions } from '@shared/types'
 
@@ -363,5 +380,68 @@ describe('编辑写回原子性（O2 回归）', () => {
     await revertEdits(702)
     expect(readFileSync(path.join(srcDir, 'revert-1.jpg'))).toEqual(original)
     expect(readdirSync(srcDir).filter((n) => n.includes('.framora-'))).toEqual([])
+  })
+})
+
+describe('编辑备份身份绑定（O3）', () => {
+  it('换库 id 错位（同 id 不同路径）后旧备份不提供、不可恢复', async () => {
+    rows.clear()
+    await makeExifJpeg('bind-1.jpg')
+    addRow({ id: 800, file: 'bind-1.jpg' })
+    await saveEdits(800, { brightness: 10 })
+    expect(await listBackups(800)).toHaveLength(1)
+    // 模拟备份导入后 id 800 指向另一张照片（路径不同）
+    const row = rows.get(800)!
+    rows.set(800, { ...row, path: path.join(srcDir, 'other.jpg'), name: 'other.jpg' })
+    expect(await listBackups(800)).toEqual([])
+    await expect(revertEdits(800)).rejects.toThrow('没有可恢复的编辑备份')
+    // 显式指定错位备份名同样被身份校验拒绝（哈希不匹配）
+    await expect(revertEdits(800, `800-deadbeef-123.jpg`)).rejects.toThrow('无效的备份文件名')
+  })
+
+  it('rekeyEditBackups 把历史备份重绑定到新路径哈希，重命名后历史可恢复', async () => {
+    rows.clear()
+    // id 每次运行唯一：backupsDir 指向共享的 tmpdir 根，跨运行残留会污染按 id 断言
+    const uid = 800100 + (Date.now() % 100000)
+    await makeExifJpeg('rekey-1.jpg')
+    addRow({ id: uid, file: 'rekey-1.jpg' })
+    const original = readFileSync(path.join(srcDir, 'rekey-1.jpg'))
+    await saveEdits(uid, { brightness: 10 })
+    // 应用内批量重命名：先重命名磁盘文件，再更新行路径并重绑定备份
+    fs.renameSync(path.join(srcDir, 'rekey-1.jpg'), path.join(srcDir, 'renamed.jpg'))
+    const row = rows.get(uid)!
+    rows.set(uid, { ...row, path: path.join(srcDir, 'renamed.jpg'), name: 'renamed.jpg' })
+    rekeyEditBackups(uid, path.join(srcDir, 'renamed.jpg'))
+    expect(await listBackups(uid)).toHaveLength(1)
+    await revertEdits(uid)
+    expect(readFileSync(path.join(srcDir, 'renamed.jpg'))).toEqual(original)
+  })
+
+  it('migrateLegacyEditBackups 把裸 id 旧版备份按当前库重绑定', async () => {
+    rows.clear()
+    await makeExifJpeg('legacy-1.jpg')
+    addRow({ id: 802, file: 'legacy-1.jpg' })
+    writeFileSync(path.join(tmpdir(), `802-1700000000000.jpg`), 'legacy-backup-bytes')
+    migrateLegacyEditBackups()
+    const items = await listBackups(802)
+    expect(items).toHaveLength(1)
+    expect(items[0].ts).toBe(1700000000000)
+  })
+})
+
+describe('缩略图库代次（O3）', () => {
+  it('换库后代次递增：在途缩略图任务写入作废', async () => {
+    rows.clear()
+    await makeJpeg('gen-1.jpg')
+    addRow({ id: 900, file: 'gen-1.jpg' })
+    mkdirSync(path.join(tmpdir(), 'thumbs'), { recursive: true })
+    // run 在 enqueueThumb 内同步启动并捕获代次，随后递增使全部写入作废
+    enqueueThumb(900)
+    bumpThumbGeneration()
+    await new Promise((r) => setTimeout(r, 120))
+    expect(existsSync(path.join(tmpdir(), 'thumbs', '900.webp'))).toBe(false)
+    expect(existsSync(previewPath(900))).toBe(false)
+    expect(vi.mocked(setThumbStatus)).not.toHaveBeenCalled()
+    expect(vi.mocked(enqueuePhash)).not.toHaveBeenCalled()
   })
 })

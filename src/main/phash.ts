@@ -11,6 +11,13 @@ const queue: number[] = []
 const queued = new Set<number>()
 let running = 0
 
+/** 库代次：换库（备份导入）后递增，换库前已开始的计算不再写入哈希 */
+let generation = 0
+
+export function bumpPhashGeneration(): void {
+  generation++
+}
+
 export function enqueuePhash(id: number): void {
   if (queued.has(id)) return
   queued.add(id)
@@ -36,6 +43,8 @@ function pump(): void {
 async function run(id: number): Promise<void> {
   const row = getPhotoRow(id)
   if (!row || row.missing) return
+  // 换库检测基准：任务开始时捕获的库代次
+  const gen = generation
   const thumb = thumbPath(id)
   const source = fs.existsSync(thumb) ? thumb : row.path
   if (!fs.existsSync(source)) return
@@ -45,6 +54,8 @@ async function run(id: number): Promise<void> {
     .resize(9, 8, { fit: 'fill' })
     .raw()
     .toBuffer({ resolveWithObject: true })
+  // 库代次已变（备份导入换库）：旧任务计算的哈希属于错位行，不再写入
+  if (gen !== generation) return
   const { lo, hi } = packDhashBits(data)
   setPhotoPhash(id, lo, hi)
   markPhashDirty()

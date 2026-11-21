@@ -14,6 +14,7 @@ import {
   trackNewFile
 } from './scanner'
 import {
+  bumpThumbGeneration,
   cleanupOrphanThumbs,
   clearThumbQueue,
   enqueueThumb,
@@ -22,6 +23,7 @@ import {
   thumbPath,
   thumbsDir
 } from './thumbs'
+import { bumpPhashGeneration } from './phash'
 import { startWatcher, stopAllWatchers, stopWatcher } from './watcher'
 import {
   applyTemplate,
@@ -29,7 +31,9 @@ import {
   clearAllBackups,
   exportPhotos,
   listBackups,
+  migrateLegacyEditBackups,
   pickName,
+  rekeyEditBackups,
   revertEdits,
   saveEdits
 } from './imageops'
@@ -54,6 +58,9 @@ import type {
 } from '@shared/types'
 
 export function registerIpc(): void {
+  // 旧版编辑备份（裸 id 命名）按当前库一次性重绑定到路径哈希命名（O3）
+  migrateLegacyEditBackups()
+
   ipcMain.handle('app:info', () => ({
     version: app.getVersion(),
     electron: process.versions.electron,
@@ -211,20 +218,31 @@ export function registerIpc(): void {
     })
     if (r.canceled || !r.filePaths[0]) return null
     await db.importBackup(r.filePaths[0])
+    // 库代次递增：旧库在途的缩略图/感知哈希任务检测到代次变化即作废写入（O3）
+    bumpThumbGeneration()
+    bumpPhashGeneration()
+    void db.markPhashDirty()
     // 旧库的 watcher 与新库 id 不对应，全部停掉后按新库重建
     await stopAllWatchers()
     for (const f of listFolders()) {
       if (fs.existsSync(f.path)) startWatcher(f.id, f.path)
     }
-    let rebuilt = 0
-    for (const id of db.listAllPhotoIds()) {
-      if (!fs.existsSync(thumbPath(id))) {
-        db.setThumbStatus(id, 0)
-        enqueueThumb(id)
-        rebuilt++
+    // 清空全部按 id 命名的缩略图产物：旧库 id 与新库照片错位，immutable 缓存
+    // 会把错位结果固化，必须全量重建而非仅补缺失
+    const thumbs = thumbsDir()
+    try {
+      for (const name of fs.readdirSync(thumbs)) {
+        fs.rmSync(path.join(thumbs, name), { force: true, recursive: true })
       }
+    } catch {
+      /* 目录尚不存在等 */
     }
-    return { photos: db.libraryStats().total, rebuiltThumbs: rebuilt }
+    const ids = db.listAllPhotoIds()
+    for (const id of ids) {
+      db.setThumbStatus(id, 0)
+      enqueueThumb(id)
+    }
+    return { photos: db.libraryStats().total, rebuiltThumbs: ids.length }
   })
 
   /** 重复治理：每组保留一张（最佳=体积最大，其次最早；最早=导入时间最早），选中其余冗余项 */
@@ -471,6 +489,8 @@ export function registerIpc(): void {
         used.add(newPath.toLowerCase())
         touchedPaths.push(row.path, newPath)
         db.updatePhotoPath(row.id, newPath, newName)
+        // 路径哈希变化：编辑备份重绑定到新路径，历史保持可恢复（O3）
+        rekeyEditBackups(row.id, newPath)
         renamed++
       } catch (err) {
         logError('batchRename', err)

@@ -1,5 +1,21 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
+// 首帧主题：preload 先于页面脚本与首次绘制运行，且不受 CSP 限制。
+// 读取 localStorage 镜像（store 每次切换主题时写入）提前应用 .dark 类，
+// 消除浅色 / 跟随系统用户的启动主题闪变；无镜像时保持 index.html 默认深色。
+try {
+  const mode = localStorage.getItem('framora-theme')
+  const dark =
+    mode === 'light'
+      ? false
+      : mode === 'system'
+        ? matchMedia('(prefers-color-scheme: dark)').matches
+        : true
+  document.documentElement.classList.toggle('dark', dark)
+} catch {
+  /* 首次启动无镜像，保持默认 */
+}
+
 const CALLABLE = new Set([
   'app:info',
   'settings:get',

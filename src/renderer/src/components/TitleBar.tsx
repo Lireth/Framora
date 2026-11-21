@@ -48,7 +48,7 @@ function WinButton({
 }
 
 export function TitleBar(): React.JSX.Element {
-  const theme = useStore((s) => s.theme)
+  const resolved = useStore((s) => s.resolvedTheme)
   const setTheme = useStore((s) => s.setTheme)
   const setSettingsOpen = useStore((s) => s.setSettingsOpen)
   const [maximized, setMaximized] = useState(false)
@@ -75,9 +75,9 @@ export function TitleBar(): React.JSX.Element {
       <div className="flex-1" />
       <div className="no-drag flex items-center gap-0.5">
         <IconButton
-          icon={theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
-          label={theme === 'dark' ? '切换浅色主题' : '切换深色主题'}
-          onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+          icon={resolved === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
+          label={resolved === 'dark' ? '切换浅色主题' : '切换深色主题'}
+          onClick={() => setTheme(resolved === 'dark' ? 'light' : 'dark')}
         />
         <IconButton
           icon={<Settings size={15} />}

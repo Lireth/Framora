@@ -38,6 +38,8 @@ export interface Filters {
 
 interface AppState extends Filters {
   theme: ThemeMode
+  /** 实际生效主题：theme=system 时跟随 OS 深浅色解析 */
+  resolvedTheme: 'dark' | 'light'
   folders: FolderInfo[]
   tags: TagInfo[]
   albums: AlbumInfo[]
@@ -152,6 +154,15 @@ const VALID_SORTS: SortKey[] = ['taken', 'imported', 'name', 'rating', 'size']
 /** 分页加载数量：首屏与每次增量加载 */
 const PAGE_SIZE = 500
 
+/** 系统深浅色媒体查询：theme=system 时的解析依据 */
+const systemDarkMq =
+  typeof window !== 'undefined' ? window.matchMedia('(prefers-color-scheme: dark)') : null
+
+/** 由用户选择模式解析实际生效主题 */
+function resolveTheme(mode: ThemeMode): 'dark' | 'light' {
+  return mode === 'system' ? (systemDarkMq?.matches ? 'dark' : 'light') : mode
+}
+
 function buildQuery(s: AppState): PhotoQuery {
   return {
     scope: s.scope,
@@ -167,6 +178,7 @@ function buildQuery(s: AppState): PhotoQuery {
 
 export const useStore = create<AppState>((set, get) => ({
   theme: 'dark',
+  resolvedTheme: 'dark',
   scope: 'all',
   scopeId: undefined,
   keyword: '',
@@ -209,12 +221,23 @@ export const useStore = create<AppState>((set, get) => ({
   init: async () => {
     try {
       const saved = await api.getSetting('theme')
-      const theme = saved === 'light' ? 'light' : 'dark'
-      set({ theme })
-      if (theme === 'light') api.setTheme('light')
+      const theme: ThemeMode =
+        saved === 'light' || saved === 'dark' || saved === 'system' ? saved : 'dark'
+      set({ theme, resolvedTheme: resolveTheme(theme) })
+      // 同步镜像到 localStorage：preload 在首帧前读取，消除浅色/系统用户的启动闪变
+      try {
+        localStorage.setItem('framora-theme', theme)
+      } catch {
+        /* ignore */
+      }
     } catch {
       /* ignore */
     }
+    // 跟随系统主题：OS 深浅色切换时仅 system 模式需要重新解析
+    systemDarkMq?.addEventListener?.('change', () => {
+      const s = get()
+      if (s.theme === 'system') set({ resolvedTheme: resolveTheme('system') })
+    })
     // 恢复上次的视图状态与搜索历史
     try {
       const rawHistory = await api.getSetting('searchHistory')
@@ -267,7 +290,13 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   setTheme: (mode) => {
-    set({ theme: mode })
+    set({ theme: mode, resolvedTheme: resolveTheme(mode) })
+    // localStorage 镜像供 preload 首帧使用（ipc 侧同时持久化到索引库）
+    try {
+      localStorage.setItem('framora-theme', mode)
+    } catch {
+      /* ignore */
+    }
     api.setTheme(mode).catch(() => undefined)
   },
 

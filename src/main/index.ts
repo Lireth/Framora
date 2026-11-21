@@ -1,6 +1,6 @@
 import path from 'node:path'
 import fs from 'node:fs'
-import { BrowserWindow, Menu, app, dialog, net, protocol, screen } from 'electron'
+import { BrowserWindow, Menu, app, dialog, nativeTheme, net, protocol, screen } from 'electron'
 import { pathToFileURL } from 'node:url'
 import { initDb, closeDb, getSetting, setSetting, listFolders, listFolderPaths, listPhotoIdsPendingThumb } from './db'
 import { themeBackground } from './theme'
@@ -77,7 +77,16 @@ function isOnSomeDisplay(x: number, y: number): boolean {
 function createWindow(): void {
   const saved = loadWindowBounds()
   const usePosition = saved ? isOnSomeDisplay(saved.x, saved.y) : false
-  const initialTheme: ThemeMode = getSetting('theme') === 'light' ? 'light' : 'dark'
+  // 首帧背景色主题：system 模式经 nativeTheme 解析（better-sqlite3 同步读，无闪变窗口）
+  const savedMode = getSetting('theme')
+  const initialTheme: ThemeMode =
+    savedMode === 'system'
+      ? nativeTheme.shouldUseDarkColors
+        ? 'dark'
+        : 'light'
+      : savedMode === 'light'
+        ? 'light'
+        : 'dark'
   win = new BrowserWindow({
     width: saved?.width ?? DEFAULT_WIDTH,
     height: saved?.height ?? DEFAULT_HEIGHT,

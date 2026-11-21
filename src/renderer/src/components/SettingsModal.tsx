@@ -7,6 +7,7 @@ import {
   FileWarning,
   HardDrive,
   Images,
+  Monitor,
   Moon,
   Sun,
   Upload
@@ -109,7 +110,8 @@ export function SettingsModal(): React.JSX.Element | null {
               {(
                 [
                   ['dark', '深色', <Moon key="d" size={14} />],
-                  ['light', '浅色', <Sun key="l" size={14} />]
+                  ['light', '浅色', <Sun key="l" size={14} />],
+                  ['system', '跟随系统', <Monitor key="s" size={14} />]
                 ] as const
               ).map(([v, label, icon]) => (
                 <button

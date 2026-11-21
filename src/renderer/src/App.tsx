@@ -16,13 +16,13 @@ import { ShortcutHelpModal, Toasts } from './components/ui'
 import { deleteViewerPhotoAction, rateViewerPhotoAction } from './lib/actions'
 
 export default function App(): React.JSX.Element {
-  const theme = useStore((s) => s.theme)
+  const resolvedTheme = useStore((s) => s.resolvedTheme)
   const detailOpen = useStore((s) => s.detailOpen)
   const viewerOpen = useStore((s) => s.viewerOpen)
 
   useEffect(() => {
-    document.documentElement.classList.toggle('dark', theme === 'dark')
-  }, [theme])
+    document.documentElement.classList.toggle('dark', resolvedTheme === 'dark')
+  }, [resolvedTheme])
 
   /* 阻止文件拖放的窗口默认行为：Chromium 会把拖入的文件当作导航目标打开。
      应用自身的原生拖拽（网格/查看器拖出）也可能落在窗口内（如侧边栏之外），必须拦截 */

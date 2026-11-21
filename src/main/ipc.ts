@@ -514,6 +514,7 @@ export function registerIpc(): void {
 
   /* ---------- window / theme ---------- */
   ipcMain.handle('window:setTheme', (_e, mode: ThemeMode) => {
+    if (mode !== 'dark' && mode !== 'light' && mode !== 'system') return
     db.setSetting('theme', mode)
   })
 

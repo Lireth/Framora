@@ -107,3 +107,16 @@ img {
     background-position: -80% 0;
   }
 }
+
+/* 无障碍：系统开启「减弱动态效果」时移除动画与过渡
+   （覆盖 tailwind 动画、骨架屏 shimmer 与查看器内联 transform 过渡） */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

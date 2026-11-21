@@ -225,7 +225,8 @@ export interface AppInfo {
   platform: string
 }
 
-export type ThemeMode = 'dark' | 'light'
+/** 主题模式：system 跟随操作系统深浅色（渲染层经 prefers-color-scheme 解析） */
+export type ThemeMode = 'dark' | 'light' | 'system'
 
 /** 手动检查更新的结果 */
 export interface UpdateCheckResult {

@@ -32,6 +32,8 @@ const CALLABLE = new Set([
   'library:stats',
   'library:exportBackup',
   'library:importBackup',
+  'undo:peek',
+  'undo:perform',
   'duplicates:selectRedundant',
   'photos:query',
   'photos:queryIds',
@@ -87,7 +89,7 @@ const CALLABLE = new Set([
   'update:download',
   'update:cancelDownload',
   'update:install',
-  'update:getState'
+  'update:getState',
 ])
 
 const EVENTS = new Set([
@@ -97,7 +99,7 @@ const EVENTS = new Set([
   'evt:library',
   'evt:export',
   'evt:update',
-  'evt:maximize'
+  'evt:maximize',
 ])
 
 const api = {
@@ -114,7 +116,7 @@ const api = {
     return () => {
       ipcRenderer.removeListener(channel, listener)
     }
-  }
+  },
 }
 
 contextBridge.exposeInMainWorld('framora', api)

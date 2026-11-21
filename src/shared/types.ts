@@ -257,3 +257,24 @@ export interface UpdateState {
   percent?: number
   message?: string
 }
+
+/** 可撤销的元数据删除类型：资料库文件夹 / 标签 / 相册 */
+export type UndoKind = 'folder' | 'tag' | 'album'
+
+/** 一次可撤销的元数据删除（软删除，恢复即清除 deleted_at） */
+export interface UndoEntry {
+  kind: UndoKind
+  id: number
+  /** 删除前的显示名，用于状态栏与提示文案 */
+  label: string
+  /** 受影响的可见照片数 */
+  photos: number
+  /** 操作时间戳（毫秒），用于旧条目排序与展示 */
+  at: number
+}
+
+export const UNDO_KIND_LABEL: Record<UndoKind, string> = {
+  folder: '文件夹',
+  tag: '标签',
+  album: '相册',
+}

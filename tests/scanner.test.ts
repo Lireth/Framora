@@ -13,9 +13,10 @@ vi.mock('../src/main/db', () => ({
   insertPhoto: vi.fn(),
   insertPhotosBatch: vi.fn(() => [10]),
   listPhotoRowsByFolder: vi.fn(() => []),
+  restoreFolder: vi.fn(),
   updatePhotoFileFields: vi.fn(),
   updatePhotoFilesBatch: vi.fn(),
-  updatePhotoPath: vi.fn()
+  updatePhotoPath: vi.fn(),
 }))
 vi.mock('../src/main/thumbs', () => ({ enqueueThumb: vi.fn() }))
 
@@ -26,7 +27,7 @@ import {
   isImagePath,
   trackChangedFile,
   trackDeletedFile,
-  trackNewFile
+  trackNewFile,
 } from '../src/main/scanner'
 import {
   addFolder,
@@ -35,9 +36,10 @@ import {
   insertPhoto,
   insertPhotosBatch,
   listPhotoRowsByFolder,
+  restoreFolder,
   updatePhotoFileFields,
   updatePhotoFilesBatch,
-  updatePhotoPath
+  updatePhotoPath,
 } from '../src/main/db'
 import { enqueueThumb } from '../src/main/thumbs'
 
@@ -113,7 +115,7 @@ describe('缺失标记与恢复（O4 双漏洞回归）', () => {
     vi.mocked(listPhotoRowsByFolder).mockReturnValueOnce([
       { id: 31, path: path.join(dir, 'gone.jpg'), mtime: 1, size: 1, missing: 0 },
       { id: 32, path: path.join(dir, 'still.jpg'), mtime: 1, size: 1, missing: 0 },
-      { id: 33, path: path.join(dir, 'gone2.jpg'), mtime: 1, size: 1, missing: 1 }
+      { id: 33, path: path.join(dir, 'gone2.jpg'), mtime: 1, size: 1, missing: 1 },
     ])
     // 磁盘上仅 still.jpg 存在：gone.jpg 在应用关闭期间被删除
     writeFileSync(path.join(dir, 'still.jpg'), 'x')
@@ -130,7 +132,7 @@ describe('缺失标记与恢复（O4 双漏洞回归）', () => {
     vi.mocked(findPhotoByPath).mockReturnValueOnce({
       id: 44,
       path: 'C:\\pic\\a.jpg',
-      missing: 1
+      missing: 1,
     } as never)
     trackNewFile(1, 'C:\\pic\\a.jpg')
     expect(updatePhotoFileFields).toHaveBeenCalledWith(44, { missing: 0 })
@@ -142,7 +144,7 @@ describe('缺失标记与恢复（O4 双漏洞回归）', () => {
     vi.mocked(findPhotoByPath).mockReturnValueOnce({
       id: 45,
       path: 'C:\\pic\\A.jpg',
-      missing: 1
+      missing: 1,
     } as never)
     trackNewFile(1, 'C:\\pic\\a.jpg')
     expect(updatePhotoPath).toHaveBeenCalledWith(45, 'C:\\pic\\a.jpg', 'a.jpg')
@@ -159,7 +161,7 @@ describe('缺失标记与恢复（O4 双漏洞回归）', () => {
     expect(updatePhotoFileFields).toHaveBeenCalledWith(46, {
       size: expect.any(Number),
       mtime: expect.any(Number),
-      missing: 0
+      missing: 0,
     })
     expect(enqueueThumb).toHaveBeenCalledWith(46)
   })
@@ -185,6 +187,28 @@ describe('importFolder 已知不支持格式计数', () => {
     const inserted = vi.mocked(insertPhotosBatch).mock.calls[0][0]
     expect(inserted).toHaveLength(1)
     expect(inserted[0].ext).toBe('jpg')
+  })
+
+  it('已移除（软删除）的同路径文件夹在重新导入时复活，而不是新建重复根', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'framora-scan-revive-'))
+    await sharp({ create: { width: 8, height: 8, channels: 3, background: '#fff' } })
+      .jpeg()
+      .toFile(path.join(dir, 'a.jpg'))
+    vi.mocked(getFolderByPath).mockReturnValue({
+      id: 7,
+      path: dir,
+      name: path.basename(dir),
+      added_at: 1,
+      count: 0,
+      deleted_at: 123,
+    })
+    vi.mocked(addFolder).mockClear()
+    vi.mocked(restoreFolder).mockClear()
+
+    const r = await importFolder(dir)
+    expect(r.folderId).toBe(7)
+    expect(restoreFolder).toHaveBeenCalledWith(7)
+    expect(addFolder).not.toHaveBeenCalled()
   })
 
   it('取消扫描：不写库，结果标记 cancelled', async () => {

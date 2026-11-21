@@ -11,7 +11,7 @@ import {
   importFolder,
   isImagePath,
   suppressTracking,
-  trackNewFile
+  trackNewFile,
 } from './scanner'
 import {
   bumpThumbGeneration,
@@ -21,7 +21,7 @@ import {
   previewPath,
   rebuildAllThumbs,
   thumbPath,
-  thumbsDir
+  thumbsDir,
 } from './thumbs'
 import { bumpPhashGeneration } from './phash'
 import { startWatcher, stopAllWatchers, stopWatcher } from './watcher'
@@ -35,7 +35,7 @@ import {
   pickName,
   rekeyEditBackups,
   revertEdits,
-  saveEdits
+  saveEdits,
 } from './imageops'
 import { logsDir, logError } from './log'
 import { listFolders } from './db'
@@ -44,7 +44,7 @@ import {
   checkForUpdates,
   downloadUpdate,
   getUpdateState,
-  installUpdate
+  installUpdate,
 } from './updater'
 import type {
   DeleteResult,
@@ -54,17 +54,78 @@ import type {
   MetaPair,
   PhotoQuery,
   SmartAlbumQuery,
-  ThemeMode
+  ThemeMode,
+  UndoEntry,
+  UndoKind,
 } from '@shared/types'
+
+/* ---------- 元数据删除撤销栈 ---------- */
+
+/** 最多保留的撤销条目；跨重启持久化在 settings，避免「删完忘记撤销」后永久丢失整理成果 */
+const UNDO_MAX = 10
+let undoStack: UndoEntry[] = []
+
+function isUndoEntry(v: unknown): v is UndoEntry {
+  const o = v as Partial<UndoEntry> | null
+  return (
+    !!o &&
+    (o.kind === 'folder' || o.kind === 'tag' || o.kind === 'album') &&
+    typeof o.id === 'number' &&
+    Number.isFinite(o.id) &&
+    typeof o.label === 'string' &&
+    typeof o.photos === 'number' &&
+    typeof o.at === 'number'
+  )
+}
+
+function loadUndoStack(): void {
+  try {
+    const raw = db.getSetting('undoStack')
+    if (!raw) return
+    const list = JSON.parse(raw) as unknown
+    if (Array.isArray(list)) undoStack = list.filter(isUndoEntry).slice(-UNDO_MAX)
+  } catch {
+    undoStack = []
+  }
+}
+
+function saveUndoStack(): void {
+  try {
+    db.setSetting('undoStack', JSON.stringify(undoStack))
+  } catch {
+    /* 持久化失败不影响会话内撤销 */
+  }
+}
+
+function pushUndo(e: Omit<UndoEntry, 'at'>): void {
+  undoStack.push({ ...e, at: Date.now() })
+  if (undoStack.length > UNDO_MAX) undoStack.splice(0, undoStack.length - UNDO_MAX)
+  saveUndoStack()
+}
+
+/** 条目已通过其他路径恢复（重新导入 / 同名新建）时移除，避免状态栏展示过期撤销 */
+function dropUndo(kind: UndoKind, id: number): void {
+  const next = undoStack.filter((e) => !(e.kind === kind && e.id === id))
+  if (next.length !== undoStack.length) {
+    undoStack = next
+    saveUndoStack()
+  }
+}
+
+function clearUndoStack(): void {
+  undoStack = []
+  saveUndoStack()
+}
 
 export function registerIpc(): void {
   // 旧版编辑备份（裸 id 命名）按当前库一次性重绑定到路径哈希命名（O3）
   migrateLegacyEditBackups()
+  loadUndoStack()
 
   ipcMain.handle('app:info', () => ({
     version: app.getVersion(),
     electron: process.versions.electron,
-    platform: process.platform
+    platform: process.platform,
   }))
 
   /* ---------- settings ---------- */
@@ -78,7 +139,7 @@ export function registerIpc(): void {
     const win = BrowserWindow.getFocusedWindow()
     const r = await dialog.showOpenDialog(win!, {
       title: '选择包含照片的文件夹',
-      properties: ['openDirectory', 'createDirectory']
+      properties: ['openDirectory', 'createDirectory'],
     })
     return r.canceled ? null : r.filePaths[0]
   })
@@ -87,7 +148,7 @@ export function registerIpc(): void {
     const win = BrowserWindow.getFocusedWindow()
     const r = await dialog.showOpenDialog(win!, {
       title: '选择导出位置',
-      properties: ['openDirectory', 'createDirectory']
+      properties: ['openDirectory', 'createDirectory'],
     })
     return r.canceled ? null : r.filePaths[0]
   })
@@ -97,7 +158,7 @@ export function registerIpc(): void {
     const r = await dialog.showOpenDialog(win!, {
       title: '选择要导入的照片',
       properties: ['openFile', 'multiSelections'],
-      filters: [{ name: '图片', extensions: [...IMAGE_EXTS] }]
+      filters: [{ name: '图片', extensions: [...IMAGE_EXTS] }],
     })
     return r.canceled ? null : r.filePaths
   })
@@ -109,6 +170,8 @@ export function registerIpc(): void {
     const result = await importFolder(folderPath)
     const folder = db.getFolderByPath(folderPath)
     if (folder) await startWatcher(folder.id, folder.path)
+    // 重新导入同一路径会复活已移除的文件夹，对应撤销条目已失去意义
+    dropUndo('folder', result.folderId)
     return result
   })
 
@@ -132,7 +195,7 @@ export function registerIpc(): void {
       const win = BrowserWindow.getFocusedWindow()
       const r = await dialog.showOpenDialog(win!, {
         title: '选择库外照片的导入目标文件夹',
-        properties: ['openDirectory', 'createDirectory']
+        properties: ['openDirectory', 'createDirectory'],
       })
       if (r.canceled) {
         skipped += external.length
@@ -182,12 +245,12 @@ export function registerIpc(): void {
 
   ipcMain.handle('library:removeFolder', async (_e, folderId: number) => {
     await stopWatcher(folderId)
-    const rows = db.removeFolderRows(folderId)
-    for (const r of rows) {
-      fs.promises.rm(thumbPath(r.id), { force: true }).catch(() => undefined)
-      fs.promises.rm(previewPath(r.id), { force: true }).catch(() => undefined)
-    }
-    return { removed: rows.length }
+    // 软删除：照片行、标签/相册关系、缩略图全部保留，撤销时无需重建
+    const info = db.softRemoveFolder(folderId)
+    if (!info) return { removed: 0 }
+    pushUndo({ kind: 'folder', id: folderId, label: info.name, photos: info.photos })
+    broadcastLibraryChanged()
+    return { removed: info.photos }
   })
 
   ipcMain.handle('library:stats', () => db.libraryStats())
@@ -201,7 +264,7 @@ export function registerIpc(): void {
     const r = await dialog.showSaveDialog(win!, {
       title: '导出索引库备份',
       defaultPath: defaultName,
-      filters: [{ name: 'SQLite 数据库', extensions: ['db'] }]
+      filters: [{ name: 'SQLite 数据库', extensions: ['db'] }],
     })
     if (r.canceled || !r.filePath) return null
     await db.exportBackup(r.filePath)
@@ -214,10 +277,12 @@ export function registerIpc(): void {
     const r = await dialog.showOpenDialog(win!, {
       title: '选择索引库备份文件',
       properties: ['openFile'],
-      filters: [{ name: 'SQLite 数据库', extensions: ['db'] }]
+      filters: [{ name: 'SQLite 数据库', extensions: ['db'] }],
     })
     if (r.canceled || !r.filePaths[0]) return null
     await db.importBackup(r.filePaths[0])
+    // 换库后旧库实体 id 全部失效，撤销栈必须清空
+    clearUndoStack()
     // 库代次递增：旧库在途的缩略图/感知哈希任务检测到代次变化即作废写入（O3）
     bumpThumbGeneration()
     bumpPhashGeneration()
@@ -267,10 +332,10 @@ export function registerIpc(): void {
 
   /* ---------- photos ---------- */
   ipcMain.handle('photos:query', (_e, q: PhotoQuery) =>
-    q.scope === 'duplicates' ? db.queryDuplicates(q) : db.queryPhotos(q)
+    q.scope === 'duplicates' ? db.queryDuplicates(q) : db.queryPhotos(q),
   )
   ipcMain.handle('photos:queryIds', (_e, q: PhotoQuery) =>
-    q.scope === 'duplicates' ? db.duplicatePhotoIds() : db.queryPhotoIds(q)
+    q.scope === 'duplicates' ? db.duplicatePhotoIds() : db.queryPhotoIds(q),
   )
   ipcMain.handle('photos:get', (_e, id: number) => db.getPhotoRecord(id))
 
@@ -284,11 +349,11 @@ export function registerIpc(): void {
         title: string | null
         description: string | null
         orientation: number
-      }>
+      }>,
     ) => {
       db.updatePhotoMeta(id, patch)
       return db.getPhotoRecord(id)
-    }
+    },
   )
 
   ipcMain.handle('photos:metadata', async (_e, id: number) => {
@@ -301,7 +366,7 @@ export function registerIpc(): void {
       { label: '大小', value: formatBytes(row.size) },
       { label: '拍摄时间', value: row.taken_at ? formatDateTime(row.taken_at) : '未知' },
       { label: '导入时间', value: formatDateTime(row.imported_at) },
-      { label: '路径', value: row.path }
+      { label: '路径', value: row.path },
     ]
     let src = row.path
     if (!fs.existsSync(src)) {
@@ -324,7 +389,7 @@ export function registerIpc(): void {
           icc: false,
           iptc: false,
           translateValues: true,
-          reviveValues: true
+          reviveValues: true,
         })
         if (d) {
           pushPair(exifPairs, '相机制造商', d.Make)
@@ -378,14 +443,14 @@ export function registerIpc(): void {
       }
     }
     await Promise.all(
-      Array.from({ length: Math.max(1, Math.min(CONCURRENCY, rows.length)) }, worker)
+      Array.from({ length: Math.max(1, Math.min(CONCURRENCY, rows.length)) }, worker),
     )
     db.deletePhotoRows(okIds)
     await Promise.all(
       okIds.flatMap((id) => [
         fs.promises.rm(thumbPath(id), { force: true }).catch(() => undefined),
-        fs.promises.rm(previewPath(id), { force: true }).catch(() => undefined)
-      ])
+        fs.promises.rm(previewPath(id), { force: true }).catch(() => undefined),
+      ]),
     )
     broadcastLibraryChanged()
     return { deleted: okIds.length, failed }
@@ -404,10 +469,8 @@ export function registerIpc(): void {
 
   ipcMain.handle('photos:emptyTrash', async () => purgePhotoRows(db.listAllDeletedRows()))
 
-  ipcMain.handle(
-    'photos:export',
-    async (_e, ids: number[], destDir: string, opts: ExportOptions) =>
-      exportPhotos(ids, destDir, opts)
+  ipcMain.handle('photos:export', async (_e, ids: number[], destDir: string, opts: ExportOptions) =>
+    exportPhotos(ids, destDir, opts),
   )
 
   ipcMain.handle('photos:cancelExport', () => cancelExport())
@@ -441,22 +504,56 @@ export function registerIpc(): void {
 
   ipcMain.handle('thumbs:clearQueue', () => clearThumbQueue())
 
+  /* ---------- undo（元数据软删除撤销） ---------- */
+
+  ipcMain.handle('undo:peek', () => undoStack[undoStack.length - 1] ?? null)
+
+  ipcMain.handle('undo:perform', async () => {
+    const entry = undoStack[undoStack.length - 1]
+    if (!entry) return null
+    // 先恢复成功再出栈：恢复抛错时保留条目，用户可重试
+    if (entry.kind === 'folder') {
+      const folder = db.restoreFolder(entry.id)
+      // 路径已不存在时仅恢复索引（照片会在下次扫描标记缺失），不重挂监听
+      if (folder && fs.existsSync(folder.path)) await startWatcher(entry.id, folder.path)
+    } else if (entry.kind === 'tag') {
+      db.restoreTag(entry.id)
+    } else {
+      db.restoreAlbum(entry.id)
+    }
+    undoStack.pop()
+    saveUndoStack()
+    broadcastLibraryChanged()
+    return entry
+  })
+
   /* ---------- tags ---------- */
   ipcMain.handle('tags:list', () => db.listTags())
-  ipcMain.handle('tags:create', (_e, name: string, color: string | null) =>
-    db.createTag(name.trim(), color)
-  )
+  ipcMain.handle('tags:create', (_e, name: string, color: string | null) => {
+    const tag = db.createTag(name.trim(), color)
+    // 同名新建会复活软删除标签，旧撤销条目不再适用
+    dropUndo('tag', tag.id)
+    return tag
+  })
   ipcMain.handle('tags:rename', (_e, id: number, name: string) => db.renameTag(id, name.trim()))
-  ipcMain.handle('tags:setColor', (_e, id: number, color: string | null) => db.setTagColor(id, color))
-  ipcMain.handle('tags:delete', (_e, id: number) => db.deleteTag(id))
+  ipcMain.handle('tags:setColor', (_e, id: number, color: string | null) =>
+    db.setTagColor(id, color),
+  )
+  ipcMain.handle('tags:delete', (_e, id: number) => {
+    const info = db.deleteTag(id)
+    if (!info) throw new Error('标签不存在或已删除')
+    pushUndo({ kind: 'tag', id, label: info.name, photos: info.photos })
+    broadcastLibraryChanged()
+    return info
+  })
   ipcMain.handle('photos:setTags', (_e, photoId: number, tagIds: number[]) =>
-    db.setPhotoTags(photoId, tagIds)
+    db.setPhotoTags(photoId, tagIds),
   )
 
   ipcMain.handle(
     'photos:batchTags',
     (_e, ids: number[], addTagIds: number[], removeTagIds: number[]) =>
-      db.batchTags(ids, addTagIds, removeTagIds)
+      db.batchTags(ids, addTagIds, removeTagIds),
   )
 
   ipcMain.handle('photos:batchRename', async (_e, ids: number[], template: string) => {
@@ -502,33 +599,39 @@ export function registerIpc(): void {
     return { renamed, skipped, failed }
   })
   ipcMain.handle('photos:batchRate', (_e, ids: number[], rating: number) =>
-    db.batchRate(ids, rating)
+    db.batchRate(ids, rating),
   )
   ipcMain.handle('photos:batchAlbum', (_e, ids: number[], albumId: number | null) =>
-    db.batchAlbum(ids, albumId)
+    db.batchAlbum(ids, albumId),
   )
   ipcMain.handle('photos:removeAlbum', (_e, photoId: number, albumId: number) =>
-    db.removeFromAlbum(photoId, albumId)
+    db.removeFromAlbum(photoId, albumId),
   )
 
   /* ---------- albums ---------- */
   ipcMain.handle('albums:list', () => db.listAlbums())
   ipcMain.handle('albums:create', (_e, name: string, color: string | null) =>
-    db.createAlbum(name.trim(), color)
+    db.createAlbum(name.trim(), color),
   )
   ipcMain.handle('albums:rename', (_e, id: number, name: string) => db.renameAlbum(id, name.trim()))
   ipcMain.handle('albums:setColor', (_e, id: number, color: string | null) =>
-    db.setAlbumColor(id, color)
+    db.setAlbumColor(id, color),
   )
-  ipcMain.handle('albums:delete', (_e, id: number) => db.deleteAlbum(id))
+  ipcMain.handle('albums:delete', (_e, id: number) => {
+    const info = db.deleteAlbum(id)
+    if (!info) throw new Error('相册不存在或已删除')
+    pushUndo({ kind: 'album', id, label: info.name, photos: info.photos })
+    broadcastLibraryChanged()
+    return info
+  })
 
   /* ---------- smart albums ---------- */
   ipcMain.handle('smartAlbums:list', () => db.listSmartAlbums())
   ipcMain.handle('smartAlbums:create', (_e, name: string, query: SmartAlbumQuery) =>
-    db.createSmartAlbum(name.trim(), query)
+    db.createSmartAlbum(name.trim(), query),
   )
   ipcMain.handle('smartAlbums:rename', (_e, id: number, name: string) =>
-    db.renameSmartAlbum(id, name.trim())
+    db.renameSmartAlbum(id, name.trim()),
   )
   ipcMain.handle('smartAlbums:delete', (_e, id: number) => db.deleteSmartAlbum(id))
 
@@ -597,7 +700,11 @@ export function registerIpc(): void {
     const iconPath = path.join(userData, `drag-icon-${Date.now()}.png`)
     try {
       const src = fs.existsSync(thumbPath(rows[0].id)) ? thumbPath(rows[0].id) : rows[0].path
-      await sharp(src, { failOn: 'none' }).rotate().resize(48, 48, { fit: 'inside' }).png().toFile(iconPath)
+      await sharp(src, { failOn: 'none' })
+        .rotate()
+        .resize(48, 48, { fit: 'inside' })
+        .png()
+        .toFile(iconPath)
     } catch {
       // 打包产物不含 build/ 目录（files 仅打包 out/**），应用图标兜底会缺失；
       // 合成占位图标，保证拖拽手势不会静默失效
@@ -607,7 +714,11 @@ export function registerIpc(): void {
         .catch(() => undefined)
       if (!fs.existsSync(iconPath)) return
     }
-    win.webContents.startDrag({ file: rows[0].path, files: rows.map((r) => r.path), icon: iconPath })
+    win.webContents.startDrag({
+      file: rows[0].path,
+      files: rows.map((r) => r.path),
+      icon: iconPath,
+    })
   })
 
   /* ---------- update（手动检查，隐私优先） ---------- */

@@ -4,7 +4,15 @@
  * 每个用例使用独立临时 userData 目录，避免跨用例状态污染。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import Database from 'better-sqlite3'
@@ -16,7 +24,7 @@ vi.mock('electron', () => ({
   // getPath 仅在 initDb 等函数内被调用，届时 userData 已初始化
   app: { getPath: () => userData },
   BrowserWindow: { getAllWindows: () => [] },
-  dialog: { showMessageBoxSync: () => 0 }
+  dialog: { showMessageBoxSync: () => 0 },
 }))
 
 import * as db from '../src/main/db'
@@ -38,7 +46,7 @@ function seed(
     takenAt?: number
     importedAt?: number
     missing?: boolean
-  } = {}
+  } = {},
 ): number {
   const id = db.insertPhoto({
     folder_id: folderId,
@@ -47,7 +55,7 @@ function seed(
     ext: 'jpg',
     size: opts.size ?? 1000,
     mtime: 1,
-    imported_at: opts.importedAt ?? IMPORT_TS
+    imported_at: opts.importedAt ?? IMPORT_TS,
   })
   if (opts.title !== undefined || opts.description !== undefined) {
     db.updatePhotoMeta(id, { title: opts.title, description: opts.description })
@@ -102,7 +110,8 @@ describe('迁移与设置', () => {
   })
 })
 
-describe('迁移守卫与备份策略', () => {  it('版本号错位的历史库重跑迁移幂等（加列/触发器守卫生效）', async () => {
+describe('迁移守卫与备份策略', () => {
+  it('版本号错位的历史库重跑迁移幂等（加列/触发器守卫生效）', async () => {
     const f = newFolder('C:\\pics')
     const id = seed(f, 'guard-1')
     db.closeDb()
@@ -156,13 +165,13 @@ describe('缩略图管线（O13 真实集成）', () => {
   async function makePhoto(
     folderId: number,
     name: string,
-    opts: { orientation?: number } = {}
+    opts: { orientation?: number } = {},
   ): Promise<number> {
     const imgPath = path.join(userData, name)
     const img = sharp({
       create: opts.orientation
         ? { width: 20, height: 40, channels: 3, background: '#7fb3d5' }
-        : { width: 60, height: 40, channels: 3, background: '#7fb3d5' }
+        : { width: 60, height: 40, channels: 3, background: '#7fb3d5' },
     })
     if (opts.orientation) img.withMetadata({ orientation: opts.orientation })
     await img.jpeg().toFile(imgPath)
@@ -173,7 +182,7 @@ describe('缩略图管线（O13 真实集成）', () => {
       ext: 'jpg',
       size: 1000,
       mtime: 1,
-      imported_at: IMPORT_TS
+      imported_at: IMPORT_TS,
     })
   }
 
@@ -221,7 +230,7 @@ describe('缩略图管线（O13 真实集成）', () => {
       ext: 'jpg',
       size: 1,
       mtime: 1,
-      imported_at: IMPORT_TS
+      imported_at: IMPORT_TS,
     })
     enqueueThumb(id)
     await new Promise((r) => setTimeout(r, 4500))
@@ -262,7 +271,7 @@ describe('路径大小写归一化', () => {
         ext: 'jpg',
         size: 1000,
         mtime: 1,
-        imported_at: IMPORT_TS
+        imported_at: IMPORT_TS,
       },
       {
         folder_id: f,
@@ -271,8 +280,8 @@ describe('路径大小写归一化', () => {
         ext: 'jpg',
         size: 1000,
         mtime: 1,
-        imported_at: IMPORT_TS
-      }
+        imported_at: IMPORT_TS,
+      },
     ])
     expect(ids).toHaveLength(1)
     expect(db.libraryStats().total).toBe(2)
@@ -289,7 +298,7 @@ describe('路径大小写归一化', () => {
     raw
       .prepare(
         `INSERT INTO photos (folder_id, path, name, ext, size, mtime, imported_at, search_text)
-         VALUES (?, ?, ?, 'jpg', 1000, 1, ?, '')`
+         VALUES (?, ?, ?, 'jpg', 1000, 1, ?, '')`,
       )
       .run(f, 'C:\\PICS\\case1.jpg', 'case1.jpg', IMPORT_TS)
     raw.pragma('user_version = 8')
@@ -307,8 +316,8 @@ describe('路径大小写归一化', () => {
         ext: 'jpg',
         size: 1,
         mtime: 1,
-        imported_at: IMPORT_TS
-      })
+        imported_at: IMPORT_TS,
+      }),
     ).toThrow()
     // 回收站按路径还原同样大小写不敏感
     db.softDeletePhotos([db.findPhotoByPath('C:\\pics\\Case1.jpg')!.id])
@@ -424,7 +433,9 @@ describe('作用域与筛选', () => {
     seed(f, 'r5', { rating: 5, takenAt: Date.parse('2026-05-10T12:00:00') })
     expect(db.queryPhotos({ scope: 'all', minRating: 4 }).total).toBe(1)
     expect(db.queryPhotos({ scope: 'all', dateFrom: '2026-04-01' }).total).toBe(1)
-    expect(db.queryPhotos({ scope: 'all', dateFrom: '2026-01-01', dateTo: '2026-04-01' }).total).toBe(1)
+    expect(
+      db.queryPhotos({ scope: 'all', dateFrom: '2026-01-01', dateTo: '2026-04-01' }).total,
+    ).toBe(1)
   })
 })
 
@@ -450,10 +461,14 @@ describe('排序', () => {
     const a = seed(f, 'may', { takenAt: Date.parse('2026-05-01T00:00:00'), importedAt: IMPORT_TS })
     const b = seed(f, 'jan', { importedAt: Date.parse('2026-01-10T00:00:00Z') })
     // taken_at 缺失时 sort_ts 回退导入时间（b=1 月 < a=5 月），desc 下 a 在前
-    expect(db.queryPhotos({ scope: 'all', sort: 'taken', dir: 'desc' }).items.map((p) => p.id)).toEqual([a, b])
+    expect(
+      db.queryPhotos({ scope: 'all', sort: 'taken', dir: 'desc' }).items.map((p) => p.id),
+    ).toEqual([a, b])
     // 生成列随源列自动跟随，无需显式重算
     db.setPhotoDimsAndDate(a, 100, 100, Date.parse('2025-12-01T00:00:00'))
-    expect(db.queryPhotos({ scope: 'all', sort: 'taken', dir: 'desc' }).items.map((p) => p.id)).toEqual([b, a])
+    expect(
+      db.queryPhotos({ scope: 'all', sort: 'taken', dir: 'desc' }).items.map((p) => p.id),
+    ).toEqual([b, a])
   })
 
   it('默认排序查询命中 sort_ts 索引（免全量重排）', async () => {
@@ -464,7 +479,7 @@ describe('排序', () => {
     const plan = raw
       .prepare(
         `EXPLAIN QUERY PLAN SELECT id FROM photos
-         WHERE deleted_at IS NULL ORDER BY sort_ts DESC, id DESC LIMIT 500 OFFSET 0`
+         WHERE deleted_at IS NULL ORDER BY sort_ts DESC, id DESC LIMIT 500 OFFSET 0`,
       )
       .all() as { detail: string }[]
     raw.close()
@@ -526,7 +541,7 @@ describe('dupCache 失效语义（第一批修复回归）', () => {
     dupPair(f1, 3)
     dupPair(f2, 4)
     expect(await db.duplicatePhotoIds()).toHaveLength(4)
-    db.removeFolderRows(f1)
+    db.softRemoveFolder(f1)
     expect(await db.duplicatePhotoIds()).toHaveLength(2)
   })
 
@@ -542,7 +557,7 @@ describe('dupCache 失效语义（第一批修复回归）', () => {
     expect(clusters).toHaveLength(2)
     expect(clusters.every((x) => x.length === 2)).toBe(true)
     expect(clusters.flat().sort((x, y) => x - y)).toEqual(
-      (await db.duplicatePhotoIds()).sort((x, y) => x - y)
+      (await db.duplicatePhotoIds()).sort((x, y) => x - y),
     )
     expect(clusters.flat().sort((x, y) => x - y)).toEqual([a, b, c, d].sort((x, y) => x - y))
   })
@@ -640,5 +655,117 @@ describe('回收站（软删除）语义', () => {
     expect(db.listTags()[0].count).toBe(0)
     expect(db.listAlbums()[0].count).toBe(0)
     expect(db.listAlbums()[0].cover_id == null).toBe(true)
+  })
+})
+
+describe('元数据软删除与撤销（P0-1）', () => {
+  it('删除标签后从列表/照片/检索中消失，恢复后关系与检索回到原状', () => {
+    const f = newFolder('C:\\pics')
+    const a = seed(f, 'meta-tag-a')
+    const tag = db.createTag('旅行', '#fff')
+    db.setPhotoTags(a, [tag.id])
+    expect(db.queryPhotos({ scope: 'all', keyword: '旅行' }).total).toBe(1)
+
+    expect(db.deleteTag(tag.id)).toEqual({ name: '旅行', photos: 1 })
+    expect(db.listTags()).toHaveLength(0)
+    expect(db.getPhotoRecord(a)?.tags).toHaveLength(0)
+    // 标签名从检索文本中移除，照片回到未加标签
+    expect(db.queryPhotos({ scope: 'all', keyword: '旅行' }).total).toBe(0)
+    expect(db.queryPhotos({ scope: 'untagged' }).total).toBe(1)
+
+    expect(db.restoreTag(tag.id)?.name).toBe('旅行')
+    expect(db.listTags()).toHaveLength(1)
+    expect(db.getPhotoRecord(a)?.tags[0]?.name).toBe('旅行')
+    expect(db.queryPhotos({ scope: 'all', keyword: '旅行' }).total).toBe(1)
+    expect(db.queryPhotos({ scope: 'untagged' }).total).toBe(0)
+  })
+
+  it('同名新建标签复活软删除行并保留照片关系', () => {
+    const f = newFolder('C:\\pics')
+    const a = seed(f, 'meta-tag-b')
+    const tag = db.createTag('夜景', null)
+    db.setPhotoTags(a, [tag.id])
+    db.deleteTag(tag.id)
+
+    const again = db.createTag('夜景', null)
+    expect(again.id).toBe(tag.id)
+    expect(db.listTags()).toHaveLength(1)
+    expect(db.getPhotoRecord(a)?.tags.map((t) => t.name)).toEqual(['夜景'])
+  })
+
+  it('软删除标签的关联在编辑可见标签后仍保留，撤销时原样恢复', () => {
+    const f = newFolder('C:\\pics')
+    const a = seed(f, 'meta-tag-c')
+    const oldTag = db.createTag('旅行', null)
+    db.setPhotoTags(a, [oldTag.id])
+    db.deleteTag(oldTag.id)
+
+    const other = db.createTag('人像', null)
+    db.setPhotoTags(a, [other.id])
+    expect(db.getPhotoRecord(a)?.tags.map((t) => t.name)).toEqual(['人像'])
+
+    db.restoreTag(oldTag.id)
+    expect(
+      db
+        .getPhotoRecord(a)
+        ?.tags.map((t) => t.name)
+        .sort(),
+    ).toEqual(['人像', '旅行'].sort())
+  })
+
+  it('删除相册后成员关系保留，恢复后计数与作用域回到原状', () => {
+    const f = newFolder('C:\\pics')
+    const a = seed(f, 'meta-album-a')
+    const album = db.createAlbum('精选', null)
+    db.batchAlbum([a], album)
+    expect(db.listAlbums()[0].count).toBe(1)
+
+    expect(db.deleteAlbum(album)).toEqual({ name: '精选', photos: 1 })
+    expect(db.listAlbums()).toHaveLength(0)
+    expect(db.getPhotoRecord(a)?.albums).toHaveLength(0)
+    expect(db.queryPhotos({ scope: 'album', scopeId: album }).total).toBe(0)
+    // 相册名从检索文本中移除
+    expect(db.queryPhotos({ scope: 'all', keyword: '精选' }).total).toBe(0)
+
+    expect(db.restoreAlbum(album)?.name).toBe('精选')
+    expect(db.listAlbums()[0].count).toBe(1)
+    expect(db.getPhotoRecord(a)?.albums[0]?.name).toBe('精选')
+    expect(db.queryPhotos({ scope: 'album', scopeId: album }).total).toBe(1)
+    expect(db.queryPhotos({ scope: 'all', keyword: '精选' }).total).toBe(1)
+  })
+
+  it('移除文件夹后照片从全部视图/统计/重复聚类中隐藏，恢复后回归', async () => {
+    const f1 = newFolder('C:\\pics\\keep')
+    const f2 = newFolder('C:\\pics\\hidden')
+    const a = seed(f1, 'meta-folder-keep')
+    const b = seed(f2, 'meta-folder-hidden')
+    const tag = db.createTag('旅行', null)
+    db.setPhotoTags(a, [tag.id])
+    const album = db.createAlbum('精选', null)
+    db.batchAlbum([a], album)
+    db.setPhotoPhash(a, 10, 0)
+    db.setPhotoPhash(b, 10, 0)
+
+    expect(db.libraryStats().total).toBe(2)
+    expect((await db.duplicatePhotoIds()).sort((x, y) => x - y)).toEqual(
+      [a, b].sort((x, y) => x - y),
+    )
+
+    expect(db.softRemoveFolder(f2)).toEqual({ name: 'hidden', photos: 1 })
+    expect(db.listFolders()).toHaveLength(1)
+    expect(db.libraryStats().total).toBe(1)
+    expect(db.queryPhotos({ scope: 'all' }).items.map((p) => p.id)).toEqual([a])
+    // 隐藏文件夹中的照片不参与重复聚类：剩余单张不成簇
+    expect(await db.duplicatePhotoIds()).toEqual([])
+    expect(db.listTags()[0].count).toBe(1)
+    expect(db.listAlbums()[0].count).toBe(1)
+
+    expect(db.restoreFolder(f2)?.path).toBe('C:\\pics\\hidden')
+    expect(db.listFolders()).toHaveLength(2)
+    expect(db.libraryStats().total).toBe(2)
+    expect(db.queryPhotos({ scope: 'all' }).total).toBe(2)
+    expect((await db.duplicatePhotoIds()).sort((x, y) => x - y)).toEqual(
+      [a, b].sort((x, y) => x - y),
+    )
   })
 })

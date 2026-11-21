@@ -13,7 +13,7 @@ import type {
   SmartAlbumInfo,
   SmartAlbumQuery,
   TagInfo,
-  TagRef
+  TagRef,
 } from '@shared/types'
 
 let db: Database.Database
@@ -40,7 +40,7 @@ function addColumnIfMissing(
   database: Database.Database,
   table: string,
   column: string,
-  columnDef: string
+  columnDef: string,
 ): void {
   // 用 table_xinfo 而非 table_info：生成列（GENERATED ALWAYS AS）只出现在 xinfo 中
   const cols = database.pragma(`table_xinfo(${table})`) as { name: string }[]
@@ -225,23 +225,25 @@ const MIGRATIONS: ((db: Database.Database) => void)[] = [
   // v8: 相册名参与检索 —— search_text 纳入相册名；成员变更与相册重命名经触发器联动重算
   //     （FTS 外部内容表的 photos_fts_update 触发器随后自动同步索引），
   //     存量库重算全部搜索文本并重建索引
+  //     注意：此处必须使用 v8 时代的表达式（无 deleted_at 过滤）——全新库执行到 v8 时
+  //     v11 的 deleted_at 列尚未创建，直接引用会导致 CREATE TRIGGER 失败。
   (db) => {
     db.exec(`
       DROP TRIGGER IF EXISTS album_photos_search_insert;
       DROP TRIGGER IF EXISTS album_photos_search_delete;
       DROP TRIGGER IF EXISTS albums_search_rename;
       CREATE TRIGGER album_photos_search_insert AFTER INSERT ON album_photos BEGIN
-        UPDATE photos SET search_text = ${SEARCH_TEXT_EXPR} WHERE id = new.photo_id;
+        UPDATE photos SET search_text = ${SEARCH_TEXT_EXPR_V8} WHERE id = new.photo_id;
       END;
       CREATE TRIGGER album_photos_search_delete AFTER DELETE ON album_photos BEGIN
-        UPDATE photos SET search_text = ${SEARCH_TEXT_EXPR} WHERE id = old.photo_id;
+        UPDATE photos SET search_text = ${SEARCH_TEXT_EXPR_V8} WHERE id = old.photo_id;
       END;
       CREATE TRIGGER albums_search_rename AFTER UPDATE OF name ON albums BEGIN
-        UPDATE photos SET search_text = ${SEARCH_TEXT_EXPR}
+        UPDATE photos SET search_text = ${SEARCH_TEXT_EXPR_V8}
           WHERE id IN (SELECT photo_id FROM album_photos WHERE album_id = new.id);
       END;
     `)
-    db.exec(`UPDATE photos SET search_text = ${SEARCH_TEXT_EXPR};`)
+    db.exec(`UPDATE photos SET search_text = ${SEARCH_TEXT_EXPR_V8};`)
     db.exec(`INSERT INTO photos_fts(photos_fts) VALUES ('rebuild');`)
   },
   // v9: 路径大小写归一化 —— Windows 文件系统不区分大小写，仅改大小写的重命名
@@ -280,13 +282,42 @@ const MIGRATIONS: ((db: Database.Database) => void)[] = [
       db,
       'photos',
       'sort_ts',
-      'INTEGER GENERATED ALWAYS AS (COALESCE(taken_at, imported_at)) VIRTUAL'
+      'INTEGER GENERATED ALWAYS AS (COALESCE(taken_at, imported_at)) VIRTUAL',
     )
     db.exec(`
       CREATE INDEX IF NOT EXISTS idx_photos_sort_ts ON photos(sort_ts);
       CREATE INDEX IF NOT EXISTS idx_photos_size ON photos(size);
     `)
-  }
+  },
+  // v11: 元数据软删除 —— 文件夹 / 标签 / 相册增加 deleted_at，使移除操作可撤销。
+  //      关联表（photo_tags / album_photos）保持不变，恢复时无需重建关系；
+  //      所有读取路径（列表/计数/检索文本/重复聚类）统一排除已删行。
+  //      同时用带 deleted_at 过滤的表达式重建搜索触发器（历史触发器内嵌的是旧表达式）。
+  (db) => {
+    addColumnIfMissing(db, 'folders', 'deleted_at', 'INTEGER')
+    addColumnIfMissing(db, 'tags', 'deleted_at', 'INTEGER')
+    addColumnIfMissing(db, 'albums', 'deleted_at', 'INTEGER')
+    db.exec(`
+      DROP TRIGGER IF EXISTS photos_search_insert;
+      CREATE TRIGGER photos_search_insert AFTER INSERT ON photos BEGIN
+        UPDATE photos SET search_text = ${SEARCH_TEXT_EXPR} WHERE id = new.id;
+      END;
+
+      DROP TRIGGER IF EXISTS album_photos_search_insert;
+      DROP TRIGGER IF EXISTS album_photos_search_delete;
+      DROP TRIGGER IF EXISTS albums_search_rename;
+      CREATE TRIGGER album_photos_search_insert AFTER INSERT ON album_photos BEGIN
+        UPDATE photos SET search_text = ${SEARCH_TEXT_EXPR} WHERE id = new.photo_id;
+      END;
+      CREATE TRIGGER album_photos_search_delete AFTER DELETE ON album_photos BEGIN
+        UPDATE photos SET search_text = ${SEARCH_TEXT_EXPR} WHERE id = old.photo_id;
+      END;
+      CREATE TRIGGER albums_search_rename AFTER UPDATE OF name ON albums BEGIN
+        UPDATE photos SET search_text = ${SEARCH_TEXT_EXPR}
+          WHERE id IN (SELECT photo_id FROM album_photos WHERE album_id = new.id);
+      END;
+    `)
+  },
 ]
 
 function migrate(): void {
@@ -316,7 +347,7 @@ export async function initDb(): Promise<void> {
       type: 'warning',
       title: '拾帧 Framora',
       message: '照片索引库损坏，已自动备份损坏文件并重建空库。',
-      detail: `照片文件不受影响，请重新导入文件夹恢复索引。\n\n错误信息：${err instanceof Error ? err.message : String(err)}`
+      detail: `照片文件不受影响，请重新导入文件夹恢复索引。\n\n错误信息：${err instanceof Error ? err.message : String(err)}`,
     })
     await openAndMigrate()
   }
@@ -434,14 +465,13 @@ export async function importBackup(srcFile: string): Promise<void> {
 
 export function getSetting(key: string): string | null {
   const row = stmt('SELECT value FROM settings WHERE key = ?').get(key) as
-    | { value: string }
-    | undefined
+    { value: string } | undefined
   return row?.value ?? null
 }
 
 export function setSetting(key: string, value: string): void {
   stmt(
-    'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
+    'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
   ).run(key, value)
 }
 
@@ -451,47 +481,62 @@ export function listFolders(): FolderInfo[] {
   return stmt(
     `SELECT f.id, f.path, f.name, f.added_at,
       (SELECT COUNT(*) FROM photos p WHERE p.folder_id = f.id AND p.missing = 0 AND p.deleted_at IS NULL) AS count
-     FROM folders f ORDER BY f.added_at ASC`
+     FROM folders f WHERE f.deleted_at IS NULL ORDER BY f.added_at ASC`,
   ).all() as FolderInfo[]
 }
 
-export function getFolderByPath(folderPath: string): FolderInfo | undefined {
+/** 按路径取文件夹（含已软删除行：导入同一路径时据此复活，而不是新建重复根） */
+export function getFolderByPath(
+  folderPath: string,
+): (FolderInfo & { deleted_at: number | null }) | undefined {
   // 路径匹配大小写不敏感（Windows FS 语义），走 idx_folders_path_ci
   return stmt('SELECT * FROM folders WHERE path = ? COLLATE NOCASE').get(folderPath) as
-    | FolderInfo
-    | undefined
+    (FolderInfo & { deleted_at: number | null }) | undefined
 }
 
-/** 已注册资料库文件夹路径（media 协议读取范围校验用） */
+/** 已注册资料库文件夹路径（media 协议读取范围校验用；已移除的文件夹不再授权读取） */
 export function listFolderPaths(): string[] {
-  const rows = stmt('SELECT path FROM folders').all() as { path: string }[]
+  const rows = stmt('SELECT path FROM folders WHERE deleted_at IS NULL').all() as { path: string }[]
   return rows.map((r) => r.path)
 }
 
 export function addFolder(folderPath: string, name: string): number {
-  const info = stmt('INSERT OR IGNORE INTO folders (path, name, added_at) VALUES (?, ?, ?)')
-    .run(folderPath, name, Date.now())
+  const info = stmt('INSERT OR IGNORE INTO folders (path, name, added_at) VALUES (?, ?, ?)').run(
+    folderPath,
+    name,
+    Date.now(),
+  )
   if (info.changes > 0) return Number(info.lastInsertRowid)
   return getFolderByPath(folderPath)!.id
 }
 
-export function removeFolderRows(folderId: number): PhotoLite[] {
-  const rows = stmt(`SELECT ${PHOTO_LITE_COLS} FROM photos WHERE folder_id = ?`).all(
-    folderId
-  ) as PhotoLite[]
-  const run = db.transaction(() => {
+/**
+ * 从资料库移除文件夹（软删除）：仅隐藏索引，照片行与标签/相册关系全部保留，
+ * 磁盘文件与缩略图均不动，恢复时清除 deleted_at 即可 O(1) 复原。
+ */
+export function softRemoveFolder(folderId: number): { name: string; photos: number } | null {
+  const row = stmt('SELECT name FROM folders WHERE id = ? AND deleted_at IS NULL').get(folderId) as
+    { name: string } | undefined
+  if (!row) return null
+  const photos = (
     stmt(
-      `DELETE FROM photo_tags WHERE photo_id IN (SELECT id FROM photos WHERE folder_id = ?)`
-    ).run(folderId)
-    stmt(
-      `DELETE FROM album_photos WHERE photo_id IN (SELECT id FROM photos WHERE folder_id = ?)`
-    ).run(folderId)
-    stmt('DELETE FROM photos WHERE folder_id = ?').run(folderId)
-    stmt('DELETE FROM folders WHERE id = ?').run(folderId)
-  })
-  run()
+      'SELECT COUNT(*) AS c FROM photos WHERE folder_id = ? AND missing = 0 AND deleted_at IS NULL',
+    ).get(folderId) as { c: number }
+  ).c
+  stmt('UPDATE folders SET deleted_at = ? WHERE id = ?').run(Date.now(), folderId)
   markPhashDirty()
-  return rows
+  return { name: row.name, photos }
+}
+
+/** 撤销移除文件夹：清除 deleted_at；调用方按返回路径决定是否重挂文件监听 */
+export function restoreFolder(folderId: number): { path: string; name: string } | null {
+  const row = stmt('SELECT path, name FROM folders WHERE id = ? AND deleted_at IS NOT NULL').get(
+    folderId,
+  ) as { path: string; name: string } | undefined
+  if (!row) return null
+  stmt('UPDATE folders SET deleted_at = NULL WHERE id = ?').run(folderId)
+  markPhashDirty()
+  return row
 }
 
 /* ---------- photos ---------- */
@@ -499,9 +544,19 @@ export function removeFolderRows(folderId: number): PhotoLite[] {
 const PHOTO_LITE_COLS = `id, path, name, ext, size, folder_id, rating, width, height, taken_at,
   imported_at, thumb_status, thumb_ts, missing, orientation`
 
-export function getPhotoRow(id: number): PhotoLite & { title: string | null; description: string | null; flip_h: number; flip_v: number; mtime: number } | undefined {
+export function getPhotoRow(
+  id: number,
+):
+  | (PhotoLite & {
+      title: string | null
+      description: string | null
+      flip_h: number
+      flip_v: number
+      mtime: number
+    })
+  | undefined {
   return stmt(
-    `SELECT ${PHOTO_LITE_COLS}, title, description, flip_h, flip_v, mtime FROM photos WHERE id = ?`
+    `SELECT ${PHOTO_LITE_COLS}, title, description, flip_h, flip_v, mtime FROM photos WHERE id = ?`,
   ).get(id) as never
 }
 
@@ -524,13 +579,16 @@ export function getPhotoRows(ids: number[]): { id: number; path: string }[] {
 export function findPhotoByPath(photoPath: string): PhotoLite | undefined {
   // 路径匹配大小写不敏感（Windows FS 语义），走 idx_photos_path_ci
   return stmt(`SELECT ${PHOTO_LITE_COLS} FROM photos WHERE path = ? COLLATE NOCASE`).get(
-    photoPath
+    photoPath,
   ) as PhotoLite | undefined
 }
 
-export function listPhotoRowsByFolder(folderId: number): { id: number; path: string; mtime: number; size: number; missing: number }[] {
-  return stmt('SELECT id, path, mtime, size, missing FROM photos WHERE folder_id = ?')
-    .all(folderId) as never
+export function listPhotoRowsByFolder(
+  folderId: number,
+): { id: number; path: string; mtime: number; size: number; missing: number }[] {
+  return stmt('SELECT id, path, mtime, size, missing FROM photos WHERE folder_id = ?').all(
+    folderId,
+  ) as never
 }
 
 export function insertPhoto(p: {
@@ -544,7 +602,7 @@ export function insertPhoto(p: {
 }): number {
   const info = stmt(
     `INSERT INTO photos (folder_id, path, name, ext, size, mtime, imported_at)
-     VALUES (@folder_id, @path, @name, @ext, @size, @mtime, @imported_at)`
+     VALUES (@folder_id, @path, @name, @ext, @size, @mtime, @imported_at)`,
   ).run(p)
   return Number(info.lastInsertRowid)
 }
@@ -560,13 +618,13 @@ export function insertPhotosBatch(
     size: number
     mtime: number
     imported_at: number
-  }[]
+  }[],
 ): number[] {
   const run = db.transaction((): number[] => {
     const ids: number[] = []
     const ins = stmt(
       `INSERT OR IGNORE INTO photos (folder_id, path, name, ext, size, mtime, imported_at)
-       VALUES (@folder_id, @path, @name, @ext, @size, @mtime, @imported_at)`
+       VALUES (@folder_id, @path, @name, @ext, @size, @mtime, @imported_at)`,
     )
     for (const r of rows) {
       const info = ins.run(r)
@@ -579,7 +637,7 @@ export function insertPhotosBatch(
 
 /** 批量更新文件字段（size/mtime/missing），单事务 */
 export function updatePhotoFilesBatch(
-  rows: { id: number; size?: number; mtime?: number; missing?: 0 | 1 }[]
+  rows: { id: number; size?: number; mtime?: number; missing?: 0 | 1 }[],
 ): void {
   const run = db.transaction(() => {
     for (const r of rows) updatePhotoFileFields(r.id, r)
@@ -587,12 +645,23 @@ export function updatePhotoFilesBatch(
   run()
 }
 
-const SEARCH_TEXT_EXPR = `
+/** 可见文件夹条件：已从资料库移除（软删除）的文件夹，其照片不参与任何常规视图/统计 */
+const VISIBLE_FOLDER_SQL = `p.folder_id IN (SELECT id FROM folders WHERE deleted_at IS NULL)`
+
+/** v8 迁移期的检索表达式（不含 deleted_at 过滤）：历史迁移不得引用后续迁移才有的列 */
+const SEARCH_TEXT_EXPR_V8 = `
   name || ' ' || IFNULL(title, '') || ' ' || IFNULL(description, '') || ' ' ||
   IFNULL((SELECT group_concat(t.name, ' ') FROM photo_tags pt JOIN tags t ON t.id = pt.tag_id
           WHERE pt.photo_id = photos.id), '') || ' ' ||
   IFNULL((SELECT group_concat(a.name, ' ') FROM album_photos ap JOIN albums a ON a.id = ap.album_id
           WHERE ap.photo_id = photos.id), '')`
+
+const SEARCH_TEXT_EXPR = `
+  name || ' ' || IFNULL(title, '') || ' ' || IFNULL(description, '') || ' ' ||
+  IFNULL((SELECT group_concat(t.name, ' ') FROM photo_tags pt JOIN tags t ON t.id = pt.tag_id
+          WHERE pt.photo_id = photos.id AND t.deleted_at IS NULL), '') || ' ' ||
+  IFNULL((SELECT group_concat(a.name, ' ') FROM album_photos ap JOIN albums a ON a.id = ap.album_id
+          WHERE ap.photo_id = photos.id AND a.deleted_at IS NULL), '')`
 
 /** 重算照片的搜索文本（名称+标题+描述+标签名+相册名），FTS 触发器随之同步索引 */
 export function recomputeSearchText(ids: number[]): void {
@@ -606,8 +675,9 @@ export function recomputeSearchText(ids: number[]): void {
 
 export function updatePhotoFileFields(
   id: number,
-  fields: { size?: number; mtime?: number; missing?: 0 | 1 }
-): void {  const sets: string[] = []
+  fields: { size?: number; mtime?: number; missing?: 0 | 1 },
+): void {
+  const sets: string[] = []
   const params: Record<string, unknown> = { id }
   if (fields.size !== undefined) {
     sets.push('size = @size')
@@ -636,7 +706,12 @@ export function updatePhotoPath(id: number, newPath: string, newName: string): v
     /* rename 后 stat 失败保持旧值 */
   }
   if (mtime !== null) {
-    stmt('UPDATE photos SET path = ?, name = ?, mtime = ? WHERE id = ?').run(newPath, newName, mtime, id)
+    stmt('UPDATE photos SET path = ?, name = ?, mtime = ? WHERE id = ?').run(
+      newPath,
+      newName,
+      mtime,
+      id,
+    )
   } else {
     stmt('UPDATE photos SET path = ?, name = ? WHERE id = ?').run(newPath, newName, id)
   }
@@ -647,13 +722,13 @@ export function setPhotoDimsAndDate(
   id: number,
   width: number | null,
   height: number | null,
-  takenAt: number | null
+  takenAt: number | null,
 ): void {
   stmt('UPDATE photos SET width = ?, height = ?, taken_at = ? WHERE id = ?').run(
     width,
     height,
     takenAt,
-    id
+    id,
   )
 }
 
@@ -661,23 +736,22 @@ export function setThumbStatus(id: number, status: 0 | 1 | 2, ts?: number): void
   stmt('UPDATE photos SET thumb_status = ?, thumb_ts = ? WHERE id = ?').run(
     status,
     ts ?? Date.now(),
-    id
+    id,
   )
 }
 
 export function getPhotoRecord(id: number): PhotoRecord | undefined {
-  const row = stmt(`SELECT ${PHOTO_LITE_COLS}, title, description, flip_h, flip_v, mtime FROM photos WHERE id = ?`)
-    .get(id) as
-    | (Omit<PhotoRecord, 'tags' | 'albums'>)
-    | undefined
+  const row = stmt(
+    `SELECT ${PHOTO_LITE_COLS}, title, description, flip_h, flip_v, mtime FROM photos WHERE id = ?`,
+  ).get(id) as Omit<PhotoRecord, 'tags' | 'albums'> | undefined
   if (!row) return undefined
   const tags = stmt(
     `SELECT t.id, t.name FROM photo_tags pt JOIN tags t ON t.id = pt.tag_id
-     WHERE pt.photo_id = ? ORDER BY t.name`
+     WHERE pt.photo_id = ? AND t.deleted_at IS NULL ORDER BY t.name`,
   ).all(id) as TagRef[]
   const albums = stmt(
     `SELECT a.id, a.name FROM album_photos ap JOIN albums a ON a.id = ap.album_id
-     WHERE ap.photo_id = ? ORDER BY a.name`
+     WHERE ap.photo_id = ? AND a.deleted_at IS NULL ORDER BY a.name`,
   ).all(id) as TagRef[]
   return { ...row, tags, albums }
 }
@@ -691,7 +765,7 @@ export function updatePhotoMeta(
     orientation?: number
     flip_h?: number
     flip_v?: number
-  }
+  },
 ): void {
   const allowed: Record<string, unknown> = {}
   for (const k of ['rating', 'title', 'description', 'orientation', 'flip_h', 'flip_v'] as const) {
@@ -730,15 +804,21 @@ function buildPhotoFilter(q: PhotoQuery): { whereSql: string; params: Record<str
       params.scopeId = q.scopeId
       break
     case 'album':
-      where.push('EXISTS (SELECT 1 FROM album_photos ap WHERE ap.photo_id = p.id AND ap.album_id = @scopeId)')
+      where.push(
+        'EXISTS (SELECT 1 FROM album_photos ap JOIN albums a ON a.id = ap.album_id WHERE ap.photo_id = p.id AND ap.album_id = @scopeId AND a.deleted_at IS NULL)',
+      )
       params.scopeId = q.scopeId
       break
     case 'tag':
-      where.push('EXISTS (SELECT 1 FROM photo_tags pt WHERE pt.photo_id = p.id AND pt.tag_id = @scopeId)')
+      where.push(
+        'EXISTS (SELECT 1 FROM photo_tags pt JOIN tags t ON t.id = pt.tag_id WHERE pt.photo_id = p.id AND pt.tag_id = @scopeId AND t.deleted_at IS NULL)',
+      )
       params.scopeId = q.scopeId
       break
     case 'untagged':
-      where.push('NOT EXISTS (SELECT 1 FROM photo_tags pt WHERE pt.photo_id = p.id)')
+      where.push(
+        'NOT EXISTS (SELECT 1 FROM photo_tags pt JOIN tags t ON t.id = pt.tag_id WHERE pt.photo_id = p.id AND t.deleted_at IS NULL)',
+      )
       break
     case 'missing':
       where.push('p.missing = 1')
@@ -746,6 +826,8 @@ function buildPhotoFilter(q: PhotoQuery): { whereSql: string; params: Record<str
     default:
       break
   }
+  // 已移除资料库（软删除文件夹）中的照片不进入任何视图（含回收站），恢复后自动回归
+  where.push(VISIBLE_FOLDER_SQL)
   // 软删除过滤：回收站视图只看已删行，其余所有作用域一律排除已删行
   if (q.scope === 'trash') {
     where.push('p.deleted_at IS NOT NULL')
@@ -806,7 +888,7 @@ export function queryPhotos(q: PhotoQuery): QueryResult {
   const offset = Math.max(0, Math.floor(q.offset ?? 0))
   // 窗口函数在单次查询中同时返回总数，避免额外的 COUNT 扫描
   const rows = stmt(
-    `SELECT ${PHOTO_LITE_COLS}, COUNT(*) OVER() AS _total FROM photos p ${whereSql} ${orderSql} LIMIT ${limit} OFFSET ${offset}`
+    `SELECT ${PHOTO_LITE_COLS}, COUNT(*) OVER() AS _total FROM photos p ${whereSql} ${orderSql} LIMIT ${limit} OFFSET ${offset}`,
   ).all(params) as (PhotoLite & { _total?: number })[]
   let total: number
   if (rows.length) {
@@ -835,7 +917,13 @@ function resolveSmartFilters(q: PhotoQuery): PhotoQuery {
   if (q.scope === 'smart' && q.scopeId) {
     const saved = getSmartAlbumQuery(q.scopeId)
     if (saved) {
-      return { ...q, keyword: saved.keyword, dateFrom: saved.dateFrom, dateTo: saved.dateTo, minRating: saved.minRating }
+      return {
+        ...q,
+        keyword: saved.keyword,
+        dateFrom: saved.dateFrom,
+        dateTo: saved.dateTo,
+        minRating: saved.minRating,
+      }
     }
   }
   return q
@@ -844,13 +932,14 @@ function resolveSmartFilters(q: PhotoQuery): PhotoQuery {
 /* ---------- smart albums ---------- */
 
 export function listSmartAlbums(): SmartAlbumInfo[] {
-  return stmt('SELECT id, name, color, created_at FROM smart_albums ORDER BY created_at ASC').all() as SmartAlbumInfo[]
+  return stmt(
+    'SELECT id, name, color, created_at FROM smart_albums ORDER BY created_at ASC',
+  ).all() as SmartAlbumInfo[]
 }
 
 export function getSmartAlbumQuery(id: number): SmartAlbumQuery | undefined {
   const row = stmt('SELECT query FROM smart_albums WHERE id = ?').get(id) as
-    | { query: string }
-    | undefined
+    { query: string } | undefined
   if (!row) return undefined
   try {
     const q = JSON.parse(row.query) as SmartAlbumQuery
@@ -862,7 +951,7 @@ export function getSmartAlbumQuery(id: number): SmartAlbumQuery | undefined {
 
 export function createSmartAlbum(name: string, query: SmartAlbumQuery): number {
   const info = stmt(
-    'INSERT INTO smart_albums (name, color, query, created_at) VALUES (?, NULL, ?, ?)'
+    'INSERT INTO smart_albums (name, color, query, created_at) VALUES (?, NULL, ?, ?)',
   ).run(name, JSON.stringify(query), Date.now())
   return Number(info.lastInsertRowid)
 }
@@ -881,14 +970,27 @@ export function listTags(): TagInfo[] {
   return stmt(
     `SELECT t.id, t.name, t.color,
       (SELECT COUNT(*) FROM photo_tags pt JOIN photos p ON p.id = pt.photo_id
-        WHERE pt.tag_id = t.id AND p.missing = 0 AND p.deleted_at IS NULL) AS count
-     FROM tags t ORDER BY t.name COLLATE NOCASE`
+        WHERE pt.tag_id = t.id AND p.missing = 0 AND p.deleted_at IS NULL AND ${VISIBLE_FOLDER_SQL}) AS count
+     FROM tags t WHERE t.deleted_at IS NULL ORDER BY t.name COLLATE NOCASE`,
   ).all() as TagInfo[]
 }
 
 export function createTag(name: string, color: string | null): TagInfo {
-  const info = stmt('INSERT OR IGNORE INTO tags (name, color) VALUES (?, ?)')
-    .run(name, color)
+  // 同名标签已软删除：视为「撤销删除」而非冲突——复活原行，保留既有照片关系
+  const existing = stmt('SELECT id, deleted_at FROM tags WHERE name = ?').get(name) as
+    { id: number; deleted_at: number | null } | undefined
+  if (existing) {
+    if (existing.deleted_at === null) throw new Error(`标签「${name}」已存在`)
+    stmt('UPDATE tags SET deleted_at = NULL, color = ? WHERE id = ?').run(color, existing.id)
+    const affected = (
+      stmt('SELECT photo_id FROM photo_tags WHERE tag_id = ?').all(existing.id) as {
+        photo_id: number
+      }[]
+    ).map((r) => r.photo_id)
+    recomputeSearchText(affected)
+    return { id: existing.id, name, color, count: 0 }
+  }
+  const info = stmt('INSERT OR IGNORE INTO tags (name, color) VALUES (?, ?)').run(name, color)
   if (info.changes === 0) {
     throw new Error(`标签「${name}」已存在`)
   }
@@ -899,44 +1001,77 @@ export function renameTag(id: number, name: string): void {
   const affected = (
     stmt('SELECT photo_id FROM photo_tags WHERE tag_id = ?').all(id) as { photo_id: number }[]
   ).map((r) => r.photo_id)
-  stmt('UPDATE tags SET name = ? WHERE id = ?').run(name, id)
+  stmt('UPDATE tags SET name = ? WHERE id = ? AND deleted_at IS NULL').run(name, id)
   recomputeSearchText(affected)
 }
 
 export function setTagColor(id: number, color: string | null): void {
-  stmt('UPDATE tags SET color = ? WHERE id = ?').run(color, id)
+  stmt('UPDATE tags SET color = ? WHERE id = ? AND deleted_at IS NULL').run(color, id)
 }
 
 export function setAlbumColor(id: number, color: string | null): void {
-  stmt('UPDATE albums SET color = ? WHERE id = ?').run(color, id)
+  stmt('UPDATE albums SET color = ? WHERE id = ? AND deleted_at IS NULL').run(color, id)
 }
 
-export function deleteTag(id: number): void {
+function countTagPhotos(tagId: number): number {
+  return (
+    stmt(
+      `SELECT COUNT(*) AS c FROM photo_tags pt JOIN photos p ON p.id = pt.photo_id
+        WHERE pt.tag_id = ? AND p.missing = 0 AND p.deleted_at IS NULL AND ${VISIBLE_FOLDER_SQL}`,
+    ).get(tagId) as { c: number }
+  ).c
+}
+
+/** 软删除标签：保留 photo_tags 关系，清除/恢复仅需翻转 deleted_at，可即时撤销 */
+export function deleteTag(id: number): { name: string; photos: number } | null {
+  const row = stmt('SELECT name FROM tags WHERE id = ? AND deleted_at IS NULL').get(id) as
+    { name: string } | undefined
+  if (!row) return null
+  const photos = countTagPhotos(id)
   const affected = (
     stmt('SELECT photo_id FROM photo_tags WHERE tag_id = ?').all(id) as { photo_id: number }[]
   ).map((r) => r.photo_id)
-  stmt('DELETE FROM photo_tags WHERE tag_id = ?').run(id)
-  stmt('DELETE FROM tags WHERE id = ?').run(id)
+  stmt('UPDATE tags SET deleted_at = ? WHERE id = ?').run(Date.now(), id)
+  // 标签名参与检索文本：删除后需从受影响照片的 search_text 中移除
   recomputeSearchText(affected)
+  return { name: row.name, photos }
+}
+
+/** 撤销删除标签：恢复 deleted_at 并把标签名重新写回检索文本 */
+export function restoreTag(id: number): { name: string; photos: number } | null {
+  const row = stmt('SELECT name FROM tags WHERE id = ? AND deleted_at IS NOT NULL').get(id) as
+    { name: string } | undefined
+  if (!row) return null
+  const photos = countTagPhotos(id)
+  const affected = (
+    stmt('SELECT photo_id FROM photo_tags WHERE tag_id = ?').all(id) as { photo_id: number }[]
+  ).map((r) => r.photo_id)
+  stmt('UPDATE tags SET deleted_at = NULL WHERE id = ?').run(id)
+  recomputeSearchText(affected)
+  return { name: row.name, photos }
 }
 
 export function setPhotoTags(photoId: number, tagIds: number[]): void {
   const run = db.transaction(() => {
-    stmt('DELETE FROM photo_tags WHERE photo_id = ?').run(photoId)
-    const ins = stmt('INSERT OR IGNORE INTO photo_tags (photo_id, tag_id) VALUES (?, ?)')
+    // 只替换可见标签关系；已软删除标签的关联保留在库中，撤销删除时可原样恢复
+    stmt(
+      'DELETE FROM photo_tags WHERE photo_id = ? AND tag_id IN (SELECT id FROM tags WHERE deleted_at IS NULL)',
+    ).run(photoId)
+    // 只接受未删除标签：陈旧 UI 传入的已删 id 静默丢弃，避免恢复后意外复活关系
+    const ins = stmt(
+      'INSERT OR IGNORE INTO photo_tags (photo_id, tag_id) SELECT ?, id FROM tags WHERE id = ? AND deleted_at IS NULL',
+    )
     for (const t of tagIds) ins.run(photoId, t)
   })
   run()
   recomputeSearchText([photoId])
 }
 
-export function batchTags(
-  ids: number[],
-  addTagIds: number[],
-  removeTagIds: number[]
-): void {
+export function batchTags(ids: number[], addTagIds: number[], removeTagIds: number[]): void {
   const run = db.transaction(() => {
-    const add = stmt('INSERT OR IGNORE INTO photo_tags (photo_id, tag_id) VALUES (?, ?)')
+    const add = stmt(
+      'INSERT OR IGNORE INTO photo_tags (photo_id, tag_id) SELECT ?, id FROM tags WHERE id = ? AND deleted_at IS NULL',
+    )
     const del = stmt('DELETE FROM photo_tags WHERE photo_id = ? AND tag_id = ?')
     for (const pid of ids) {
       for (const t of removeTagIds) del.run(pid, t)
@@ -961,26 +1096,62 @@ export function listAlbums(): AlbumInfo[] {
   return stmt(
     `SELECT a.id, a.name, a.color, a.created_at,
       (SELECT COUNT(*) FROM album_photos ap JOIN photos p ON p.id = ap.photo_id
-        WHERE ap.album_id = a.id AND p.missing = 0 AND p.deleted_at IS NULL) AS count,
+        WHERE ap.album_id = a.id AND p.missing = 0 AND p.deleted_at IS NULL AND ${VISIBLE_FOLDER_SQL}) AS count,
       (SELECT ap.photo_id FROM album_photos ap JOIN photos p ON p.id = ap.photo_id
-        WHERE ap.album_id = a.id AND p.missing = 0 AND p.deleted_at IS NULL LIMIT 1) AS cover_id
-     FROM albums a ORDER BY a.created_at ASC`
+        WHERE ap.album_id = a.id AND p.missing = 0 AND p.deleted_at IS NULL AND ${VISIBLE_FOLDER_SQL} LIMIT 1) AS cover_id
+     FROM albums a WHERE a.deleted_at IS NULL ORDER BY a.created_at ASC`,
   ).all() as AlbumInfo[]
 }
 
 export function createAlbum(name: string, color: string | null): number {
-  const info = stmt('INSERT INTO albums (name, color, created_at) VALUES (?, ?, ?)')
-    .run(name, color, Date.now())
+  const info = stmt('INSERT INTO albums (name, color, created_at) VALUES (?, ?, ?)').run(
+    name,
+    color,
+    Date.now(),
+  )
   return Number(info.lastInsertRowid)
 }
 
 export function renameAlbum(id: number, name: string): void {
-  stmt('UPDATE albums SET name = ? WHERE id = ?').run(name, id)
+  stmt('UPDATE albums SET name = ? WHERE id = ? AND deleted_at IS NULL').run(name, id)
 }
 
-export function deleteAlbum(id: number): void {
-  stmt('DELETE FROM album_photos WHERE album_id = ?').run(id)
-  stmt('DELETE FROM albums WHERE id = ?').run(id)
+function countAlbumPhotos(albumId: number): number {
+  return (
+    stmt(
+      `SELECT COUNT(*) AS c FROM album_photos ap JOIN photos p ON p.id = ap.photo_id
+        WHERE ap.album_id = ? AND p.missing = 0 AND p.deleted_at IS NULL AND ${VISIBLE_FOLDER_SQL}`,
+    ).get(albumId) as { c: number }
+  ).c
+}
+
+/** 软删除相册：保留 album_photos 关系，撤销时清除 deleted_at 即可恢复成员 */
+export function deleteAlbum(id: number): { name: string; photos: number } | null {
+  const row = stmt('SELECT name FROM albums WHERE id = ? AND deleted_at IS NULL').get(id) as
+    { name: string } | undefined
+  if (!row) return null
+  const photos = countAlbumPhotos(id)
+  const affected = (
+    stmt('SELECT photo_id FROM album_photos WHERE album_id = ?').all(id) as { photo_id: number }[]
+  ).map((r) => r.photo_id)
+  stmt('UPDATE albums SET deleted_at = ? WHERE id = ?').run(Date.now(), id)
+  // 相册名参与检索文本：删除后从受影响照片的 search_text 中移除
+  recomputeSearchText(affected)
+  return { name: row.name, photos }
+}
+
+/** 撤销删除相册：恢复 deleted_at 并把相册名重新写回检索文本 */
+export function restoreAlbum(id: number): { name: string; photos: number } | null {
+  const row = stmt('SELECT name FROM albums WHERE id = ? AND deleted_at IS NOT NULL').get(id) as
+    { name: string } | undefined
+  if (!row) return null
+  const photos = countAlbumPhotos(id)
+  const affected = (
+    stmt('SELECT photo_id FROM album_photos WHERE album_id = ?').all(id) as { photo_id: number }[]
+  ).map((r) => r.photo_id)
+  stmt('UPDATE albums SET deleted_at = NULL WHERE id = ?').run(id)
+  recomputeSearchText(affected)
+  return { name: row.name, photos }
 }
 
 export function batchAlbum(ids: number[], albumId: number | null): void {
@@ -989,8 +1160,11 @@ export function batchAlbum(ids: number[], albumId: number | null): void {
       const del = stmt('DELETE FROM album_photos WHERE photo_id = ?')
       for (const id of ids) del.run(id)
     } else {
-      const ins = stmt('INSERT OR IGNORE INTO album_photos (album_id, photo_id) VALUES (?, ?)')
-      for (const id of ids) ins.run(albumId, id)
+      // 已删除相册不接收新成员（陈旧 UI 传入的 id 静默忽略）
+      const ins = stmt(
+        'INSERT OR IGNORE INTO album_photos (album_id, photo_id) SELECT ?, ? WHERE EXISTS (SELECT 1 FROM albums WHERE id = ? AND deleted_at IS NULL)',
+      )
+      for (const id of ids) ins.run(albumId, id, albumId)
     }
   })
   run()
@@ -1038,9 +1212,9 @@ export function restorePhotos(ids: number[]): number {
 
 /** 按路径查找已在回收站中的照片（watcher 检测到文件重新出现时自动还原用） */
 export function findDeletedPhotoId(photoPath: string): number | null {
-  const row = stmt('SELECT id FROM photos WHERE path = ? COLLATE NOCASE AND deleted_at IS NOT NULL').get(
-    photoPath
-  ) as { id: number } | undefined
+  const row = stmt(
+    'SELECT id FROM photos WHERE path = ? COLLATE NOCASE AND deleted_at IS NOT NULL',
+  ).get(photoPath) as { id: number } | undefined
   return row?.id ?? null
 }
 
@@ -1052,16 +1226,18 @@ export function listDeletedRows(ids: number[]): { id: number; path: string }[] {
     const chunk = ids.slice(i, i + 900)
     const ph = chunk.map(() => '?').join(', ')
     const part = stmt(
-      `SELECT id, path FROM photos WHERE deleted_at IS NOT NULL AND id IN (${ph})`
+      `SELECT p.id, p.path FROM photos p WHERE p.deleted_at IS NOT NULL AND ${VISIBLE_FOLDER_SQL} AND p.id IN (${ph})`,
     ).all(...chunk) as { id: number; path: string }[]
     rows.push(...part)
   }
   return rows
 }
 
-/** 回收站全部行（清空回收站用） */
+/** 回收站全部行（清空回收站用；已移除文件夹中的照片不参与） */
 export function listAllDeletedRows(): { id: number; path: string }[] {
-  return stmt('SELECT id, path FROM photos WHERE deleted_at IS NOT NULL').all() as {
+  return stmt(
+    `SELECT p.id, p.path FROM photos p WHERE p.deleted_at IS NOT NULL AND ${VISIBLE_FOLDER_SQL}`,
+  ).all() as {
     id: number
     path: string
   }[]
@@ -1070,15 +1246,16 @@ export function listAllDeletedRows(): { id: number; path: string }[] {
 /* ---------- stats ---------- */
 
 export function listPhotoIdsForRebuild(): number[] {
-  const rows = stmt('SELECT id FROM photos WHERE missing = 0 AND deleted_at IS NULL')
-    .all() as { id: number }[]
+  const rows = stmt(
+    `SELECT p.id FROM photos p WHERE p.missing = 0 AND p.deleted_at IS NULL AND ${VISIBLE_FOLDER_SQL}`,
+  ).all() as { id: number }[]
   return rows.map((r) => r.id)
 }
 
 /** 上次退出时未完成或曾失败缩略图生成的照片（用于启动续跑；失败行获得自动重试机会） */
 export function listPhotoIdsPendingThumb(): number[] {
   const rows = stmt(
-    'SELECT id FROM photos WHERE thumb_status IN (0, 2) AND missing = 0 AND deleted_at IS NULL'
+    `SELECT p.id FROM photos p WHERE p.thumb_status IN (0, 2) AND p.missing = 0 AND p.deleted_at IS NULL AND ${VISIBLE_FOLDER_SQL}`,
   ).all() as { id: number }[]
   return rows.map((r) => r.id)
 }
@@ -1097,7 +1274,7 @@ export function setPhotoPhash(id: number, lo: number, hi: number): void {
 
 export function listPhotosForPhash(): { id: number; path: string }[] {
   return stmt(
-    'SELECT id, path FROM photos WHERE phash_lo IS NULL AND missing = 0 AND deleted_at IS NULL'
+    `SELECT p.id, p.path FROM photos p WHERE p.phash_lo IS NULL AND p.missing = 0 AND p.deleted_at IS NULL AND ${VISIBLE_FOLDER_SQL}`,
   ).all() as {
     id: number
     path: string
@@ -1106,7 +1283,8 @@ export function listPhotosForPhash(): { id: number; path: string }[] {
 
 export function listPhashes(): { id: number; lo: number; hi: number }[] {
   return stmt(
-    'SELECT id, phash_lo AS lo, phash_hi AS hi FROM photos WHERE phash_lo IS NOT NULL AND missing = 0 AND deleted_at IS NULL'
+    `SELECT p.id, p.phash_lo AS lo, p.phash_hi AS hi FROM photos p
+     WHERE p.phash_lo IS NOT NULL AND p.missing = 0 AND p.deleted_at IS NULL AND ${VISIBLE_FOLDER_SQL}`,
   ).all() as { id: number; lo: number; hi: number }[]
 }
 
@@ -1152,7 +1330,10 @@ export async function duplicatePhotoIds(): Promise<number[]> {
 }
 
 /** 按簇顺序查询疑似重复照片（支持分页） */
-export async function queryDuplicates(q: { limit?: number; offset?: number }): Promise<QueryResult> {
+export async function queryDuplicates(q: {
+  limit?: number
+  offset?: number
+}): Promise<QueryResult> {
   const ids = await duplicatePhotoIds()
   const limit = Math.min(q.limit ?? 50000, 100000)
   const offset = Math.max(0, Math.floor(q.offset ?? 0))
@@ -1161,29 +1342,42 @@ export async function queryDuplicates(q: { limit?: number; offset?: number }): P
   const ph = slice.map(() => '?').join(', ')
   const caseWhen = slice.map((id, i) => `WHEN ${id} THEN ${i}`).join(' ')
   const items = stmt(
-    `SELECT ${PHOTO_LITE_COLS} FROM photos p WHERE p.id IN (${ph}) ORDER BY CASE p.id ${caseWhen} END`
+    `SELECT ${PHOTO_LITE_COLS} FROM photos p WHERE p.id IN (${ph}) ORDER BY CASE p.id ${caseWhen} END`,
   ).all(...slice) as PhotoLite[]
   return { items, total: ids.length }
 }
 
-export function libraryStats(): { total: number; missing: number; untagged: number; trash: number } {
+export function libraryStats(): {
+  total: number
+  missing: number
+  untagged: number
+  trash: number
+} {
   const total = (
-    stmt('SELECT COUNT(*) AS c FROM photos WHERE missing = 0 AND deleted_at IS NULL').get() as {
+    stmt(
+      `SELECT COUNT(*) AS c FROM photos p WHERE p.missing = 0 AND p.deleted_at IS NULL AND ${VISIBLE_FOLDER_SQL}`,
+    ).get() as {
       c: number
     }
   ).c
   const missing = (
-    stmt('SELECT COUNT(*) AS c FROM photos WHERE missing = 1 AND deleted_at IS NULL').get() as {
+    stmt(
+      `SELECT COUNT(*) AS c FROM photos p WHERE p.missing = 1 AND p.deleted_at IS NULL AND ${VISIBLE_FOLDER_SQL}`,
+    ).get() as {
       c: number
     }
   ).c
   const untagged = (
     stmt(
-      'SELECT COUNT(*) AS c FROM photos p WHERE p.missing = 0 AND p.deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM photo_tags pt WHERE pt.photo_id = p.id)'
+      `SELECT COUNT(*) AS c FROM photos p WHERE p.missing = 0 AND p.deleted_at IS NULL AND ${VISIBLE_FOLDER_SQL}
+        AND NOT EXISTS (SELECT 1 FROM photo_tags pt JOIN tags t ON t.id = pt.tag_id
+                        WHERE pt.photo_id = p.id AND t.deleted_at IS NULL)`,
     ).get() as { c: number }
   ).c
   const trash = (
-    stmt('SELECT COUNT(*) AS c FROM photos WHERE deleted_at IS NOT NULL').get() as { c: number }
+    stmt(
+      `SELECT COUNT(*) AS c FROM photos p WHERE p.deleted_at IS NOT NULL AND ${VISIBLE_FOLDER_SQL}`,
+    ).get() as { c: number }
   ).c
   return { total, missing, untagged, trash }
 }

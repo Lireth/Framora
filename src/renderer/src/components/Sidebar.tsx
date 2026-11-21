@@ -13,14 +13,15 @@ import {
   RefreshCw,
   SlidersHorizontal,
   Tag,
-  Trash2
+  Trash2,
 } from 'lucide-react'
 import { useStore } from '../store'
 import { api } from '../lib/api'
 import { importFolderAction } from '../lib/actions'
-import { cn, ContextMenu, type MenuItem } from './ui'
+import { cn, ConfirmDialog, ContextMenu, type MenuItem } from './ui'
 import { useState } from 'react'
 import { formatCount, thumbUrl } from '../lib/format'
+import type { AlbumInfo, FolderInfo, TagInfo } from '@shared/types'
 
 /** 标签/相册颜色预设 */
 const COLOR_PRESETS = [
@@ -31,26 +32,29 @@ const COLOR_PRESETS = [
   '#4f9dd0',
   '#7a6fd0',
   '#d06fb8',
-  '#8a8a8a'
+  '#8a8a8a',
 ]
 
 function colorMenu(onPick: (color: string | null) => void): MenuItem[] {
   return [
-    ...COLOR_PRESETS.map(
-      (c): MenuItem => ({
-        label: c,
-        icon: <span className="inline-block h-3 w-3 rounded-full border border-line" style={{ background: c }} />,
-        onClick: () => void onPick(c)
-      })
-    ),
+    ...COLOR_PRESETS.map((c): MenuItem => ({
+      label: c,
+      icon: (
+        <span
+          className="inline-block h-3 w-3 rounded-full border border-line"
+          style={{ background: c }}
+        />
+      ),
+      onClick: () => void onPick(c),
+    })),
     { separator: true },
-    { label: '默认颜色', onClick: () => void onPick(null) }
+    { label: '默认颜色', onClick: () => void onPick(null) },
   ]
 }
 
 function SectionHeader({
   title,
-  action
+  action,
 }: {
   title: string
   action?: React.ReactNode
@@ -73,7 +77,7 @@ function NavRow({
   onClick,
   onContextMenu,
   droppable,
-  onDropPhotos
+  onDropPhotos,
 }: {
   icon: React.ReactNode
   label: string
@@ -129,7 +133,7 @@ function NavRow({
       className={cn(
         'mx-2 flex w-[calc(100%-16px)] items-center gap-2.5 rounded-md px-2.5 py-[7px] text-left text-[13px] transition-colors',
         active ? 'bg-accent-soft text-accent' : 'text-ink2 hover:bg-hover hover:text-ink',
-        dragOver && 'ring-1 ring-[var(--c-accent)] bg-accent-soft'
+        dragOver && 'ring-1 ring-[var(--c-accent)] bg-accent-soft',
       )}
     >
       <span className={cn('shrink-0', active ? 'text-accent' : 'text-ink3')}>{icon}</span>
@@ -155,14 +159,48 @@ export function Sidebar(): React.JSX.Element {
     name: string
   } | null>(null)
   const [renameValue, setRenameValue] = useState('')
+  /** 待确认的破坏性元数据删除（文件夹/标签/相册） */
+  const [confirmRemove, setConfirmRemove] = useState<{
+    kind: 'folder' | 'tag' | 'album'
+    id: number
+    name: string
+    count: number
+  } | null>(null)
 
-  const folderMenu = (id: number): MenuItem[] => [
+  /** 执行软删除并刷新；删除后可在状态栏或提示中撤销 */
+  const runRemove = async (): Promise<void> => {
+    const target = confirmRemove
+    if (!target) return
+    setConfirmRemove(null)
+    const s = useStore.getState()
+    try {
+      if (target.kind === 'folder') await api.removeFolder(target.id)
+      else if (target.kind === 'tag') await api.deleteTag(target.id)
+      else await api.deleteAlbum(target.id)
+      const scopeAffected =
+        (target.kind === 'folder' && s.scope === 'folder' && s.scopeId === target.id) ||
+        (target.kind === 'tag' && s.scope === 'tag' && s.scopeId === target.id) ||
+        (target.kind === 'album' && s.scope === 'album' && s.scopeId === target.id)
+      s.toast(
+        'success',
+        `已移除${target.kind === 'folder' ? '文件夹' : target.kind === 'tag' ? '标签' : '相册'}「${target.name}」，可在底部状态栏撤销`,
+      )
+      if (scopeAffected) s.setScope('all')
+      await s.refreshLibrary()
+      s.refreshPhotos()
+      await s.refreshUndo()
+    } catch (e) {
+      s.toast('error', e instanceof Error ? e.message : '移除失败')
+    }
+  }
+
+  const folderMenu = (folder: FolderInfo): MenuItem[] => [
     {
       label: '重新扫描',
       icon: <RefreshCw size={13} />,
       onClick: async () => {
         try {
-          const r = await api.rescan(id)
+          const r = await api.rescan(folder.id)
           if (r.cancelled) {
             useStore.getState().toast('info', '扫描已取消')
           } else {
@@ -172,7 +210,7 @@ export function Sidebar(): React.JSX.Element {
                 'success',
                 `扫描完成：新增 ${r.added} 张，更新 ${r.updated} 张${
                   r.unsupported ? `，另有 ${r.unsupported} 个无法解码的照片未导入` : ''
-                }`
+                }`,
               )
             useStore.getState().refreshLibrary()
             useStore.getState().refreshPhotos()
@@ -180,99 +218,74 @@ export function Sidebar(): React.JSX.Element {
         } catch (e) {
           useStore.getState().toast('error', e instanceof Error ? e.message : '扫描失败')
         }
-      }
+      },
     },
     { separator: true },
     {
-      label: '移除索引（保留磁盘文件）',
+      label: '从资料库移除（可撤销）',
       icon: <Trash2 size={13} />,
       danger: true,
-      onClick: async () => {
-        try {
-          await api.removeFolder(id)
-          useStore.getState().toast('success', '文件夹已从资料库移除')
-          if (useStore.getState().scope === 'folder' && useStore.getState().scopeId === id) {
-            useStore.getState().setScope('all')
-          }
-          useStore.getState().refreshLibrary()
-          useStore.getState().refreshPhotos()
-        } catch (e) {
-          useStore.getState().toast('error', e instanceof Error ? e.message : '移除失败')
-        }
-      }
-    }
+      onClick: () =>
+        setConfirmRemove({ kind: 'folder', id: folder.id, name: folder.name, count: folder.count }),
+    },
   ]
 
-  const albumMenu = (id: number, name: string): MenuItem[] => [
+  const albumMenu = (album: AlbumInfo): MenuItem[] => [
     {
       label: '重命名',
       icon: <Pencil size={13} />,
       onClick: () => {
-        setRename({ kind: 'album', id, name })
-        setRenameValue(name)
-      }
+        setRename({ kind: 'album', id: album.id, name: album.name })
+        setRenameValue(album.name)
+      },
     },
     {
       label: '颜色',
       icon: <Palette size={13} />,
       submenu: colorMenu((c) =>
         api
-          .setAlbumColor(id, c)
+          .setAlbumColor(album.id, c)
           .then(() => useStore.getState().refreshLibrary())
-          .catch(() => undefined)
-      )
+          .catch(() => undefined),
+      ),
     },
     { separator: true },
     {
       label: '删除相册',
       icon: <Trash2 size={13} />,
       danger: true,
-      onClick: async () => {
-        await api.deleteAlbum(id).catch(() => undefined)
-        useStore.getState().toast('success', '相册已删除')
-        if (useStore.getState().scope === 'album' && useStore.getState().scopeId === id) {
-          useStore.getState().setScope('all')
-        }
-        useStore.getState().refreshLibrary()
-        useStore.getState().refreshPhotos()
-      }
-    }
+      onClick: () =>
+        setConfirmRemove({ kind: 'album', id: album.id, name: album.name, count: album.count }),
+    },
   ]
 
-  const tagMenu = (id: number, name: string): MenuItem[] => [
+  const tagMenu = (tag: TagInfo): MenuItem[] => [
     {
       label: '重命名',
       icon: <Pencil size={13} />,
       onClick: () => {
-        setRename({ kind: 'tag', id, name })
-        setRenameValue(name)
-      }
+        setRename({ kind: 'tag', id: tag.id, name: tag.name })
+        setRenameValue(tag.name)
+      },
     },
     {
       label: '颜色',
       icon: <Palette size={13} />,
       submenu: colorMenu((c) =>
         api
-          .setTagColor(id, c)
+          .setTagColor(tag.id, c)
           .then(() => useStore.getState().refreshLibrary())
-          .catch(() => undefined)
-      )
+          .catch(() => undefined),
+      ),
     },
     { separator: true },
     {
       label: '删除标签',
       icon: <Trash2 size={13} />,
       danger: true,
-      onClick: async () => {
-        await api.deleteTag(id).catch(() => undefined)
-        useStore.getState().toast('success', '标签已删除')
-        if (useStore.getState().scope === 'tag' && useStore.getState().scopeId === id) {
-          useStore.getState().setScope('all')
-        }
-        useStore.getState().refreshLibrary()
-        useStore.getState().refreshPhotos()
-      }
-    }
+      onClick: () =>
+        setConfirmRemove({ kind: 'tag', id: tag.id, name: tag.name, count: tag.count }),
+    },
   ]
 
   const smartAlbums = useStore((s) => s.smartAlbums)
@@ -284,7 +297,7 @@ export function Sidebar(): React.JSX.Element {
       onClick: () => {
         setRename({ kind: 'smart', id, name })
         setRenameValue(name)
-      }
+      },
     },
     { separator: true },
     {
@@ -299,8 +312,8 @@ export function Sidebar(): React.JSX.Element {
         }
         useStore.getState().refreshLibrary()
         useStore.getState().refreshPhotos()
-      }
-    }
+      },
+    },
   ]
 
   /** 把工具栏当前的筛选条件保存为智能相册 */
@@ -383,7 +396,7 @@ export function Sidebar(): React.JSX.Element {
           onClick={() => setScope('folder', f.id)}
           onContextMenu={(e) => {
             e.preventDefault()
-            setMenu({ x: e.clientX, y: e.clientY, items: folderMenu(f.id) })
+            setMenu({ x: e.clientX, y: e.clientY, items: folderMenu(f) })
           }}
         />
       ))}
@@ -415,7 +428,10 @@ export function Sidebar(): React.JSX.Element {
                 draggable={false}
               />
             ) : a.color ? (
-              <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: a.color }} />
+              <span
+                className="inline-block h-2.5 w-2.5 rounded-full"
+                style={{ background: a.color }}
+              />
             ) : (
               <Images size={15} />
             )
@@ -437,7 +453,7 @@ export function Sidebar(): React.JSX.Element {
           }
           onContextMenu={(e) => {
             e.preventDefault()
-            setMenu({ x: e.clientX, y: e.clientY, items: albumMenu(a.id, a.name) })
+            setMenu({ x: e.clientX, y: e.clientY, items: albumMenu(a) })
           }}
         />
       ))}
@@ -514,7 +530,7 @@ export function Sidebar(): React.JSX.Element {
           }
           onContextMenu={(e) => {
             e.preventDefault()
-            setMenu({ x: e.clientX, y: e.clientY, items: tagMenu(t.id, t.name) })
+            setMenu({ x: e.clientX, y: e.clientY, items: tagMenu(t) })
           }}
         />
       ))}
@@ -522,6 +538,34 @@ export function Sidebar(): React.JSX.Element {
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />
       )}
+
+      <ConfirmDialog
+        open={confirmRemove !== null}
+        title={
+          confirmRemove?.kind === 'folder'
+            ? '从资料库移除文件夹'
+            : confirmRemove?.kind === 'tag'
+              ? '删除标签'
+              : '删除相册'
+        }
+        message={
+          confirmRemove?.kind === 'folder'
+            ? `将把「${confirmRemove.name}」及其中 ${confirmRemove.count} 张照片从资料库移除。磁盘文件不会被删除，评分、标签与相册归属会保留，可在底部状态栏撤销。`
+            : confirmRemove?.kind === 'tag'
+              ? `将删除标签「${confirmRemove.name}」（${confirmRemove.count} 张照片使用）。照片文件不受影响，标签关系会保留，可在底部状态栏撤销。`
+              : `将删除相册「${confirmRemove?.name ?? ''}」（${confirmRemove?.count ?? 0} 张照片）。照片文件不受影响，相册归属会保留，可在底部状态栏撤销。`
+        }
+        confirmText={
+          confirmRemove?.kind === 'folder'
+            ? '移除资料库'
+            : confirmRemove?.kind === 'tag'
+              ? '删除标签'
+              : '删除相册'
+        }
+        danger
+        onClose={() => setConfirmRemove(null)}
+        onConfirm={() => void runRemove()}
+      />
 
       {rename && (
         <RenameDialog
@@ -544,7 +588,7 @@ export function Sidebar(): React.JSX.Element {
                     keyword: s.keyword || undefined,
                     dateFrom: s.dateFrom || undefined,
                     dateTo: s.dateTo || undefined,
-                    minRating: s.minRating || undefined
+                    minRating: s.minRating || undefined,
                   })
                   useStore.getState().toast('success', '智能相册已保存')
                 } else {
@@ -571,7 +615,7 @@ function RenameDialog({
   value,
   setValue,
   close,
-  confirm
+  confirm,
 }: {
   kind: 'album' | 'tag' | 'smart'
   isNew: boolean
@@ -617,7 +661,11 @@ function RenameDialog({
             if (e.key === 'Escape') close()
           }}
           placeholder={
-            kind === 'album' ? '例如：胶片风人像' : kind === 'smart' ? '例如：上个月的五星精选' : '例如：室外'
+            kind === 'album'
+              ? '例如：胶片风人像'
+              : kind === 'smart'
+                ? '例如：上个月的五星精选'
+                : '例如：室外'
           }
           className="w-full rounded-md border border-line bg-panel px-3 py-2 text-sm outline-none focus:border-[var(--c-accent)]"
         />

@@ -9,8 +9,10 @@ import type {
   PhotoScope,
   SmartAlbumInfo,
   TagInfo,
-  ThemeMode
+  ThemeMode,
+  UndoEntry,
 } from '@shared/types'
+import { UNDO_KIND_LABEL } from '@shared/types'
 
 export interface Toast {
   id: number
@@ -71,6 +73,8 @@ interface AppState extends Filters {
   /** 当前原生拖拽携带的照片 id（瓦片/查看器拖出会话），at 为发起时间戳供新鲜度校验 */
   draggingPhotos: { ids: number[]; at: number } | null
   appVersion: string
+  /** 最近一次可撤销的元数据删除（文件夹/标签/相册） */
+  undoEntry: UndoEntry | null
 
   init: () => Promise<void>
   setTheme: (mode: ThemeMode) => void
@@ -79,6 +83,8 @@ interface AppState extends Filters {
   refreshLibrary: () => Promise<void>
   refreshPhotos: () => Promise<void>
   loadMorePhotos: () => Promise<void>
+  refreshUndo: () => Promise<void>
+  performUndo: () => Promise<void>
   toggleSelect: (id: number, opts?: { additive?: boolean; range?: boolean }) => void
   selectAll: () => Promise<void>
   setSelection: (ids: number[]) => void
@@ -129,8 +135,8 @@ function persistViewState(): void {
           scopeId: s.scopeId ?? null,
           tile: s.tile,
           sort: s.sort,
-          dir: s.dir
-        })
+          dir: s.dir,
+        }),
       )
       .catch(() => undefined)
   }, 400)
@@ -146,7 +152,7 @@ const VALID_SCOPES: PhotoScope[] = [
   'untagged',
   'smart',
   'duplicates',
-  'trash'
+  'trash',
 ]
 const VALID_TILES = ['s', 'm', 'l'] as const
 const VALID_SORTS: SortKey[] = ['taken', 'imported', 'name', 'rating', 'size']
@@ -172,7 +178,7 @@ function buildQuery(s: AppState): PhotoQuery {
     dateTo: s.dateTo || undefined,
     minRating: s.minRating || undefined,
     sort: s.sort,
-    dir: s.dir
+    dir: s.dir,
   }
 }
 
@@ -217,6 +223,7 @@ export const useStore = create<AppState>((set, get) => ({
   helpOpen: false,
   draggingPhotos: null,
   appVersion: '',
+  undoEntry: null,
 
   init: async () => {
     try {
@@ -244,7 +251,9 @@ export const useStore = create<AppState>((set, get) => ({
       if (rawHistory) {
         const list = JSON.parse(rawHistory) as unknown
         if (Array.isArray(list)) {
-          set({ searchHistory: list.filter((x): x is string => typeof x === 'string').slice(0, 10) })
+          set({
+            searchHistory: list.filter((x): x is string => typeof x === 'string').slice(0, 10),
+          })
         }
       }
     } catch {
@@ -261,19 +270,21 @@ export const useStore = create<AppState>((set, get) => ({
           dir: 'asc' | 'desc'
         }>
         const scope = VALID_SCOPES.includes(v.scope as PhotoScope) ? (v.scope as PhotoScope) : 'all'
-        const needsId = scope === 'folder' || scope === 'album' || scope === 'tag' || scope === 'smart'
+        const needsId =
+          scope === 'folder' || scope === 'album' || scope === 'tag' || scope === 'smart'
         set({
           scope,
           scopeId: needsId && typeof v.scopeId === 'number' ? v.scopeId : undefined,
           tile: VALID_TILES.includes(v.tile as 's' | 'm' | 'l') ? (v.tile as 's' | 'm' | 'l') : 'm',
           sort: VALID_SORTS.includes(v.sort as SortKey) ? (v.sort as SortKey) : 'taken',
-          dir: v.dir === 'asc' ? 'asc' : 'desc'
+          dir: v.dir === 'asc' ? 'asc' : 'desc',
         })
       }
     } catch {
       /* ignore */
     }
     await get().refreshLibrary()
+    await get().refreshUndo()
     // 校验作用域指向的文件夹/相册/标签是否仍存在，失效则回退到全部照片
     const st = get()
     const scopeGone =
@@ -320,11 +331,41 @@ export const useStore = create<AppState>((set, get) => ({
         api.listTags(),
         api.listAlbums(),
         api.listSmartAlbums(),
-        api.stats()
+        api.stats(),
       ])
       set({ folders, tags, albums, smartAlbums, stats })
     } catch {
       /* ignore */
+    }
+  },
+
+  /** 同步主进程撤销栈顶条目（跨重启保留） */
+  refreshUndo: async () => {
+    try {
+      set({ undoEntry: await api.peekUndo() })
+    } catch {
+      set({ undoEntry: null })
+    }
+  },
+
+  /** 撤销最近一次文件夹/标签/相册删除 */
+  performUndo: async () => {
+    try {
+      const entry = await api.performUndo()
+      if (!entry) {
+        set({ undoEntry: null })
+        get().toast('info', '没有可撤销的操作')
+        return
+      }
+      set({ undoEntry: await api.peekUndo() })
+      get().toast(
+        'success',
+        `已恢复${UNDO_KIND_LABEL[entry.kind]}「${entry.label}」（${entry.photos} 张照片）`,
+      )
+      await get().refreshLibrary()
+      await get().refreshPhotos()
+    } catch (err) {
+      get().toast('error', `撤销失败：${err instanceof Error ? err.message : String(err)}`)
     }
   },
 
@@ -351,7 +392,7 @@ export const useStore = create<AppState>((set, get) => ({
         hasMore: r.items.length < r.total,
         loading: false,
         selection,
-        lastQueryKey: queryKey
+        lastQueryKey: queryKey,
       })
     } catch (err) {
       set({ loading: false })
@@ -378,7 +419,7 @@ export const useStore = create<AppState>((set, get) => ({
         photos: merged,
         total: r.total,
         hasMore: merged.length < r.total,
-        loadingMore: false
+        loadingMore: false,
       })
     } catch (err) {
       set({ loadingMore: false })
@@ -541,7 +582,7 @@ export const useStore = create<AppState>((set, get) => ({
         return {
           ...p,
           thumb_status: (st === 'ok' ? 1 : 2) as 0 | 1 | 2,
-          thumb_ts: now
+          thumb_ts: now,
         }
       })
       if (touched) set({ photos: next })
@@ -551,7 +592,7 @@ export const useStore = create<AppState>((set, get) => ({
   patchPhoto: (id, patch) => {
     const photos = get().photos.map((p) => (p.id === id ? { ...p, ...patch } : p))
     set({ photos })
-  }
+  },
 }))
 
 /** 供事件流使用的防抖刷新 */

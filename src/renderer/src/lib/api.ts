@@ -19,7 +19,8 @@ import type {
   SmartAlbumInfo,
   SmartAlbumQuery,
   TagInfo,
-  ThemeMode
+  ThemeMode,
+  UndoEntry,
 } from '@shared/types'
 
 type Invoke = (channel: string, ...args: unknown[]) => Promise<unknown>
@@ -52,6 +53,8 @@ export const api = {
   exportBackup: (): Promise<string | null> => call('library:exportBackup'),
   importBackup: (): Promise<{ photos: number; rebuiltThumbs: number } | null> =>
     call('library:importBackup'),
+  peekUndo: (): Promise<UndoEntry | null> => call('undo:peek'),
+  performUndo: (): Promise<UndoEntry | null> => call('undo:perform'),
   selectRedundant: (mode: 'best' | 'oldest'): Promise<{ ids: number[]; clusters: number }> =>
     call('duplicates:selectRedundant', mode),
 
@@ -60,7 +63,7 @@ export const api = {
   getPhoto: (id: number): Promise<PhotoRecord> => call('photos:get', id),
   updateMeta: (
     id: number,
-    patch: Partial<{ rating: number; title: string | null; description: string | null }>
+    patch: Partial<{ rating: number; title: string | null; description: string | null }>,
   ): Promise<PhotoRecord> => call('photos:updateMeta', id, patch),
   metadata: (id: number): Promise<ExifData> => call('photos:metadata', id),
   deletePhotos: (ids: number[]): Promise<DeleteResult> => call('photos:delete', ids),
@@ -70,7 +73,8 @@ export const api = {
   exportPhotos: (ids: number[], dir: string, opts: ExportOptions): Promise<ExportResult> =>
     call('photos:export', ids, dir, opts),
   cancelExport: (): Promise<void> => call('photos:cancelExport'),
-  saveEdits: (id: number, edit: EditSpec): Promise<PhotoRecord> => call('photos:saveEdits', id, edit),
+  saveEdits: (id: number, edit: EditSpec): Promise<PhotoRecord> =>
+    call('photos:saveEdits', id, edit),
   revertEdits: (id: number, backupName?: string): Promise<PhotoRecord> =>
     call('photos:revert', id, backupName),
   listBackups: (id: number): Promise<BackupInfo[]> => call('photos:listBackups', id),
@@ -84,10 +88,14 @@ export const api = {
     call('photos:setTags', photoId, tagIds),
   batchTags: (ids: number[], add: number[], remove: number[]): Promise<void> =>
     call('photos:batchTags', ids, add, remove),
-  batchRate: (ids: number[], rating: number): Promise<void> => call('photos:batchRate', ids, rating),
+  batchRate: (ids: number[], rating: number): Promise<void> =>
+    call('photos:batchRate', ids, rating),
   batchAlbum: (ids: number[], albumId: number | null): Promise<void> =>
     call('photos:batchAlbum', ids, albumId),
-  batchRename: (ids: number[], template: string): Promise<{ renamed: number; skipped: number; failed: number }> =>
+  batchRename: (
+    ids: number[],
+    template: string,
+  ): Promise<{ renamed: number; skipped: number; failed: number }> =>
     call('photos:batchRename', ids, template),
   removeAlbum: (photoId: number, albumId: number): Promise<void> =>
     call('photos:removeAlbum', photoId, albumId),
@@ -96,8 +104,9 @@ export const api = {
   createTag: (name: string, color: string | null): Promise<TagInfo> =>
     call('tags:create', name, color),
   renameTag: (id: number, name: string): Promise<void> => call('tags:rename', id, name),
-  setTagColor: (id: number, color: string | null): Promise<void> => call('tags:setColor', id, color),
-  deleteTag: (id: number): Promise<void> => call('tags:delete', id),
+  setTagColor: (id: number, color: string | null): Promise<void> =>
+    call('tags:setColor', id, color),
+  deleteTag: (id: number): Promise<{ name: string; photos: number }> => call('tags:delete', id),
 
   listAlbums: (): Promise<AlbumInfo[]> => call('albums:list'),
   createAlbum: (name: string, color: string | null): Promise<number> =>
@@ -105,7 +114,7 @@ export const api = {
   renameAlbum: (id: number, name: string): Promise<void> => call('albums:rename', id, name),
   setAlbumColor: (id: number, color: string | null): Promise<void> =>
     call('albums:setColor', id, color),
-  deleteAlbum: (id: number): Promise<void> => call('albums:delete', id),
+  deleteAlbum: (id: number): Promise<{ name: string; photos: number }> => call('albums:delete', id),
 
   listSmartAlbums: (): Promise<SmartAlbumInfo[]> => call('smartAlbums:list'),
   createSmartAlbum: (name: string, query: SmartAlbumQuery): Promise<number> =>
@@ -130,7 +139,7 @@ export const api = {
   downloadUpdate: (): Promise<void> => call('update:download'),
   cancelUpdateDownload: (): Promise<void> => call('update:cancelDownload'),
   installUpdate: (): Promise<void> => call('update:install'),
-  getUpdateState: (): Promise<UpdateState> => call('update:getState')
+  getUpdateState: (): Promise<UpdateState> => call('update:getState'),
 }
 
 export type EventChannel =

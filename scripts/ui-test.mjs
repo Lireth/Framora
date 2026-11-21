@@ -198,6 +198,122 @@ const perf = await page.evaluate(() => {
 })
 console.log('query perf:', JSON.stringify(perf))
 
+/* 13. 元数据软删除与撤销（P0-1）：标签走完整 UI 链路（右键 → 确认 → 状态栏撤销） */
+const invoke = (channel, ...args) =>
+  page.evaluate(
+    ({ c, a }) => window.framora.invoke(c, ...a),
+    { c: channel, a: args }
+  )
+const suffix = String(Date.now()).slice(-5)
+const tagName = '测试标签'
+const undoTag = (await invoke('tags:list')).find((t) => t.name === tagName)
+if (!undoTag || undoTag.count !== 300) fail('撤销测试缺少步骤 10 创建的标签')
+await sleep(300)
+
+await page.evaluate((name) => {
+  const row = [...document.querySelectorAll('aside button')].find((b) =>
+    b.textContent.trim().startsWith(name)
+  )
+  if (!row) return
+  const r = row.getBoundingClientRect()
+  row.dispatchEvent(
+    new MouseEvent('contextmenu', {
+      bubbles: true,
+      cancelable: true,
+      clientX: r.left + 20,
+      clientY: r.top + 10
+    })
+  )
+}, tagName)
+await sleep(300)
+await page.evaluate(() => {
+  const item = [...document.querySelectorAll('button')].find(
+    (b) => b.textContent.trim() === '删除标签'
+  )
+  item?.click()
+})
+await sleep(300)
+const tagConfirmText = await page.evaluate(() => document.body.innerText)
+if (!tagConfirmText.includes('可在底部状态栏撤销')) fail('删除标签缺少可撤销确认提示')
+await page.evaluate(() => {
+  const item = [...document.querySelectorAll('button')].find(
+    (b) => b.textContent.trim() === '删除标签'
+  )
+  item?.click()
+})
+await sleep(900)
+if ((await invoke('tags:list')).some((t) => t.id === undoTag.id)) fail('标签未从列表移除')
+if ((await invoke('undo:peek'))?.kind !== 'tag') fail('标签删除未进入撤销栈')
+await page.evaluate(() => {
+  const btn = [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === '撤销')
+  btn?.click()
+})
+await sleep(1000)
+const restoredTag = (await invoke('tags:list')).find((t) => t.id === undoTag.id)
+if (!restoredTag || restoredTag.count !== 300) fail('标签撤销后未恢复照片关系')
+console.log('tag undo: ok')
+
+/* 14. 相册软删除与撤销（IPC 链路：确认弹窗与标签共用同一 runRemove） */
+const sample = await invoke('photos:query', { scope: 'all', limit: 1 }).then((r) => r.items[0])
+if (!sample) fail('撤销测试缺少可用照片')
+const albumName = `撤销测试相册${suffix}`
+const undoAlbum = await invoke('albums:create', albumName, null)
+await invoke('photos:batchAlbum', [sample.id], undoAlbum)
+await invoke('albums:delete', undoAlbum)
+if ((await invoke('undo:peek'))?.kind !== 'album') fail('相册删除未进入撤销栈')
+await invoke('undo:perform')
+const restoredAlbum = (await invoke('albums:list')).find((a) => a.id === undoAlbum)
+if (!restoredAlbum || restoredAlbum.count !== 1) fail('相册撤销后未恢复成员')
+console.log('album undo: ok')
+
+/* 15. 文件夹移除与撤销（完整 UI 链路） */
+const statsBefore = await invoke('library:stats')
+await page.evaluate((name) => {
+  const row = [...document.querySelectorAll('aside button')].find((b) =>
+    b.textContent.trim().startsWith(name)
+  )
+  if (!row) return
+  const r = row.getBoundingClientRect()
+  row.dispatchEvent(
+    new MouseEvent('contextmenu', {
+      bubbles: true,
+      cancelable: true,
+      clientX: r.left + 20,
+      clientY: r.top + 10
+    })
+  )
+}, path.basename(tmpData))
+await sleep(300)
+await page.evaluate(() => {
+  const item = [...document.querySelectorAll('button')].find(
+    (b) => b.textContent.trim() === '从资料库移除（可撤销）'
+  )
+  item?.click()
+})
+await sleep(300)
+const folderConfirmText = await page.evaluate(() => document.body.innerText)
+if (!folderConfirmText.includes('可在底部状态栏撤销')) fail('移除文件夹缺少可撤销确认提示')
+await page.evaluate(() => {
+  const item = [...document.querySelectorAll('button')].find(
+    (b) => b.textContent.trim() === '移除资料库'
+  )
+  item?.click()
+})
+await sleep(1200)
+const statsHidden = await invoke('library:stats')
+if (statsHidden.total !== 0) fail(`移除文件夹后照片应隐藏，实际 ${statsHidden.total}`)
+await page.evaluate(() => {
+  const btn = [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === '撤销')
+  btn?.click()
+})
+await sleep(1400)
+const statsRestored = await invoke('library:stats')
+if (statsRestored.total !== statsBefore.total) {
+  fail(`文件夹撤销后照片数应恢复为 ${statsBefore.total}，实际 ${statsRestored.total}`)
+}
+if (await invoke('undo:peek')) fail('撤销栈应在全部撤销后清空')
+console.log('folder undo: ok')
+
 writeFileSync(path.join(OUT, 'result.json'), JSON.stringify({ ok: process.exitCode == null }))
 console.log('screenshots at', OUT)
 browser.disconnect()

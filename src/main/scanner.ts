@@ -9,10 +9,11 @@ import {
   insertPhoto,
   insertPhotosBatch,
   listPhotoRowsByFolder,
+  restoreFolder,
   restorePhotos,
   updatePhotoFileFields,
   updatePhotoFilesBatch,
-  updatePhotoPath
+  updatePhotoPath,
 } from './db'
 import { enqueueThumb } from './thumbs'
 import { logError } from './log'
@@ -43,7 +44,7 @@ export function broadcastExport(e: ExportEvent): void {
 async function* walk(
   dir: string,
   onKnownUnsupported?: (p: string) => void,
-  token?: { cancelled: boolean }
+  token?: { cancelled: boolean },
 ): AsyncGenerator<string> {
   if (token?.cancelled) return
   let entries: fs.Dirent[]
@@ -85,7 +86,7 @@ async function statAll(
   files: string[],
   concurrency: number,
   onProgress?: (processed: number) => void,
-  token?: { cancelled: boolean }
+  token?: { cancelled: boolean },
 ): Promise<FileStat[]> {
   const out: (FileStat | null)[] = new Array(files.length).fill(null)
   let cursor = 0
@@ -99,7 +100,9 @@ async function statAll(
       if (onProgress && (done % 200 === 0 || done === files.length)) onProgress(done)
     }
   }
-  await Promise.all(Array.from({ length: Math.max(1, Math.min(concurrency, files.length)) }, worker))
+  await Promise.all(
+    Array.from({ length: Math.max(1, Math.min(concurrency, files.length)) }, worker),
+  )
   return out.filter((s): s is FileStat => s !== null)
 }
 
@@ -113,6 +116,8 @@ export async function importFolder(folderPath: string): Promise<ImportResult> {
     if (!st || !st.isDirectory()) throw new Error('所选路径不是有效的文件夹')
     const existing = getFolderByPath(folderPath)
     folderId = existing ? existing.id : addFolder(folderPath, path.basename(folderPath))
+    // 同一路径曾被移除（软删除）：重新导入即复活原文件夹，评分/标签/相册归属原样保留
+    if (existing?.deleted_at != null) restoreFolder(existing.id)
     broadcastScan({ phase: 'start', folderId })
     let added = 0
     let updated = 0
@@ -135,7 +140,7 @@ export async function importFolder(folderPath: string): Promise<ImportResult> {
       (processed) => {
         broadcastScan({ phase: 'progress', folderId, processed })
       },
-      token
+      token,
     )
 
     // 取消：此时尚未写库，直接以取消态返回，不留半成品索引
@@ -147,7 +152,7 @@ export async function importFolder(folderPath: string): Promise<ImportResult> {
         added: 0,
         updated: 0,
         unsupported,
-        cancelled: true
+        cancelled: true,
       })
       return { folderId, found, added: 0, updated: 0, unsupported, cancelled: true }
     }
@@ -173,7 +178,7 @@ export async function importFolder(folderPath: string): Promise<ImportResult> {
           ext: path.extname(s.path).toLowerCase().slice(1),
           size: s.size,
           mtime: s.mtime,
-          imported_at: now
+          imported_at: now,
         })
       } else if (k.mtime !== s.mtime || k.size !== s.size) {
         updates.push({ id: k.id, size: s.size, mtime: s.mtime })
@@ -217,7 +222,7 @@ export async function importFolder(folderPath: string): Promise<ImportResult> {
       added,
       updated,
       unsupported,
-      missing: missings.length
+      missing: missings.length,
     })
     broadcastLibraryChanged()
     return { folderId, found, added, updated, unsupported, missing: missings.length }
@@ -225,7 +230,7 @@ export async function importFolder(folderPath: string): Promise<ImportResult> {
     broadcastScan({
       phase: 'error',
       folderId,
-      message: err instanceof Error ? err.message : String(err)
+      message: err instanceof Error ? err.message : String(err),
     })
     throw err
   } finally {
@@ -282,7 +287,7 @@ export function trackNewFile(folderId: number, filePath: string): void {
         ext: path.extname(filePath).toLowerCase().slice(1),
         size: s.size,
         mtime: Math.round(s.mtimeMs),
-        imported_at: Date.now()
+        imported_at: Date.now(),
       })
       enqueueThumb(id)
       const row = findPhotoByPath(filePath)
@@ -303,7 +308,7 @@ export function trackChangedFile(folderId: number, filePath: string): void {
     .then((s) => {
       const patch: { size: number; mtime: number; missing?: 0 | 1 } = {
         size: s.size,
-        mtime: Math.round(s.mtimeMs)
+        mtime: Math.round(s.mtimeMs),
       }
       // change 事件意味着文件真实存在：缺失行顺带恢复
       if (row.missing) patch.missing = 0

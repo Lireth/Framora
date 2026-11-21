@@ -182,6 +182,15 @@ export async function importFolder(folderPath: string): Promise<ImportResult> {
       }
     }
 
+    // O4 反向标记：已知文件未出现在本次目录清单中 → missing=1
+    // （存在性事实源是 walk 的目录清单而非 stat 结果：stat 瞬时失败不误标；
+    //   已标记缺失的行跳过，避免重复写）
+    const presentKeys = new Set(files.map((p) => p.toLowerCase()))
+    const missings: { id: number; missing: 0 | 1 }[] = []
+    for (const [key, r] of known) {
+      if (!r.missing && !presentKeys.has(key)) missings.push({ id: r.id, missing: 1 })
+    }
+
     // 3. 分批事务写入，避免单批过大占用内存
     const newIds: number[] = []
     const BATCH = 500
@@ -192,6 +201,7 @@ export async function importFolder(folderPath: string): Promise<ImportResult> {
       updatePhotoFilesBatch(updates.slice(i, i + BATCH))
     }
     if (restores.length) updatePhotoFilesBatch(restores)
+    if (missings.length) updatePhotoFilesBatch(missings)
     // added 以实际入库为准：批量插入对并发冲突（含大小写变体）幂等忽略，可能少于预插行数
     added = newIds.length
     updated = updates.length
@@ -200,9 +210,17 @@ export async function importFolder(folderPath: string): Promise<ImportResult> {
     for (const id of newIds) enqueueThumb(id)
     for (const u of updates) enqueueThumb(u.id)
 
-    broadcastScan({ phase: 'done', folderId, found, added, updated, unsupported })
+    broadcastScan({
+      phase: 'done',
+      folderId,
+      found,
+      added,
+      updated,
+      unsupported,
+      missing: missings.length
+    })
     broadcastLibraryChanged()
-    return { folderId, found, added, updated, unsupported }
+    return { folderId, found, added, updated, unsupported, missing: missings.length }
   } catch (err) {
     broadcastScan({
       phase: 'error',
@@ -242,10 +260,15 @@ export function trackNewFile(folderId: number, filePath: string): void {
   const existing = findPhotoByPath(filePath)
   if (existing) {
     // 大小写不敏感命中：仅改大小写的重命名会走到这里，把索引刷新为磁盘上的
-    // 实际大小写（文件名变化同时经 updatePhotoPath 重算搜索文本）；
-    // 缺失标记的恢复语义不在本函数处理
+    // 实际大小写（文件名变化同时经 updatePhotoPath 重算搜索文本）
     if (existing.path !== filePath) {
       updatePhotoPath(existing.id, filePath, path.basename(filePath))
+    }
+    // 「删除后重建同名文件（或大小写变体重建）」命中既有行：清除缺失标记并重建缩略图
+    if (existing.missing) {
+      updatePhotoFileFields(existing.id, { missing: 0 })
+      enqueueThumb(existing.id)
+      broadcastWatch({ type: 'change', folderId, id: existing.id })
     }
     return
   }
@@ -278,7 +301,13 @@ export function trackChangedFile(folderId: number, filePath: string): void {
   fs.promises
     .stat(filePath)
     .then((s) => {
-      updatePhotoFileFields(row.id, { size: s.size, mtime: Math.round(s.mtimeMs) })
+      const patch: { size: number; mtime: number; missing?: 0 | 1 } = {
+        size: s.size,
+        mtime: Math.round(s.mtimeMs)
+      }
+      // change 事件意味着文件真实存在：缺失行顺带恢复
+      if (row.missing) patch.missing = 0
+      updatePhotoFileFields(row.id, patch)
       enqueueThumb(row.id)
       broadcastWatch({ type: 'change', folderId, id: row.id })
     })

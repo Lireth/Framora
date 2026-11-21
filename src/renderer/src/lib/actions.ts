@@ -17,7 +17,7 @@ export async function importFolderAction(): Promise<void> {
         'success',
         `导入完成：发现 ${r.found} 张，新增 ${r.added} 张，更新 ${r.updated} 张${
           r.unsupported ? `，另有 ${r.unsupported} 个无法解码的照片未导入` : ''
-        }`
+        }${r.missing ? `，标记缺失 ${r.missing} 张` : ''}`
       )
     }
     await s.refreshLibrary()

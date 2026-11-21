@@ -158,6 +158,8 @@ export interface ScanEvent {
   processed?: number
   /** 已识别但当前构建无法解码的格式数量（如 HEIC），用于导入完成提示 */
   unsupported?: number
+  /** 本次扫描标记为缺失的数量（目录清单中已不存在的已知文件） */
+  missing?: number
   /** 用户取消扫描（此时尚未写库，无半成品索引） */
   cancelled?: boolean
   message?: string
@@ -199,6 +201,8 @@ export interface ImportResult {
   found: number
   /** 已识别但当前构建无法解码的格式数量（如 HEIC） */
   unsupported?: number
+  /** 本次扫描标记为缺失的数量（目录清单中已不存在的已知文件） */
+  missing?: number
   /** 用户取消导入 */
   cancelled?: boolean
 }

@@ -25,6 +25,7 @@ import {
   cancelScan,
   importFolder,
   isImagePath,
+  splitImportPaths,
   trackChangedFile,
   trackDeletedFile,
   trackNewFile,
@@ -239,5 +240,33 @@ describe('importFolder 已知不支持格式计数', () => {
     const r = await importFolder(dir)
     expect(r.cancelled).toBeUndefined()
     expect(r.added).toBe(1)
+  })
+})
+
+describe('splitImportPaths 导入路径分流', () => {
+  it('图片扩展名直接归入文件，不逐个 stat', async () => {
+    const r = await splitImportPaths(['C:\pic\a.jpg', 'C:\pic\b.PNG'])
+    expect(r.files).toHaveLength(2)
+    expect(r.files).toContain('C:\pic\a.jpg')
+    expect(r.files).toContain('C:\pic\b.PNG')
+    expect(r.dirs).toEqual([])
+    expect(r.skipped).toBe(0)
+  })
+
+  it('目录按真实类型归入 dirs（解析为绝对路径）', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'framora-split-'))
+    const r = await splitImportPaths([dir])
+    expect(r.dirs).toHaveLength(1)
+    expect(path.resolve(r.dirs[0]).toLowerCase()).toBe(path.resolve(dir).toLowerCase())
+  })
+
+  it('不存在的路径计 skipped；重复路径（大小写不敏感）只处理一次', async () => {
+    const r = await splitImportPaths([
+      'C:\pic\a.jpg',
+      'C:\PIC\A.JPG',
+      'C:\pic\missing-folder',
+    ])
+    expect(r.files).toEqual(['C:\pic\a.jpg'])
+    expect(r.skipped).toBe(1)
   })
 })

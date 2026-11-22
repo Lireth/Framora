@@ -9,8 +9,8 @@ import {
   broadcastLibraryChanged,
   cancelScan,
   importFolder,
-  isImagePath,
   suppressTracking,
+  splitImportPaths,
   trackNewFile,
   waitForScansIdle,
 } from './scanner'
@@ -65,72 +65,22 @@ import type {
   SmartAlbumQuery,
   StorageLimits,
   ThemeMode,
-  UndoEntry,
-  UndoKind,
 } from '@shared/types'
+import { UndoStore } from './undo'
 
-/* ---------- 元数据删除撤销栈 ---------- */
+/* ---------- 元数据删除撤销栈 ----------
+ * 栈管理与持久化格式过滤在 ./undo（OPT-22 抽取，纯逻辑可单测），
+ * 此处仅注入 settings 读写并把各类恢复动作接到 db。 */
 
-/** 最多保留的撤销条目；跨重启持久化在 settings，避免「删完忘记撤销」后永久丢失整理成果 */
-const UNDO_MAX = 10
-let undoStack: UndoEntry[] = []
-
-function isUndoEntry(v: unknown): v is UndoEntry {
-  const o = v as Partial<UndoEntry> | null
-  return (
-    !!o &&
-    (o.kind === 'folder' || o.kind === 'tag' || o.kind === 'album') &&
-    typeof o.id === 'number' &&
-    Number.isFinite(o.id) &&
-    typeof o.label === 'string' &&
-    typeof o.photos === 'number' &&
-    typeof o.at === 'number'
-  )
-}
-
-function loadUndoStack(): void {
-  try {
-    const raw = db.getSetting('undoStack')
-    if (!raw) return
-    const list = JSON.parse(raw) as unknown
-    if (Array.isArray(list)) undoStack = list.filter(isUndoEntry).slice(-UNDO_MAX)
-  } catch {
-    undoStack = []
-  }
-}
-
-function saveUndoStack(): void {
-  try {
-    db.setSetting('undoStack', JSON.stringify(undoStack))
-  } catch {
-    /* 持久化失败不影响会话内撤销 */
-  }
-}
-
-function pushUndo(e: Omit<UndoEntry, 'at'>): void {
-  undoStack.push({ ...e, at: Date.now() })
-  if (undoStack.length > UNDO_MAX) undoStack.splice(0, undoStack.length - UNDO_MAX)
-  saveUndoStack()
-}
-
-/** 条目已通过其他路径恢复（重新导入 / 同名新建）时移除，避免状态栏展示过期撤销 */
-function dropUndo(kind: UndoKind, id: number): void {
-  const next = undoStack.filter((e) => !(e.kind === kind && e.id === id))
-  if (next.length !== undoStack.length) {
-    undoStack = next
-    saveUndoStack()
-  }
-}
-
-function clearUndoStack(): void {
-  undoStack = []
-  saveUndoStack()
-}
+const undoStore = new UndoStore({
+  read: () => db.getSetting('undoStack'),
+  write: (raw) => db.setSetting('undoStack', raw),
+})
 
 export function registerIpc(): void {
   // 旧版编辑备份（裸 id 命名）按当前库一次性重绑定到路径哈希命名（O3）
   migrateLegacyEditBackups()
-  loadUndoStack()
+  undoStore.load()
 
   ipcMain.handle('app:info', () => ({
     version: app.getVersion(),
@@ -197,32 +147,14 @@ export function registerIpc(): void {
     const folder = db.getFolderByPath(folderPath)
     if (folder) await startWatcher(folder.id, folder.path) // 已挂载时为幂等 no-op
     // 重新导入同一路径会复活已移除的文件夹，对应撤销条目已失去意义
-    dropUndo('folder', result.folderId)
+    undoStore.drop('folder', result.folderId)
     return result
   })
 
   ipcMain.handle('library:importFiles', async (_e, filePaths: string[]) => {
     // 拖入/选择可能混合文件与文件夹：按真实类型分流（渲染层拿不到可靠的目录标记）
-    const dirs: string[] = []
-    const files: string[] = []
-    let skipped = 0
-    const seen = new Set<string>()
-    for (const p of filePaths) {
-      const key = path.resolve(p).toLowerCase()
-      if (seen.has(key)) continue
-      seen.add(key)
-      // 图片扩展名直接按文件处理，避免上万文件逐个 stat；其余路径再判目录
-      if (isImagePath(p)) {
-        files.push(p)
-        continue
-      }
-      try {
-        if (fs.statSync(p).isDirectory()) dirs.push(path.resolve(p))
-        else skipped++
-      } catch {
-        skipped++
-      }
-    }
+    const { dirs, files, skipped: classifySkipped } = await splitImportPaths(filePaths)
+    let skipped = classifySkipped
 
     // 文件夹：已在资料库内的重扫所属根目录（不注册嵌套根）；库外则注册并监听。
     // 先处理文件夹，随后同批拖入的子文件会自然归入新资料库，不再弹目标目录选择。
@@ -317,7 +249,7 @@ export function registerIpc(): void {
     // 软删除：照片行、标签/相册关系、缩略图全部保留，撤销时无需重建
     const info = db.softRemoveFolder(folderId)
     if (!info) return { removed: 0 }
-    pushUndo({ kind: 'folder', id: folderId, label: info.name, photos: info.photos })
+    undoStore.push({ kind: 'folder', id: folderId, label: info.name, photos: info.photos })
     broadcastLibraryChanged()
     return { removed: info.photos }
   })
@@ -358,7 +290,7 @@ export function registerIpc(): void {
     clearThumbQueue()
     await db.importBackup(r.filePaths[0])
     // 换库后旧库实体 id 全部失效，撤销栈必须清空
-    clearUndoStack()
+    undoStore.clear()
     // 库代次递增：旧库在途的缩略图/感知哈希任务检测到代次变化即作废写入（O3）
     bumpThumbGeneration()
     bumpPhashGeneration()
@@ -601,10 +533,10 @@ export function registerIpc(): void {
 
   /* ---------- undo（元数据软删除撤销） ---------- */
 
-  ipcMain.handle('undo:peek', () => undoStack[undoStack.length - 1] ?? null)
+  ipcMain.handle('undo:peek', () => undoStore.peek())
 
   ipcMain.handle('undo:perform', async () => {
-    const entry = undoStack[undoStack.length - 1]
+    const entry = undoStore.peek()
     if (!entry) return null
     // 先恢复成功再出栈：恢复抛错时保留条目，用户可重试
     if (entry.kind === 'folder') {
@@ -616,8 +548,7 @@ export function registerIpc(): void {
     } else {
       db.restoreAlbum(entry.id)
     }
-    undoStack.pop()
-    saveUndoStack()
+    undoStore.pop()
     broadcastLibraryChanged()
     return entry
   })
@@ -627,7 +558,7 @@ export function registerIpc(): void {
   ipcMain.handle('tags:create', (_e, name: string, color: string | null) => {
     const tag = db.createTag(name.trim(), color)
     // 同名新建会复活软删除标签，旧撤销条目不再适用
-    dropUndo('tag', tag.id)
+    undoStore.drop('tag', tag.id)
     return tag
   })
   ipcMain.handle('tags:rename', (_e, id: number, name: string) => db.renameTag(id, name.trim()))
@@ -637,7 +568,7 @@ export function registerIpc(): void {
   ipcMain.handle('tags:delete', (_e, id: number) => {
     const info = db.deleteTag(id)
     if (!info) throw new Error('标签不存在或已删除')
-    pushUndo({ kind: 'tag', id, label: info.name, photos: info.photos })
+    undoStore.push({ kind: 'tag', id, label: info.name, photos: info.photos })
     broadcastLibraryChanged()
     return info
   })
@@ -716,7 +647,7 @@ export function registerIpc(): void {
   ipcMain.handle('albums:delete', (_e, id: number) => {
     const info = db.deleteAlbum(id)
     if (!info) throw new Error('相册不存在或已删除')
-    pushUndo({ kind: 'album', id, label: info.name, photos: info.photos })
+    undoStore.push({ kind: 'album', id, label: info.name, photos: info.photos })
     broadcastLibraryChanged()
     return info
   })

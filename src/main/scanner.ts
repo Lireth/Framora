@@ -41,6 +41,41 @@ export function broadcastExport(e: ExportEvent): void {
   for (const w of BrowserWindow.getAllWindows()) w.webContents.send('evt:export', e)
 }
 
+/** 导入路径分流结果 */
+export interface SplitPaths {
+  dirs: string[]
+  files: string[]
+  skipped: number
+}
+
+/**
+ * 拖入/选择路径分流（自 ipc.ts 抽取为纯逻辑，OPT-22）：混合文件与文件夹按真实
+ * 类型归类（渲染层拿不到可靠的目录标记）；大小写不敏感去重；图片扩展名直接按
+ * 文件处理（避免上万文件逐个 stat），其余路径再判目录。
+ */
+export async function splitImportPaths(paths: string[]): Promise<SplitPaths> {
+  const dirs: string[] = []
+  const files: string[] = []
+  let skipped = 0
+  const seen = new Set<string>()
+  for (const p of paths) {
+    const key = path.resolve(p).toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    if (isImagePath(p)) {
+      files.push(p)
+      continue
+    }
+    try {
+      if ((await fs.promises.stat(p)).isDirectory()) dirs.push(path.resolve(p))
+      else skipped++
+    } catch {
+      skipped++
+    }
+  }
+  return { dirs, files, skipped }
+}
+
 /** 编辑写回中断的崩溃残留后缀（imageops.atomicReplace 的移位文件） */
 const FRAMORA_OLD_SUFFIX = '.framora-old'
 

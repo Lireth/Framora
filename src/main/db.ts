@@ -6,6 +6,7 @@ import { computePhashClusters } from './phashCluster'
 import { logError } from './log'
 import type {
   AlbumInfo,
+  LibraryDistribution,
   FolderInfo,
   PhotoLite,
   PhotoQuery,
@@ -1977,6 +1978,44 @@ export async function queryDuplicates(q: {
     `SELECT ${PHOTO_LITE_COLS} FROM photos p WHERE p.id IN (${ph}) ORDER BY CASE p.id ${caseWhen} END`,
   ).all(...slice) as PhotoLite[]
   return { items, total: ids.length }
+}
+
+/** 统计分布（FEAT-08）：聚合查询，全部限定可见文件夹 + 未删除 */
+export function libraryDistribution(): LibraryDistribution {
+  const byMonth = (
+    stmt(
+      `SELECT strftime('%Y-%m', p.sort_ts / 1000, 'unixepoch') AS ym, COUNT(*) AS count
+       FROM photos p WHERE ${VISIBLE_FOLDER_SQL} AND p.deleted_at IS NULL
+       GROUP BY ym ORDER BY ym DESC LIMIT 24`,
+    ).all() as { ym: string; count: number }[]
+  ).reverse()
+  const ratingRows = (
+    stmt(
+      `SELECT p.rating AS rating, COUNT(*) AS count
+       FROM photos p WHERE ${VISIBLE_FOLDER_SQL} AND p.deleted_at IS NULL GROUP BY p.rating`,
+    ).all() as { rating: number; count: number }[]
+  )
+  const byRating = [0, 0, 0, 0, 0, 0]
+  for (const r of ratingRows) {
+    const i = Math.min(5, Math.max(0, Math.round(r.rating)))
+    byRating[i] = r.count
+  }
+  const topTags = (
+    stmt(
+      `SELECT t.name AS name, COUNT(*) AS count FROM photo_tags pt
+       JOIN tags t ON t.id = pt.tag_id AND t.deleted_at IS NULL
+       JOIN photos p ON p.id = pt.photo_id AND p.missing = 0 AND p.deleted_at IS NULL
+       WHERE ${VISIBLE_FOLDER_SQL} GROUP BY t.id ORDER BY count DESC LIMIT 10`,
+    ).all() as { name: string; count: number }[]
+  )
+  const byCamera = (
+    stmt(
+      `SELECT p.camera AS name, COUNT(*) AS count
+       FROM photos p WHERE ${VISIBLE_FOLDER_SQL} AND p.deleted_at IS NULL AND p.camera IS NOT NULL
+       GROUP BY p.camera ORDER BY count DESC LIMIT 8`,
+    ).all() as { name: string; count: number }[]
+  )
+  return { byMonth, byRating, topTags, byCamera }
 }
 
 export function libraryStats(): {

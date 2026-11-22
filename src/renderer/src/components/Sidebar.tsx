@@ -15,6 +15,7 @@ import {
   Tag,
   Trash2,
   MapPin,
+  BarChart3,
 } from 'lucide-react'
 import { useStore } from '../store'
 import { api } from '../lib/api'
@@ -427,6 +428,12 @@ export function Sidebar(): React.JSX.Element {
         count={stats.missing}
         active={scope === 'missing'}
         onClick={() => setScope('missing')}
+      />
+      <NavRow
+        icon={<BarChart3 size={15} />}
+        label="资料库统计"
+        active={false}
+        onClick={() => useStore.getState().setStatsOpen(true)}
       />
       <NavRow
         icon={<MapPin size={15} />}

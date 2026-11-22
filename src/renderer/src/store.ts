@@ -73,6 +73,8 @@ interface AppState extends Filters {
   exportProgress: { done: number; total: number } | null
   toasts: Toast[]
   settingsOpen: boolean
+  /** 资料库统计弹窗（FEAT-08） */
+  statsOpen: boolean
   exportOpen: boolean
   /** 导出对话框形态：export = 导出到指定目录；convert = 库内格式转换（源进回收站） */
   exportMode: 'export' | 'convert'
@@ -119,6 +121,7 @@ interface AppState extends Filters {
   toast: (type: Toast['type'], text: string) => void
   dismissToast: (id: number) => void
   setSettingsOpen: (v: boolean) => void
+  setStatsOpen: (v: boolean) => void
   openExport: (ids: number[] | null) => void
   openConvert: (ids: number[] | null) => void
   closeExport: () => void
@@ -282,6 +285,7 @@ export const useStore = create<AppState>((set, get) => ({
   exportProgress: null,
   toasts: [],
   settingsOpen: false,
+  statsOpen: false,
   exportOpen: false,
   exportMode: 'export',
   exportIds: null,
@@ -651,6 +655,7 @@ export const useStore = create<AppState>((set, get) => ({
   dismissToast: (id) => set({ toasts: get().toasts.filter((t) => t.id !== id) }),
 
   setSettingsOpen: (v) => set({ settingsOpen: v }),
+  setStatsOpen: (v) => set({ statsOpen: v }),
 
   openExport: (ids) => set({ exportOpen: true, exportIds: ids, exportMode: 'export' }),
 

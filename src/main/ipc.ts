@@ -259,6 +259,7 @@ export function registerIpc(): void {
   })
 
   ipcMain.handle('library:stats', () => db.libraryStats())
+  ipcMain.handle('library:distribution', () => db.libraryDistribution())
 
   /** 导出索引库备份为单文件 */
   ipcMain.handle('library:exportBackup', async () => {

@@ -34,6 +34,7 @@ const CALLABLE = new Set([
   'library:cancelScan',
   'library:removeFolder',
   'library:stats',
+  'library:distribution',
   'library:exportBackup',
   'library:importBackup',
   'undo:peek',

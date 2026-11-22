@@ -11,6 +11,7 @@ import type {
   FolderInfo,
   ImportFilesResult,
   ImportResult,
+  LibraryDistribution,
   LibraryStats,
   PhotoQuery,
   PhotoRecord,
@@ -65,6 +66,7 @@ export const api = {
   cancelScan: (): Promise<void> => call('library:cancelScan'),
   removeFolder: (id: number): Promise<{ removed: number }> => call('library:removeFolder', id),
   stats: (): Promise<LibraryStats> => call('library:stats'),
+  distribution: (): Promise<LibraryDistribution> => call('library:distribution'),
   exportBackup: (): Promise<string | null> => call('library:exportBackup'),
   importBackup: (): Promise<{ photos: number; rebuiltThumbs: number } | null> =>
     call('library:importBackup'),

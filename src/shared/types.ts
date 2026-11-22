@@ -166,6 +166,18 @@ export interface GeoPhoto {
   taken_at: number | null
 }
 
+/** 资料库统计分布（FEAT-08） */
+export interface LibraryDistribution {
+  /** 按拍摄月（无拍摄时间用导入时间），近 24 个月，旧→新 */
+  byMonth: { ym: string; count: number }[]
+  /** 星级 0-5 计数 */
+  byRating: number[]
+  /** 标签 TOP-N */
+  topTags: { name: string; count: number }[]
+  /** 相机 TOP-N（Make + Model，未解析到的照片不计入） */
+  byCamera: { name: string; count: number }[]
+}
+
 export interface MetaPair {
   label: string
   value: string

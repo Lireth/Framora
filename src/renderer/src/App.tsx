@@ -13,6 +13,7 @@ import { DetailPanel } from './components/DetailPanel'
 import { BatchBar } from './components/BatchBar'
 import { Viewer } from './components/Viewer'
 import { SettingsModal } from './components/SettingsModal'
+import { StatsModal } from './components/StatsModal'
 import { ExportDialog } from './components/ExportDialog'
 import { ShortcutHelpModal, Toasts } from './components/ui'
 import {
@@ -260,6 +261,7 @@ export default function App(): React.JSX.Element {
       <BatchBar />
       {viewerOpen && <Viewer />}
       <SettingsModal />
+      <StatsModal />
       <ExportDialog />
       <ShortcutHelpModal />
       {dropActive && (

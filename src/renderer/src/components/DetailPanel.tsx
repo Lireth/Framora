@@ -1,11 +1,31 @@
 import React, { useEffect, useState } from 'react'
-import { Camera, ChevronDown, ExternalLink, FolderInput, Images, Plus, Tag, X } from 'lucide-react'
+import {
+  Camera,
+  ChevronDown,
+  ExternalLink,
+  FolderInput,
+  Images,
+  MapPin,
+  Plus,
+  Tag,
+  X
+} from 'lucide-react'
 import { useStore } from '../store'
 import { api } from '../lib/api'
 import { formatDateTime, formatBytes, thumbUrl } from '../lib/format'
 import { cn, StarRating } from './ui'
 import { TagPicker } from './TagPicker'
 import type { MetaPair, PhotoRecord } from '@shared/types'
+
+/** 解析 EXIF 面板的 GPS 坐标字符串（主进程格式："31.23041, 121.47370"） */
+function parseGps(value: string): { lat: number; lon: number } | null {
+  const m = /^\s*(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)\s*$/.exec(value)
+  if (!m) return null
+  const lat = Number(m[1])
+  const lon = Number(m[2])
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null
+  return { lat, lon }
+}
 
 function Field({ label, value }: { label: string; value: React.ReactNode }): React.JSX.Element {
   return (
@@ -272,7 +292,33 @@ export function DetailPanel({ inViewer }: { inViewer?: boolean }): React.JSX.Ele
               {exif !== null &&
                 exif
                   .filter((p) => !['文件名', '格式', '尺寸', '大小', '拍摄时间', '导入时间', '路径'].includes(p.label))
-                  .map((p) => <Field key={p.label + p.value} label={p.label} value={p.value} />)}
+                  .map((p) => {
+                    // GPS 行附带「在地图中打开」：坐标合法时外链 OpenStreetMap
+                    const gps = p.label === 'GPS' ? parseGps(p.value) : null
+                    return (
+                      <Field
+                        key={p.label + p.value}
+                        label={p.label}
+                        value={
+                          gps ? (
+                            <span className="flex items-center gap-1.5">
+                              <span className="select-text">{p.value}</span>
+                              <button
+                                onClick={() =>
+                                  api.openInMap(gps.lat, gps.lon).catch(() => undefined)
+                                }
+                                className="flex shrink-0 items-center gap-0.5 text-[11px] text-accent hover:underline"
+                              >
+                                <MapPin size={11} /> 地图
+                              </button>
+                            </span>
+                          ) : (
+                            p.value
+                          )
+                        }
+                      />
+                    )
+                  })}
               {exif !== null && exif.length <= 7 && (
                 <p className="text-[11.5px] text-ink3">此文件没有可用的相机元数据</p>
               )}

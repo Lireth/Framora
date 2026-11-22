@@ -549,6 +549,15 @@ export function registerIpc(): void {
     shell.showItemInFolder(row.path)
   })
 
+  // 在系统浏览器打开 OpenStreetMap 定位照片拍摄地点：渲染层只传坐标数值，
+  // URL 在主进程构造，不拼入任意字符串
+  ipcMain.handle('photos:openInMap', (_e, lat: number, lon: number) => {
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return
+    if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return
+    const url = `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}#map=16/${lat}/${lon}`
+    void shell.openExternal(url)
+  })
+
   ipcMain.handle('photos:regenerateThumb', (_e, id: number) => {
     db.setThumbStatus(id, 0)
     enqueueThumb(id)

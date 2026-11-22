@@ -93,6 +93,7 @@ export const api = {
     call('photos:revert', id, backupName),
   listBackups: (id: number): Promise<BackupInfo[]> => call('photos:listBackups', id),
   openInExplorer: (id: number): Promise<void> => call('photos:openInExplorer', id),
+  openInMap: (lat: number, lon: number): Promise<void> => call('photos:openInMap', lat, lon),
   regenerateThumb: (id: number): Promise<void> => call('photos:regenerateThumb', id),
   rebuildThumbs: (): Promise<void> => call('thumbs:rebuildAll'),
   cleanupOrphanThumbs: (): Promise<number> => call('thumbs:cleanupOrphans'),

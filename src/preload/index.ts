@@ -54,6 +54,7 @@ const CALLABLE = new Set([
   'photos:revert',
   'photos:listBackups',
   'photos:openInExplorer',
+  'photos:openInMap',
   'photos:regenerateThumb',
   'photos:setTags',
   'photos:batchTags',

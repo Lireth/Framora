@@ -9,7 +9,10 @@ import {
   getSetting,
   listAllPhotoIds,
   listPhotoIdsForRebuild,
+  markGpsChecked,
+  setPhotoCamera,
   setPhotoDimsAndDate,
+  setPhotoGps,
   setThumbStatus,
 } from './db'
 import { enqueuePhash } from './phash'
@@ -301,26 +304,51 @@ function pump(): void {
   }
 }
 
-async function readTakenAt(src: string | Uint8Array): Promise<number | null> {
+/** 缩略图管线的轻量 EXIF 提取：拍摄时间 + GPS 坐标 + 相机型号（同一解析趟，避免重复读盘） */
+interface ExifQuick {
+  takenAt: number | null
+  lat: number | null
+  lon: number | null
+  camera: string | null
+}
+
+async function readExifQuick(src: string | Uint8Array): Promise<ExifQuick> {
+  const out: ExifQuick = { takenAt: null, lat: null, lon: null, camera: null }
   try {
     const d = await exifr.parse(src, {
       tiff: true,
       exif: true,
-      gps: false,
+      gps: true,
       xmp: false,
       icc: false,
       iptc: false
     })
     const raw = d?.DateTimeOriginal ?? d?.CreateDate ?? d?.ModifyDate
-    if (raw instanceof Date && !isNaN(raw.getTime())) return raw.getTime()
-    if (typeof raw === 'string') {
+    if (raw instanceof Date && !isNaN(raw.getTime())) out.takenAt = raw.getTime()
+    else if (typeof raw === 'string') {
       const t = Date.parse(raw)
-      if (!isNaN(t)) return t
+      if (!isNaN(t)) out.takenAt = t
     }
+    if (
+      typeof d?.latitude === 'number' &&
+      typeof d?.longitude === 'number' &&
+      Number.isFinite(d.latitude) &&
+      Number.isFinite(d.longitude) &&
+      Math.abs(d.latitude) <= 90 &&
+      Math.abs(d.longitude) <= 180
+    ) {
+      out.lat = d.latitude
+      out.lon = d.longitude
+    }
+    const camera = [d?.Make, d?.Model]
+      .filter((x): x is string => typeof x === 'string')
+      .join(' ')
+      .trim()
+    if (camera) out.camera = camera
   } catch {
     /* no exif */
   }
-  return null
+  return out
 }
 
 async function run(id: number): Promise<void> {
@@ -345,9 +373,10 @@ async function run(id: number): Promise<void> {
     }
     // 同一实例先读头部元数据再生成缩略图，避免重复解析
     const img = sharp(input, { failOn: 'none' })
-    const [meta, takenAt] = await Promise.all([
+    // 同趟提取 GPS/相机（FEAT-07/08）：新照片无需进入回填队列
+    const [meta, ex] = await Promise.all([
       img.metadata(),
-      rawFileBuf ? readTakenAt(rawFileBuf) : readTakenAt(row.path)
+      rawFileBuf ? readExifQuick(rawFileBuf) : readExifQuick(row.path)
     ])
     // 库代次已变（备份导入换库）：本任务基于旧库行，全部写入作废
     if (gen !== generation) return
@@ -376,7 +405,10 @@ async function run(id: number): Promise<void> {
     const swap = (meta.orientation ?? 1) >= 5 && (meta.orientation ?? 1) <= 8
     const w = swap ? (meta.height ?? null) : (meta.width ?? null)
     const h = swap ? (meta.width ?? null) : (meta.height ?? null)
-    setPhotoDimsAndDate(id, w, h, takenAt)
+    setPhotoDimsAndDate(id, w, h, ex.takenAt)
+    if (ex.lat !== null && ex.lon !== null) setPhotoGps(id, ex.lat, ex.lon)
+    if (ex.camera) setPhotoCamera(id, ex.camera)
+    markGpsChecked(id)
     thumbRetries.delete(id)
     setThumbStatus(id, 1)
     enqueuePhash(id)

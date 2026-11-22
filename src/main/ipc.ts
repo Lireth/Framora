@@ -40,6 +40,7 @@ import {
   revertEdits,
   saveEdits,
 } from './imageops'
+import { bumpExifMetaGeneration, clearExifMetaQueue } from './exifmeta'
 import { logsDir, logError } from './log'
 import { listFolders } from './db'
 import {
@@ -297,6 +298,8 @@ export function registerIpc(): void {
     // 库代次递增：旧库在途的缩略图/感知哈希任务检测到代次变化即作废写入（O3）
     bumpThumbGeneration()
     bumpPhashGeneration()
+    bumpExifMetaGeneration()
+    clearExifMetaQueue()
     void db.markPhashDirty()
     // 旧库的 watcher 与新库 id 不对应，全部停掉后按新库对账重建
     await stopAllWatchers()
@@ -349,6 +352,9 @@ export function registerIpc(): void {
   })
 
   /* ---------- photos ---------- */
+  // 地点视图数据源（FEAT-07）
+  ipcMain.handle('photos:geo', () => db.listGeoPhotos())
+
   ipcMain.handle('photos:query', (_e, q: PhotoQuery) =>
     q.scope === 'duplicates' ? db.queryDuplicates(q) : db.queryPhotos(q),
   )

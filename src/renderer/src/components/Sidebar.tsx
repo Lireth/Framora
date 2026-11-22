@@ -14,6 +14,7 @@ import {
   SlidersHorizontal,
   Tag,
   Trash2,
+  MapPin,
 } from 'lucide-react'
 import { useStore } from '../store'
 import { api } from '../lib/api'
@@ -426,6 +427,12 @@ export function Sidebar(): React.JSX.Element {
         count={stats.missing}
         active={scope === 'missing'}
         onClick={() => setScope('missing')}
+      />
+      <NavRow
+        icon={<MapPin size={15} />}
+        label="地点"
+        active={scope === 'map'}
+        onClick={() => setScope('map')}
       />
       <NavRow
         icon={<Copy size={15} />}

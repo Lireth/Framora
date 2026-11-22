@@ -67,6 +67,7 @@ export type PhotoScope =
   | 'smart'
   | 'duplicates'
   | 'trash'
+  | 'map'
 
 export interface PhotoQuery {
   scope: PhotoScope
@@ -153,6 +154,16 @@ export interface SmartAlbumQuery {
   /** 保存时固定排序；缺省则沿用工具栏当前排序 */
   sort?: 'taken' | 'imported' | 'name' | 'rating' | 'size'
   dir?: 'asc' | 'desc'
+}
+
+/** 地点视图点（FEAT-07）：已解析 GPS 的照片精简行 */
+export interface GeoPhoto {
+  id: number
+  name: string
+  lat: number
+  lon: number
+  thumb_ts: number
+  taken_at: number | null
 }
 
 export interface MetaPair {

@@ -21,6 +21,7 @@ import { ensurePreview, isPreviewFileName, previewIdFromName } from './previewSe
 import { enforceStorageBudgets } from './storage'
 import { initLogging, logError } from './log'
 import { resumePhash } from './phash'
+import { resumeExifMetaBackfill } from './exifmeta'
 
 const isDev = !app.isPackaged
 
@@ -266,6 +267,8 @@ if (!gotLock) {
     }
     // 为缺少感知哈希的存量照片补算（相似检测）
     resumePhash()
+    // 为未解析过 GPS 的存量照片补算（地点视图；无 GPS 的照片标记后不再入队）
+    resumeExifMetaBackfill()
     // 启动 5 秒后按预算收敛一次缓存，避免与缩略图续跑争抢磁盘；失败不阻塞应用
     setTimeout(() => {
       try {

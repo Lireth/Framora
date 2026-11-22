@@ -25,6 +25,7 @@ import type {
   TagInfo,
   ThemeMode,
   UndoEntry,
+  GeoPhoto,
 } from '@shared/types'
 
 type Invoke = (channel: string, ...args: unknown[]) => Promise<unknown>
@@ -75,6 +76,7 @@ export const api = {
 
   queryPhotos: (q: PhotoQuery): Promise<QueryResult> => call('photos:query', q),
   queryPhotoIds: (q: PhotoQuery): Promise<number[]> => call('photos:queryIds', q),
+  queryGeoPhotos: (): Promise<GeoPhoto[]> => call('photos:geo'),
   getPhoto: (id: number): Promise<PhotoRecord> => call('photos:get', id),
   updateMeta: (
     id: number,

@@ -285,7 +285,10 @@ export function PhotoGrid(): React.JSX.Element {
      疑似重复按簇排列、回收站按删除时间倒序，两者均不做分月分组 */
   const { rows, rowIndexOfPhoto } = useMemo(() => {
     const groupable =
-      scope !== 'duplicates' && scope !== 'trash' && (activeSort === 'taken' || activeSort === 'imported')
+      scope !== 'duplicates' &&
+      scope !== 'trash' &&
+      scope !== 'map' &&
+      (activeSort === 'taken' || activeSort === 'imported')
     const monthKey = (p: PhotoLite): [number, number] => {
       // 与主进程排序键一致：imported 排序按导入时间，其余（taken）按 sort_ts =
       // COALESCE(taken_at, imported_at) 的取值逻辑

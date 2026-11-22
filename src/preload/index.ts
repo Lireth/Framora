@@ -41,6 +41,7 @@ const CALLABLE = new Set([
   'duplicates:selectRedundant',
   'duplicates:setThreshold',
   'photos:query',
+  'photos:geo',
   'photos:queryIds',
   'photos:get',
   'photos:updateMeta',

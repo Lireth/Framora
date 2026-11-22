@@ -192,6 +192,7 @@ const VALID_SCOPES: PhotoScope[] = [
   'smart',
   'duplicates',
   'trash',
+  'map',
 ]
 const VALID_TILES = ['s', 'm', 'l'] as const
 const VALID_SORTS: SortKey[] = ['taken', 'imported', 'name', 'rating', 'size']

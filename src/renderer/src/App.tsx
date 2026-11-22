@@ -7,6 +7,7 @@ import { TitleBar } from './components/TitleBar'
 import { Sidebar } from './components/Sidebar'
 import { Toolbar } from './components/Toolbar'
 import { PhotoGrid } from './components/PhotoGrid'
+import { MapPanel } from './components/MapPanel'
 import { StatusBar } from './components/StatusBar'
 import { DetailPanel } from './components/DetailPanel'
 import { BatchBar } from './components/BatchBar'
@@ -25,6 +26,7 @@ export default function App(): React.JSX.Element {
   const resolvedTheme = useStore((s) => s.resolvedTheme)
   const detailOpen = useStore((s) => s.detailOpen)
   const viewerOpen = useStore((s) => s.viewerOpen)
+  const scope = useStore((s) => s.scope)
   const [dropActive, setDropActive] = useState(false)
   /** dragenter/dragleave 成对计数：仅在真正离开窗口时收起投放层 */
   const dropDepth = useRef(0)
@@ -250,7 +252,7 @@ export default function App(): React.JSX.Element {
         <Sidebar />
         <div className="flex min-w-0 flex-1 flex-col">
           <Toolbar />
-          <PhotoGrid />
+          {scope === 'map' ? <MapPanel /> : <PhotoGrid />}
           <StatusBar />
         </div>
         {detailOpen && <DetailPanel />}

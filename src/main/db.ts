@@ -371,6 +371,14 @@ const MIGRATIONS: ((db: Database.Database) => void)[] = [
     db.exec(`UPDATE photos SET search_text = ${SEARCH_TEXT_EXPR};`)
     db.exec(`INSERT INTO photos_fts(photos_fts) VALUES ('rebuild');`)
   },
+  // v16: 地点与统计（FEAT-07/08）——GPS 坐标与相机型号入库；
+  //      gps_checked 标记「已尝试解析」（无 GPS 的照片标记后不再重复入队）
+  (db) => {
+    addColumnIfMissing(db, 'photos', 'gps_lat', 'REAL')
+    addColumnIfMissing(db, 'photos', 'gps_lon', 'REAL')
+    addColumnIfMissing(db, 'photos', 'gps_checked', 'INTEGER NOT NULL DEFAULT 0')
+    addColumnIfMissing(db, 'photos', 'camera', 'TEXT')
+  },
 ]
 
 function migrate(): void {
@@ -1252,6 +1260,10 @@ function buildPhotoFilter(q: PhotoQuery): { whereSql: string; params: Record<str
     case 'missing':
       where.push('p.missing = 1')
       break
+    case 'map':
+      // 地点作用域：仅含已解析 GPS 的照片（列表分页，供网格复用）
+      where.push('p.gps_lat IS NOT NULL AND p.gps_lon IS NOT NULL')
+      break
     default:
       break
   }
@@ -1826,6 +1838,47 @@ export function listPhotoIdsPendingThumb(): number[] {
 export function listAllPhotoIds(): number[] {
   const rows = stmt('SELECT id FROM photos').all() as { id: number }[]
   return rows.map((r) => r.id)
+}
+
+/* ---------- EXIF 扩展元数据（GPS / 相机，FEAT-07/08） ---------- */
+
+export function setPhotoGps(id: number, lat: number, lon: number): void {
+  stmt('UPDATE photos SET gps_lat = ?, gps_lon = ? WHERE id = ?').run(lat, lon, id)
+}
+
+export function markGpsChecked(id: number): void {
+  stmt('UPDATE photos SET gps_checked = 1 WHERE id = ?').run(id)
+}
+
+export function setPhotoCamera(id: number, camera: string | null): void {
+  stmt('UPDATE photos SET camera = ? WHERE id = ?').run(camera, id)
+}
+
+/** GPS 回填队列的待处理行：未尝试解析且仍在库中的照片 */
+export function listPhotoIdsForGps(): number[] {
+  const rows = stmt(
+    `SELECT p.id FROM photos p
+     WHERE p.gps_checked = 0 AND p.missing = 0 AND p.deleted_at IS NULL AND ${VISIBLE_FOLDER_SQL}`,
+  ).all() as { id: number }[]
+  return rows.map((r) => r.id)
+}
+
+/** 地点视图数据：已解析 GPS 的照片精简行（上限 2 万，防极端大库渲染过载） */
+export function listGeoPhotos(): {
+  id: number
+  name: string
+  lat: number
+  lon: number
+  thumb_ts: number
+  taken_at: number | null
+}[] {
+  return stmt(
+    `SELECT p.id, p.name, p.gps_lat AS lat, p.gps_lon AS lon, p.thumb_ts, p.taken_at
+     FROM photos p
+     WHERE p.gps_lat IS NOT NULL AND p.gps_lon IS NOT NULL
+       AND p.missing = 0 AND p.deleted_at IS NULL AND ${VISIBLE_FOLDER_SQL}
+     ORDER BY p.taken_at DESC LIMIT 20000`,
+  ).all() as never
 }
 
 /* ---------- 感知哈希（相似照片检测） ---------- */

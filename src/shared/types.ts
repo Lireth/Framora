@@ -52,6 +52,8 @@ export interface AlbumInfo {
   created_at: number
   /** 相册封面照片 id（相册内第一张照片，空相册为 undefined） */
   cover_id?: number | null
+  /** 封面照片的缩略图缓存版本（thumb:// 缓存戳；空相册为 undefined） */
+  cover_thumb_ts?: number | null
 }
 
 export type PhotoScope =

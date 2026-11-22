@@ -502,7 +502,9 @@ export function Sidebar(): React.JSX.Element {
           icon={
             a.cover_id ? (
               <img
-                src={thumbUrl({ id: a.cover_id, thumb_ts: a.count })}
+                // 缓存戳必须用封面照片自身的 thumb_ts：用相册成员数充当版本号时，
+                // 缩略图重建/封面被编辑后 URL 不变，侧边栏将长期展示陈旧封面
+                src={thumbUrl({ id: a.cover_id, thumb_ts: a.cover_thumb_ts ?? 0 })}
                 alt=""
                 className="h-[22px] w-[22px] rounded object-cover"
                 draggable={false}

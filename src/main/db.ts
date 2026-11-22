@@ -1515,7 +1515,9 @@ export function listAlbums(): AlbumInfo[] {
       (SELECT COUNT(*) FROM album_photos ap JOIN photos p ON p.id = ap.photo_id
         WHERE ap.album_id = a.id AND p.missing = 0 AND p.deleted_at IS NULL AND ${VISIBLE_FOLDER_SQL}) AS count,
       (SELECT ap.photo_id FROM album_photos ap JOIN photos p ON p.id = ap.photo_id
-        WHERE ap.album_id = a.id AND p.missing = 0 AND p.deleted_at IS NULL AND ${VISIBLE_FOLDER_SQL} LIMIT 1) AS cover_id
+        WHERE ap.album_id = a.id AND p.missing = 0 AND p.deleted_at IS NULL AND ${VISIBLE_FOLDER_SQL} LIMIT 1) AS cover_id,
+      (SELECT p.thumb_ts FROM album_photos ap JOIN photos p ON p.id = ap.photo_id
+        WHERE ap.album_id = a.id AND p.missing = 0 AND p.deleted_at IS NULL AND ${VISIBLE_FOLDER_SQL} LIMIT 1) AS cover_thumb_ts
      FROM albums a WHERE a.deleted_at IS NULL ORDER BY a.created_at ASC`,
   ).all() as AlbumInfo[]
 }

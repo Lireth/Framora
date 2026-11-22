@@ -523,7 +523,8 @@ export const SHORTCUT_GROUPS: { title: string; items: ShortcutEntry[] }[] = [
       { keys: '+ / − / 0', desc: '放大 / 缩小 / 复位缩放' },
       { keys: 'F', desc: '切换全屏' },
       { keys: '拖拽', desc: '拖出窗口到资源管理器，或放回侧边栏相册' },
-      { keys: 'Esc / 空格', desc: '关闭查看器' }
+      { keys: '播放键', desc: '幻灯片放映（3s 循环轮播）' },
+      { keys: 'Esc / 空格', desc: '关闭查看器（放映中：空格暂停/继续，Esc 退出放映）' }
     ]
   }
 ]

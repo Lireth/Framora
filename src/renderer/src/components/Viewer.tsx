@@ -5,7 +5,9 @@ import {
   FlipHorizontal2,
   Keyboard,
   Maximize,
+  Pause,
   Pencil,
+  Play,
   RotateCcw,
   RotateCw,
   X,
@@ -35,6 +37,8 @@ export function Viewer(): React.JSX.Element {
   const closeViewer = useStore((s) => s.closeViewer)
   const detailOpen = useStore((s) => s.detailOpen)
   const toggleDetail = useStore((s) => s.toggleDetail)
+  const slideshowOn = useStore((s) => s.slideshowOn)
+  const slideshowPaused = useStore((s) => s.slideshowPaused)
 
   /* id → 下标：使用 store 的共享 WeakMap 映射（数组替换时重建一次，O(1) 查询），
      此前每次 photos 变化都在本组件与 Filmstrip 各重建一张 Map + 每帧线性扫描 */
@@ -66,6 +70,13 @@ export function Viewer(): React.JSX.Element {
     setEdit(EDIT_RESET)
     setCropMode(false)
   }, [activeId])
+
+  // 幻灯片轮播（FEAT-05）：3s 间隔循环步进；编辑/裁剪/暂停期间不推进
+  useEffect(() => {
+    if (!slideshowOn || slideshowPaused || editOpen || cropMode) return
+    const t = setInterval(() => useStore.getState().slideshowNext(), 3000)
+    return () => clearInterval(t)
+  }, [slideshowOn, slideshowPaused, editOpen, cropMode])
 
   // 裁剪模式：跟踪画面内图像盒位置用于绘制选框与遮罩
   useEffect(() => {
@@ -302,6 +313,20 @@ export function Viewer(): React.JSX.Element {
           active={detailOpen}
           onClick={toggleDetail}
         />
+        <IconButton
+          icon={<Play size={15} />}
+          label="幻灯片放映（3s 循环）"
+          active={slideshowOn}
+          onClick={() => useStore.getState().startSlideshow()}
+        />
+        {slideshowOn && (
+          <IconButton
+            icon={<Pause size={15} />}
+            label={slideshowPaused ? "继续放映 (空格)" : "暂停放映 (空格)"}
+            active={!slideshowPaused}
+            onClick={() => useStore.getState().toggleSlideshowPause()}
+          />
+        )}
         <IconButton icon={<X size={16} />} label="关闭 (Esc)" onClick={closeViewer} />
       </div>
 

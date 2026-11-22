@@ -61,6 +61,9 @@ interface AppState extends Filters {
   anchorId: number | null
   activeId: number | null
   viewerOpen: boolean
+  /** 幻灯片放映（FEAT-05）：3s 间隔循环轮播，编辑/裁剪时自动暂停 */
+  slideshowOn: boolean
+  slideshowPaused: boolean
   detailOpen: boolean
   tile: 's' | 'm' | 'l'
   gridCols: number
@@ -95,6 +98,11 @@ interface AppState extends Filters {
   clearSelection: () => void
   openViewer: (id: number) => void
   closeViewer: () => void
+  startSlideshow: () => void
+  stopSlideshow: () => void
+  toggleSlideshowPause: () => void
+  /** 放映步进：末张回绕到首张 */
+  slideshowNext: () => void
   setActive: (id: number) => void
   stepViewer: (delta: number) => void
   jumpViewer: (target: 'first' | 'last') => Promise<void>
@@ -259,6 +267,8 @@ export const useStore = create<AppState>((set, get) => ({
   anchorId: null,
   activeId: null,
   viewerOpen: false,
+  slideshowOn: false,
+  slideshowPaused: false,
   detailOpen: false,
   tile: 'm',
   gridCols: 6,
@@ -521,7 +531,23 @@ export const useStore = create<AppState>((set, get) => ({
 
   openViewer: (id) => set({ activeId: id, viewerOpen: true }),
 
-  closeViewer: () => set({ viewerOpen: false, activeId: get().activeId }),
+  closeViewer: () =>
+    set({ viewerOpen: false, activeId: get().activeId, slideshowOn: false, slideshowPaused: false }),
+
+  startSlideshow: () => set({ slideshowOn: true, slideshowPaused: false }),
+
+  stopSlideshow: () => set({ slideshowOn: false, slideshowPaused: false }),
+
+  toggleSlideshowPause: () => set({ slideshowPaused: !get().slideshowPaused }),
+
+  /** 放映步进：末张回绕到首张（与 stepViewer 的钳制语义不同） */
+  slideshowNext: () => {
+    const { photos, activeId } = get()
+    if (!photos.length) return
+    const idx = photoIndexOf(photos, activeId)
+    if (idx < 0 || idx >= photos.length - 1) set({ activeId: photos[0].id })
+    else set({ activeId: photos[idx + 1].id })
+  },
 
   setActive: (id) => set({ activeId: id }),
 

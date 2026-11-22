@@ -173,7 +173,11 @@ export default function App(): React.JSX.Element {
         return
       }
       if (s.viewerOpen) {
-        if (e.key === 'Escape') s.closeViewer()
+        if (e.key === 'Escape') {
+          // 放映中先退出放映（留在查看器），再次 Esc 才关闭查看器
+          if (s.slideshowOn) s.stopSlideshow()
+          else s.closeViewer()
+        }
         else if (e.key === 'ArrowLeft') s.stepViewer(-1)
         else if (e.key === 'ArrowRight') s.stepViewer(1)
         else if (e.ctrlKey || e.metaKey || e.altKey) return
@@ -194,7 +198,9 @@ export default function App(): React.JSX.Element {
           s.toggleDetail()
         } else if (e.key === ' ' && t.tagName !== 'BUTTON') {
           e.preventDefault()
-          s.closeViewer()
+          // 放映中：空格 = 暂停/继续；未放映：空格 = 关闭查看器
+          if (s.slideshowOn) s.toggleSlideshowPause()
+          else s.closeViewer()
         }
         return
       }

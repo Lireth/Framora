@@ -1182,7 +1182,18 @@ export function updatePhotoMeta(
 ): void {
   const allowed: Record<string, unknown> = {}
   for (const k of ['rating', 'title', 'description', 'orientation', 'flip_h', 'flip_v'] as const) {
-    if (patch[k] !== undefined) allowed[k] = patch[k]
+    if (patch[k] === undefined) continue
+    const v = patch[k]
+    // IPC 边界钳制（OPT-32）：渲染层传入的异常值不入库
+    if (k === 'rating') {
+      if (typeof v !== 'number' || !Number.isFinite(v)) continue
+      allowed[k] = Math.min(5, Math.max(0, Math.round(v)))
+    } else if (k === 'orientation' || k === 'flip_h' || k === 'flip_v') {
+      if (typeof v !== 'number' || !Number.isFinite(v)) continue
+      allowed[k] = Math.trunc(v)
+    } else {
+      allowed[k] = v
+    }
   }
   const keys = Object.keys(allowed)
   if (!keys.length) return
@@ -1601,8 +1612,13 @@ export function batchTags(ids: number[], addTagIds: number[], removeTagIds: numb
 
 export function batchRate(ids: number[], rating: number): void {
   if (!ids.length) return
+  // IPC 边界钳制（OPT-32）：异常评分不入库
+  const clamped =
+    typeof rating === 'number' && Number.isFinite(rating)
+      ? Math.min(5, Math.max(0, Math.round(rating)))
+      : 0
   stmt('UPDATE photos SET rating = ? WHERE id IN (SELECT value FROM json_each(?))').run(
-    rating,
+    clamped,
     JSON.stringify(ids),
   )
 }
@@ -1873,7 +1889,9 @@ export async function queryDuplicates(q: {
   const ids = await duplicatePhotoIds()
   const limit = Math.min(q.limit ?? 50000, 100000)
   const offset = Math.max(0, Math.floor(q.offset ?? 0))
-  const slice = ids.slice(offset, offset + limit)
+  // CASE WHEN 以字符串内插拼接：id 来源于自身库，但入口仍按类型约束过滤
+  // 非有限值（OPT-32），异常数据不会进入 SQL
+  const slice = ids.slice(offset, offset + limit).filter((id) => Number.isInteger(id) && id > 0)
   if (!slice.length) return { items: [], total: ids.length }
   const ph = slice.map(() => '?').join(', ')
   const caseWhen = slice.map((id, i) => `WHEN ${id} THEN ${i}`).join(' ')

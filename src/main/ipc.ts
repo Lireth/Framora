@@ -90,7 +90,10 @@ export function registerIpc(): void {
 
   /* ---------- settings ---------- */
   ipcMain.handle('settings:get', (_e, key: string) => db.getSetting(key))
+  // 设置键白名单（OPT-32）：渲染层不可写任意键（预算/阈值等键有各自专用通道与校验）
+  const SETTABLE_KEYS = new Set(['theme', 'viewState', 'searchHistory'])
   ipcMain.handle('settings:set', (_e, key: string, value: string) => {
+    if (!SETTABLE_KEYS.has(key) || typeof value !== 'string') return
     db.setSetting(key, value)
   })
 

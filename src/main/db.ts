@@ -380,6 +380,14 @@ const MIGRATIONS: ((db: Database.Database) => void)[] = [
     addColumnIfMissing(db, 'photos', 'gps_checked', 'INTEGER NOT NULL DEFAULT 0')
     addColumnIfMissing(db, 'photos', 'camera', 'TEXT')
   },
+  // v17: 相似检测增强（FEAT-17）——翻转哈希（镜像副本匹配）与颜色均值
+  //      （纯色/低梯度误判校验）；phash_x_checked 标记增强数据已补算
+  (db) => {
+    addColumnIfMissing(db, 'photos', 'phash_flip_lo', 'INTEGER')
+    addColumnIfMissing(db, 'photos', 'phash_flip_hi', 'INTEGER')
+    addColumnIfMissing(db, 'photos', 'color_mean', 'INTEGER')
+    addColumnIfMissing(db, 'photos', 'phash_x_checked', 'INTEGER NOT NULL DEFAULT 0')
+  },
 ]
 
 function migrate(): void {
@@ -1888,20 +1896,33 @@ export function setPhotoPhash(id: number, lo: number, hi: number): void {
   stmt('UPDATE photos SET phash_lo = ?, phash_hi = ? WHERE id = ?').run(lo, hi, id)
 }
 
+/** 增强数据（翻转哈希 + 颜色均值）写入并标记已补算（FEAT-17） */
+export function setPhotoPhashExtra(id: number, flo: number, fhi: number, cm: number): void {
+  stmt(
+    'UPDATE photos SET phash_flip_lo = ?, phash_flip_hi = ?, color_mean = ?, phash_x_checked = 1 WHERE id = ?',
+  ).run(flo, fhi, cm, id)
+}
+
+/** 哈希补算队列的待处理行：缺主哈希，或缺增强数据（FEAT-17 存量回填） */
 export function listPhotosForPhash(): { id: number; path: string }[] {
   return stmt(
-    `SELECT p.id, p.path FROM photos p WHERE p.phash_lo IS NULL AND p.missing = 0 AND p.deleted_at IS NULL AND ${VISIBLE_FOLDER_SQL}`,
+    `SELECT p.id, p.path FROM photos p
+     WHERE (p.phash_lo IS NULL OR p.phash_x_checked = 0) AND p.missing = 0 AND p.deleted_at IS NULL AND ${VISIBLE_FOLDER_SQL}`,
   ).all() as {
     id: number
     path: string
   }[]
 }
 
-export function listPhashes(): { id: number; lo: number; hi: number }[] {
+export function listPhashes(): { id: number; lo: number; hi: number; flo: number; fhi: number; cm: number }[] {
   return stmt(
-    `SELECT p.id, p.phash_lo AS lo, p.phash_hi AS hi FROM photos p
+    `SELECT p.id, p.phash_lo AS lo, p.phash_hi AS hi,
+            COALESCE(p.phash_flip_lo, p.phash_lo) AS flo,
+            COALESCE(p.phash_flip_hi, p.phash_hi) AS fhi,
+            COALESCE(p.color_mean, 0) AS cm
+     FROM photos p
      WHERE p.phash_lo IS NOT NULL AND p.missing = 0 AND p.deleted_at IS NULL AND ${VISIBLE_FOLDER_SQL}`,
-  ).all() as { id: number; lo: number; hi: number }[]
+  ).all() as { id: number; lo: number; hi: number; flo: number; fhi: number; cm: number }[]
 }
 
 /** 聚类结果缓存（保留簇边界）：哈希/缺失/删除变化后置脏，下次查询在 worker 中重算 */

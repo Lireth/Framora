@@ -10,6 +10,8 @@ import {
   popcount32,
   splitHashChunks,
   type PhashRow,
+  clusterEnhanced,
+  flopDhash,
 } from '../src/main/phashCore'
 
 describe('popcount32', () => {
@@ -300,4 +302,72 @@ describe('phashCluster worker 调度', () => {
     },
     15000,
   )
+})
+
+
+describe('FEAT-17 增强聚类', () => {
+  it('flopDhash：逐行位序倒置（镜像像素的梯度语义）', () => {
+    // 构造 hi/lo：bit(r,c) 取 (r*8+c) 的奇偶
+    let hi = 0
+    let lo = 0
+    for (let r = 0; r < 8; r++) {
+      for (let c = 0; c < 8; c++) {
+        const bit = (r * 8 + c) % 2
+        const idx = r * 8 + c
+        if (idx < 32) hi = (hi << 1) | bit
+        else lo = (lo << 1) | bit
+      }
+    }
+    const f = flopDhash(lo, hi)
+    // 翻转后 bit(r,c) = 原 bit(r, 7-c) = (r*8+7-c) % 2 —— 再次翻转应回到原值
+    const back = flopDhash(f.lo, f.hi)
+    expect(back.lo).toBe(lo)
+    expect(back.hi).toBe(hi)
+    // 且与原值不同（非对称图案）
+    expect(f.lo !== lo || f.hi !== hi).toBe(true)
+  })
+
+  it('clusterEnhanced：主哈希重复照常聚簇', () => {
+    const rows = [
+      { id: 1, lo: 7, hi: 0, flo: 7, fhi: 0, cm: 100 },
+      { id: 2, lo: 7, hi: 0, flo: 7, fhi: 0, cm: 100 },
+    ]
+    expect(clusterEnhanced(rows, 6)).toEqual([[1, 2]])
+  })
+
+  it('颜色校验拆簇：同哈希不同色不再误判（纯色图回归）', () => {
+    // 梯度全 0（纯色）的两张图 dHash 相同，但颜色均值差异巨大
+    const rows = [
+      { id: 1, lo: 0, hi: 0, flo: 0, fhi: 0, cm: 0xffeeee },
+      { id: 2, lo: 0, hi: 0, flo: 0, fhi: 0, cm: 0x112233 },
+    ]
+    expect(clusterEnhanced(rows, 6)).toEqual([])
+    // 同色 → 保留聚簇
+    const same = [
+      { id: 1, lo: 0, hi: 0, flo: 0, fhi: 0, cm: 0x112233 },
+      { id: 2, lo: 0, hi: 0, flo: 0, fhi: 0, cm: 0x112230 },
+    ]
+    expect(clusterEnhanced(same, 6)).toEqual([[1, 2]])
+  })
+
+  it('镜像匹配：翻转哈希 ≈ 对方主哈希的跨照片组合成组', () => {
+    const ph = { lo: 0x0f0f0f0f, hi: 0x0f0f0f0f }
+    const mirrored = flopDhash(ph.lo, ph.hi)
+    const rows = [
+      { id: 1, lo: ph.lo, hi: ph.hi, flo: mirrored.lo, fhi: mirrored.hi, cm: 100 },
+      // id 2 是 id 1 的镜像副本：主哈希 = 翻转(1 的主哈希)
+      { id: 2, lo: mirrored.lo, hi: mirrored.hi, flo: ph.lo, fhi: ph.hi, cm: 100 },
+    ]
+    const r = clusterEnhanced(rows, 6)
+    const flat = r.flat().sort((a, b) => a - b)
+    expect(flat).toEqual([1, 2])
+  })
+
+  it('镜像点单独成簇需同时含主/翻两类点（水平对称图不自组）', () => {
+    // 水平对称图：主哈希 = 翻转哈希 → 只会与自己配对，不产出镜像组
+    const rows = [
+      { id: 1, lo: 0x18181818, hi: 0x18181818, flo: 0x18181818, fhi: 0x18181818, cm: 100 },
+    ]
+    expect(clusterEnhanced(rows, 6)).toEqual([])
+  })
 })

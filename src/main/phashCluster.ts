@@ -10,17 +10,20 @@
  */
 import path from 'node:path'
 import { Worker } from 'node:worker_threads'
-import { clusterPhashes, type PhashRow } from './phashCore'
+import { clusterEnhanced, type PhashRow, type PhashRowX } from './phashCore'
 import { logError } from './log'
 
 export type { PhashRow }
 
 interface ClusterRequest {
   id: number
-  /** 打包后的行数据（与 lo/hi 等长）：Transferable 零拷贝传递，避免万级行对象结构化克隆 */
+  /** 打包后的行数据（与 ids 等长）：Transferable 零拷贝传递，避免万级行对象结构化克隆 */
   ids: Uint32Array
   lo: Uint32Array
   hi: Uint32Array
+  flo: Uint32Array
+  fhi: Uint32Array
+  cm: Uint32Array
   threshold?: number
 }
 
@@ -89,23 +92,33 @@ export async function computePhashClusters(rows: PhashRow[], threshold = 6): Pro
     try {
       const w = ensureWorker()
       const id = ++seq
-      // 行对象数组经结构化克隆传递在十万级库上是数十 MB 级拷贝：打包为 3 个
+      // 行对象数组经结构化克隆传递在十万级库上是数十 MB 级拷贝：打包为 6 个
       // Uint32Array 以 Transferable 零拷贝移交，worker 内还原（OPT-34）
       const n = rows.length
       const ids = new Uint32Array(n)
       const lo = new Uint32Array(n)
       const hi = new Uint32Array(n)
+      const flo = new Uint32Array(n)
+      const fhi = new Uint32Array(n)
+      const cm = new Uint32Array(n)
       for (let i = 0; i < n; i++) {
-        ids[i] = rows[i].id >>> 0
-        lo[i] = rows[i].lo >>> 0
-        hi[i] = rows[i].hi >>> 0
+        const r = rows[i] as PhashRow & Partial<PhashRowX>
+        ids[i] = r.id >>> 0
+        lo[i] = r.lo >>> 0
+        hi[i] = r.hi >>> 0
+        flo[i] = (r.flo ?? r.lo) >>> 0
+        fhi[i] = (r.fhi ?? r.hi) >>> 0
+        cm[i] = (r.cm ?? 0) >>> 0
       }
       return await new Promise<number[][]>((resolve, reject) => {
         pending.set(id, { resolve, reject })
-        w.postMessage({ id, ids, lo, hi, threshold } satisfies ClusterRequest, [
+        w.postMessage({ id, ids, lo, hi, flo, fhi, cm, threshold } satisfies ClusterRequest, [
           ids.buffer,
           lo.buffer,
           hi.buffer,
+          flo.buffer,
+          fhi.buffer,
+          cm.buffer,
         ])
       })
     } catch (err) {
@@ -114,5 +127,16 @@ export async function computePhashClusters(rows: PhashRow[], threshold = 6): Pro
       logError('phashCluster', err)
     }
   }
-  return clusterPhashes(rows, threshold)
+  // 回退路径同样走增强聚类（颜色拆簇 + 镜像）保持语义一致
+  return clusterEnhanced(
+    rows.map((r) => ({
+      id: r.id,
+      lo: r.lo,
+      hi: r.hi,
+      flo: (r as PhashRowX).flo ?? r.lo,
+      fhi: (r as PhashRowX).fhi ?? r.hi,
+      cm: (r as PhashRowX).cm ?? 0,
+    })),
+    threshold,
+  )
 }

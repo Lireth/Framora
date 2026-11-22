@@ -18,6 +18,31 @@ export function packDhashBits(data: Uint8Array): { lo: number; hi: number } {
   return { lo: lo >>> 0, hi: hi >>> 0 }
 }
 
+/**
+ * 水平镜像后的 dHash 位布局（FEAT-17 纯函数）：flop 把 9×8 网格每行左右翻转，
+ * 相邻像素比较的符号随之反转——即每个 8-bit 行内位序倒置。
+ */
+export function flopDhash(lo: number, hi: number): { lo: number; hi: number } {
+  const get = (idx: number): number =>
+    idx < 32 ? (hi >>> (31 - idx)) & 1 : (lo >>> (63 - idx)) & 1
+  let nhi = 0
+  let nlo = 0
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const bit = get(r * 8 + (7 - c))
+      const idx = r * 8 + c
+      if (idx < 32) nhi = (nhi << 1) | bit
+      else nlo = (nlo << 1) | bit
+    }
+  }
+  return { lo: nlo >>> 0, hi: nhi >>> 0 }
+}
+
+/** 三通道颜色均值的最大通道差（0-255） */
+export function colorMaxDiff(a: number, b: number): number {
+  return Math.max(Math.abs((a >> 16) - (b >> 16)), Math.abs(((a >> 8) & 255) - ((b >> 8) & 255)), Math.abs((a & 255) - (b & 255)))
+}
+
 export function popcount32(v: number): number {
   v = v >>> 0
   v = v - ((v >>> 1) & 0x55555555)
@@ -183,6 +208,146 @@ export function clusterPhashes(rows: PhashRow[], threshold = 6, stats?: ClusterS
   const out: number[][] = []
   for (const c of clusters) if (c.members.length > 1) out.push(c.members)
   return out
+}
+
+/** 携带翻转哈希与颜色均值的行（FEAT-17）；cm 为 0 表示未知（跳过颜色校验） */
+export interface PhashRowX {
+  id: number
+  lo: number
+  hi: number
+  flo: number
+  fhi: number
+  cm: number
+}
+
+/** 颜色拆簇阈值：任一通道差 ≤ 12 视为同色（纯色/低梯度图误判的主要校验手段） */
+const COLOR_SPLIT_T = 12
+
+/** 翻转点编码位：photo id 为正行 id，最高位标签区分主哈希点 / 翻转哈希点 */
+const FLIP_TAG = 1 << 29
+
+/**
+ * 增强聚类（FEAT-17）：
+ * 1. 主哈希聚类（与 clusterPhashes 语义一致）；
+ * 2. 颜色校验拆簇——纯色/低梯度图（梯度全 0）会坍缩到同一哈希，按颜色均值
+ *    最大通道差拆分子组，只保留 ≥2 的子组；cm=0（未知）不参与拆分；
+ * 3. 镜像匹配——dHash 对水平翻转（距离≈64）必然漏判。利用「镜像照片的翻转
+ *    哈希 ≈ 原照片主哈希」：把未匹配行的翻转哈希作为附加点参与同一索引聚类，
+ *    结果簇中「主哈希点 ↔ 翻转点」的跨照片组合即镜像组。
+ * 返回：颜色拆簇后的重复簇 + 镜像簇（均为照片 id 数组）。
+ */
+export function clusterEnhanced(
+  rows: PhashRowX[],
+  threshold: number,
+  stats?: ClusterStats,
+): number[][] {
+  const primary = clusterPhashes(
+    rows.map((r) => ({ id: r.id, lo: r.lo, hi: r.hi })),
+    threshold,
+    stats,
+  )
+  const inPrimary = new Set<number>()
+  const dupes: number[][] = []
+  const unmatched: PhashRowX[] = []
+  const byId = new Map<number, PhashRowX>()
+  for (const r of rows) byId.set(r.id, r)
+  for (const cluster of primary) {
+    // 颜色校验拆簇：贪心分入首个颜色相近的代表组
+    const groups: { rep: number; ids: number[] }[] = []
+    for (const id of cluster) {
+      const row = byId.get(id)
+      if (!row) continue
+      let placed = false
+      if (row.cm > 0) {
+        for (const g of groups) {
+          const repRow = byId.get(g.rep)!
+          if (repRow.cm > 0 && colorMaxDiff(repRow.cm, row.cm) <= COLOR_SPLIT_T) {
+            g.ids.push(id)
+            placed = true
+            break
+          }
+        }
+      }
+      if (!placed) {
+        if (groups.length && row.cm === 0) {
+          // 未知颜色跟随首个组（保守：不因缺数据拆散既有簇）
+          groups[0].ids.push(id)
+        } else {
+          groups.push({ rep: id, ids: [id] })
+        }
+      }
+    }
+    for (const g of groups) {
+      if (g.ids.length >= 2) {
+        dupes.push(g.ids)
+      } else {
+        unmatched.push(byId.get(g.ids[0])!)
+      }
+    }
+    if (groups.length === 1) {
+      // 未拆分：整簇保留，成员不进入镜像 pass
+      for (const id of cluster) inPrimary.add(id)
+    } else {
+      for (const g of groups) if (g.ids.length >= 2) for (const id of g.ids) inPrimary.add(id)
+    }
+  }
+  // 主聚类为空（或部分行未入簇）时，这些行全部属于「未匹配」：进入镜像 pass
+  for (const r of rows) if (!inPrimary.has(r.id)) unmatched.push(r)
+
+  // 镜像 pass：未匹配行的主哈希 + 翻转哈希合并进同一索引聚类
+  const points: { id: number; lo: number; hi: number }[] = []
+  for (const r of unmatched) {
+    points.push({ id: r.id, lo: r.lo, hi: r.hi })
+    points.push({ id: r.id | FLIP_TAG, lo: r.flo, hi: r.fhi })
+  }
+  const mirrors: number[][] = []
+  const seenMirror = new Set<string>()
+  if (points.length >= 2) {
+    const raw = clusterPhashes(points, threshold, stats)
+    for (const cluster of raw) {
+      const photos = new Set<number>()
+      let hasPrimary = false
+      let hasFlip = false
+      for (const pid of cluster) {
+        if (pid & FLIP_TAG) {
+          hasFlip = true
+          photos.add(pid & ~FLIP_TAG)
+        } else {
+          hasPrimary = true
+          photos.add(pid)
+        }
+      }
+      // 同一照片的主/翻点自聚（水平对称图）不算镜像组；需同时含两类点。
+      // 且组内任两照片的主哈希必须互相远离：距离 ≤ 阈值即普通重复——
+      // 那类组合若被颜色校验拆散，不得经镜像路径复活（纯色图回归）
+      if (photos.size >= 2 && hasPrimary && hasFlip) {
+        const idsArr = [...photos]
+        let ok = true
+        for (let a = 0; a < idsArr.length && ok; a++) {
+          for (let b = a + 1; b < idsArr.length; b++) {
+            const ra = byId.get(idsArr[a])
+            const rb = byId.get(idsArr[b])
+            if (!ra || !rb) continue
+            const d =
+              popcount32((ra.lo ^ rb.lo) >>> 0) + popcount32((ra.hi ^ rb.hi) >>> 0)
+            if (d <= threshold) {
+              ok = false
+              break
+            }
+          }
+        }
+        if (ok) {
+          const key = [...photos].sort((a, b) => a - b).join(',')
+          if (!seenMirror.has(key)) {
+            seenMirror.add(key)
+            mirrors.push([...photos])
+          }
+        }
+      }
+    }
+  }
+  for (const m of mirrors) dupes.push(m)
+  return dupes
 }
 
 /** 精确线性聚类：仅在阈值大到索引枚举不划算时使用，行为与原实现逐字节一致 */

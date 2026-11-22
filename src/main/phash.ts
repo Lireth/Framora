@@ -1,6 +1,12 @@
 import fs from 'node:fs'
 import sharp from 'sharp'
-import { getPhotoRow, listPhotosForPhash, markPhashDirty, setPhotoPhash } from './db'
+import {
+  getPhotoRow,
+  listPhotosForPhash,
+  markPhashDirty,
+  setPhotoPhash,
+  setPhotoPhashExtra,
+} from './db'
 import { thumbPath } from './thumbs'
 import { logError } from './log'
 import { packDhashBits } from './phashCore'
@@ -39,7 +45,11 @@ function pump(): void {
   }
 }
 
-/** 计算 64-bit dHash（9×8 灰度水平梯度）：优先用已生成的缩略图（RAW 的唯一像素源，普通格式也省一次全图解码） */
+/**
+ * 计算 64-bit dHash（9×8 灰度水平梯度）+ 翻转哈希 + 颜色均值（FEAT-17）：
+ * 优先用已生成的缩略图（RAW 的唯一像素源，普通格式也省一次全图解码）；
+ * 三个管线都作用在数百像素级小图上，开销可忽略。
+ */
 async function run(id: number): Promise<void> {
   const row = getPhotoRow(id)
   if (!row || row.missing) return
@@ -48,20 +58,28 @@ async function run(id: number): Promise<void> {
   const thumb = thumbPath(id)
   const source = fs.existsSync(thumb) ? thumb : row.path
   if (!fs.existsSync(source)) return
-  const { data } = await sharp(source, { failOn: 'none' })
-    .rotate()
-    .greyscale()
-    .resize(9, 8, { fit: 'fill' })
-    .raw()
-    .toBuffer({ resolveWithObject: true })
+  const base = sharp(source, { failOn: 'none' }).rotate()
+  const { data } = await base.clone().greyscale().resize(9, 8, { fit: 'fill' }).raw().toBuffer({ resolveWithObject: true })
+  const flip = await base.clone().flop().greyscale().resize(9, 8, { fit: 'fill' }).raw().toBuffer({ resolveWithObject: true })
+  const mean = await base.clone().resize(1, 1).raw().toBuffer({ resolveWithObject: true })
   // 库代次已变（备份导入换库）：旧任务计算的哈希属于错位行，不再写入
   if (gen !== generation) return
   const { lo, hi } = packDhashBits(data)
+  const { lo: flo, hi: fhi } = packDhashBits(flip.data)
+  // 1×1 均值：3 通道 RGB 打包为 0xRRGGBB；单通道（灰度源）折叠为灰值
+  let cm = 0
+  if (mean.info.channels >= 3) {
+    cm = ((mean.data[0] << 16) | (mean.data[1] << 8) | mean.data[2]) >>> 0
+  } else if (mean.info.channels >= 1) {
+    const g = mean.data[0] & 255
+    cm = ((g << 16) | (g << 8) | g) >>> 0
+  }
   setPhotoPhash(id, lo, hi)
+  setPhotoPhashExtra(id, flo, fhi, cm)
   markPhashDirty()
 }
 
-/** 启动时为缺少哈希的存量照片补算 */
+/** 启动时为缺少哈希或缺少增强数据（翻转/颜色）的存量照片补算 */
 export function resumePhash(): void {
   for (const r of listPhotosForPhash()) enqueuePhash(r.id)
 }

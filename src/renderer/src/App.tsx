@@ -12,6 +12,7 @@ import { StatusBar } from './components/StatusBar'
 import { DetailPanel } from './components/DetailPanel'
 import { BatchBar } from './components/BatchBar'
 import { Viewer } from './components/Viewer'
+import { CompareView } from './components/CompareView'
 import { SettingsModal } from './components/SettingsModal'
 import { StatsModal } from './components/StatsModal'
 import { ExportDialog } from './components/ExportDialog'
@@ -28,6 +29,7 @@ export default function App(): React.JSX.Element {
   const detailOpen = useStore((s) => s.detailOpen)
   const viewerOpen = useStore((s) => s.viewerOpen)
   const scope = useStore((s) => s.scope)
+  const compare = useStore((s) => s.compareIds)
   const [dropActive, setDropActive] = useState(false)
   /** dragenter/dragleave 成对计数：仅在真正离开窗口时收起投放层 */
   const dropDepth = useRef(0)
@@ -207,6 +209,7 @@ export default function App(): React.JSX.Element {
         }
         return
       }
+      if (s.compareIds) return // 对比视图自带键盘处理（CompareView）
       if (s.settingsOpen || s.exportOpen || s.confirmDeleteOpen) return
       if (e.key === 'Escape') {
         if (s.selection.size) s.clearSelection()
@@ -260,6 +263,7 @@ export default function App(): React.JSX.Element {
       </div>
       <BatchBar />
       {viewerOpen && <Viewer />}
+      {compare && <CompareView />}
       <SettingsModal />
       <StatsModal />
       <ExportDialog />

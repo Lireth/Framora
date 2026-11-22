@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { ArchiveRestore, Download, Images, Pencil, Repeat, Star, Tag, Trash2, X } from 'lucide-react'
+import { ArchiveRestore, Columns2, Download, Images, Pencil, Repeat, Star, Tag, Trash2, X } from 'lucide-react'
 import { useStore } from '../store'
 import { api } from '../lib/api'
 import { deletePhotosAction, purgePhotosAction, restorePhotosAction } from '../lib/actions'
@@ -94,6 +94,13 @@ export function BatchBar(): React.JSX.Element {
                 <BarBtn icon={<Images size={14} />} label="加入相册" onClick={openAlbumMenu} />
                 <BarBtn icon={<Pencil size={14} />} label="批量重命名" onClick={() => setRenameOpen(true)} />
                 <BarBtn icon={<Download size={14} />} label="批量导出" onClick={() => openExport(ids)} />
+                {ids.length === 2 && (
+                  <BarBtn
+                    icon={<Columns2 size={14} />}
+                    label="对比视图（C：双图同步缩放）"
+                    onClick={() => useStore.getState().openCompare([ids[0], ids[1]])}
+                  />
+                )}
                 <BarBtn
                   icon={<Repeat size={14} />}
                   label="转换格式（输出到源文件夹，源移入回收站）"

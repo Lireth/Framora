@@ -61,6 +61,8 @@ interface AppState extends Filters {
   anchorId: number | null
   activeId: number | null
   viewerOpen: boolean
+  /** 对比视图（FEAT-09）：恰好两张照片的 id 对 */
+  compareIds: [number, number] | null
   /** 幻灯片放映（FEAT-05）：3s 间隔循环轮播，编辑/裁剪时自动暂停 */
   slideshowOn: boolean
   slideshowPaused: boolean
@@ -102,6 +104,8 @@ interface AppState extends Filters {
   clearSelection: () => void
   openViewer: (id: number) => void
   closeViewer: () => void
+  openCompare: (ids: [number, number]) => void
+  closeCompare: () => void
   startSlideshow: () => void
   stopSlideshow: () => void
   toggleSlideshowPause: () => void
@@ -274,6 +278,7 @@ export const useStore = create<AppState>((set, get) => ({
   anchorId: null,
   activeId: null,
   viewerOpen: false,
+  compareIds: null,
   slideshowOn: false,
   slideshowPaused: false,
   detailOpen: false,
@@ -542,6 +547,10 @@ export const useStore = create<AppState>((set, get) => ({
 
   closeViewer: () =>
     set({ viewerOpen: false, activeId: get().activeId, slideshowOn: false, slideshowPaused: false }),
+
+  openCompare: (ids) => set({ compareIds: ids }),
+
+  closeCompare: () => set({ compareIds: null }),
 
   startSlideshow: () => set({ slideshowOn: true, slideshowPaused: false }),
 

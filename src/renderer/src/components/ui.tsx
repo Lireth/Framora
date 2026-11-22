@@ -506,6 +506,7 @@ export const SHORTCUT_GROUPS: { title: string; items: ShortcutEntry[] }[] = [
       { keys: '方向键', desc: '移动选中项' },
       { keys: '0 – 5', desc: '为所选照片评分（无选中时评锚点照片），0 清除' },
       { keys: 'Enter / 空格', desc: '打开查看器（单选时）' },
+      { keys: '对比视图', desc: '恰好选中 2 张时经批量栏进入：←/→ 焦点、1-5 评分、滚轮同步缩放' },
       { keys: 'Delete', desc: '删除所选（确认后移入回收站）' },
       { keys: 'Esc', desc: '清除选择' },
       { keys: '拖拽', desc: '拖入侧边栏相册/标签，或拖出窗口到资源管理器' }

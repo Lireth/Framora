@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react'
 import { FolderOpen, Loader2 } from 'lucide-react'
 import { useStore } from '../store'
 import { api } from '../lib/api'
+import { parentDir } from '../lib/format'
+import { deletePhotosAction } from '../lib/actions'
 import { GhostButton, Modal, PrimaryButton } from './ui'
 import { cn } from './ui'
 
@@ -11,12 +13,14 @@ export function ExportDialog(): React.JSX.Element | null {
   const open = useStore((s) => s.exportOpen)
   const close = useStore((s) => s.closeExport)
   const exportIds = useStore((s) => s.exportIds)
+  const exportMode = useStore((s) => s.exportMode)
   const selection = useStore((s) => s.selection)
   const exportProgress = useStore((s) => s.exportProgress)
   const setExportProgress = useStore((s) => s.setExportProgress)
+  const isConvert = exportMode === 'convert'
 
   const [dir, setDir] = useState('')
-  const [fmt, setFmt] = useState<Fmt>('original')
+  const [fmt, setFmt] = useState<Fmt>('jpeg')
   const [maxSide, setMaxSide] = useState(0)
   const [quality, setQuality] = useState(92)
   const [nameTemplate, setNameTemplate] = useState('{name}')
@@ -25,7 +29,7 @@ export function ExportDialog(): React.JSX.Element | null {
   useEffect(() => {
     if (open) {
       setDir('')
-      setFmt('original')
+      setFmt('jpeg')
       setMaxSide(0)
       setQuality(92)
       setNameTemplate('{name}')
@@ -42,6 +46,51 @@ export function ExportDialog(): React.JSX.Element | null {
   }
 
   const run = async (): Promise<void> => {
+    // 库内转换（FEAT-06）：逐张导出到源文件夹（复用导出管线与防覆盖命名），
+    // 全部完成后源文件一次性移入应用内回收站（可还原）
+    if (isConvert) {
+      setBusy(true)
+      const converted: number[] = []
+      let failed = 0
+      let cancelled = false
+      try {
+        for (const id of ids) {
+          const rec = await api.getPhoto(id).catch(() => null)
+          if (!rec || rec.missing) {
+            failed++
+            continue
+          }
+          const r = await api.exportPhotos([id], parentDir(rec.path), {
+            format: fmt,
+            quality,
+            maxSide: maxSide || undefined,
+          })
+          if (r.cancelled) {
+            cancelled = true
+            break
+          }
+          if (r.exported > 0) converted.push(id)
+          else failed++
+        }
+        if (converted.length) await deletePhotosAction(converted)
+        else useStore.getState().refreshPhotos()
+        useStore
+          .getState()
+          .toast(
+            cancelled ? 'info' : failed ? 'info' : 'success',
+            cancelled
+              ? `已停止转换：完成 ${converted.length} 张（已转换的源已移入回收站）`
+              : `转换完成：${converted.length} 张${failed ? `，失败 ${failed} 张` : ''}（源已移入回收站，可还原）`,
+          )
+        close()
+      } catch (e) {
+        useStore.getState().toast('error', e instanceof Error ? e.message : '转换失败')
+      } finally {
+        setBusy(false)
+        setExportProgress(null)
+      }
+      return
+    }
     if (!dir) {
       useStore.getState().toast('error', '请先选择导出位置')
       return
@@ -94,7 +143,7 @@ export function ExportDialog(): React.JSX.Element | null {
     <Modal
       open={open}
       onClose={close}
-      title={`导出 ${ids.length} 张照片`}
+        title={isConvert ? `转换 ${ids.length} 张照片的格式` : `导出 ${ids.length} 张照片`}
       width={440}
       footer={
         <>
@@ -109,35 +158,44 @@ export function ExportDialog(): React.JSX.Element | null {
             <span className="flex items-center gap-1.5">
               {busy && <Loader2 size={13} className="animate-spin" />}
               {busy && exportProgress
-                ? `导出中 ${exportProgress.done}/${exportProgress.total}`
-                : '开始导出'}
+                ? `${isConvert ? '转换' : '导出'}中 ${exportProgress.done}/${exportProgress.total}`
+                : isConvert
+                  ? '开始转换'
+                  : '开始导出'}
             </span>
           </PrimaryButton>
         </>
       }
     >
       <div className="space-y-4 text-[13px]">
-        <div>
-          <p className="mb-1.5 text-[12px] text-ink3">导出位置</p>
-          <div className="flex gap-2">
-            <input
-              value={dir}
-              readOnly
-              placeholder="未选择文件夹"
-              className="h-8 min-w-0 flex-1 truncate rounded-md border border-line bg-panel px-2.5 text-xs text-ink2 outline-none"
-            />
-            <GhostButton onClick={pick}>
-              <span className="flex items-center gap-1.5">
-                <FolderOpen size={13} /> 选择
-              </span>
-            </GhostButton>
+        {isConvert && (
+          <p className="rounded-md border border-line bg-panel px-3 py-2 text-[11.5px] leading-relaxed text-ink2">
+            库内转换：新文件输出到照片所在文件夹（重名自动改名），完成后源文件移入应用内回收站，可随时还原。
+          </p>
+        )}
+        {!isConvert && (
+          <div>
+            <p className="mb-1.5 text-[12px] text-ink3">导出位置</p>
+            <div className="flex gap-2">
+              <input
+                value={dir}
+                readOnly
+                placeholder="未选择文件夹"
+                className="h-8 min-w-0 flex-1 truncate rounded-md border border-line bg-panel px-2.5 text-xs text-ink2 outline-none"
+              />
+              <GhostButton onClick={pick}>
+                <span className="flex items-center gap-1.5">
+                  <FolderOpen size={13} /> 选择
+                </span>
+              </GhostButton>
+            </div>
           </div>
-        </div>
+        )}
 
         <div>
           <p className="mb-1.5 text-[12px] text-ink3">格式</p>
           <div className="flex flex-wrap gap-1.5">
-            {fmtOptions.map(([v, label]) => (
+            {fmtOptions.filter(([v]) => !isConvert || v !== 'original').map(([v, label]) => (
               <button
                 key={v}
                 onClick={() => setFmt(v)}
@@ -191,18 +249,20 @@ export function ExportDialog(): React.JSX.Element | null {
           </div>
         )}
 
-        <div>
-          <p className="mb-1.5 text-[12px] text-ink3">文件名模板</p>
-          <input
-            value={nameTemplate}
-            onChange={(e) => setNameTemplate(e.target.value)}
-            placeholder="{name}"
-            className="h-8 w-full rounded-md border border-line bg-panel px-2.5 text-xs outline-none focus:border-[var(--c-accent)]"
-          />
-          <p className="mt-1 text-[11px] text-ink3">
-            支持 {'{name}'} 原文件名、{'{date}'} 拍摄日期、{'{index}'} 三位序号，重名自动追加序号。
-          </p>
-        </div>
+        {!isConvert && (
+          <div>
+            <p className="mb-1.5 text-[12px] text-ink3">文件名模板</p>
+            <input
+              value={nameTemplate}
+              onChange={(e) => setNameTemplate(e.target.value)}
+              placeholder="{name}"
+              className="h-8 w-full rounded-md border border-line bg-panel px-2.5 text-xs outline-none focus:border-[var(--c-accent)]"
+            />
+            <p className="mt-1 text-[11px] text-ink3">
+              支持 {'{name}'} 原文件名、{'{date}'} 拍摄日期、{'{index}'} 三位序号，重名自动追加序号。
+            </p>
+          </div>
+        )}
 
         <p className="text-[11px] leading-relaxed text-ink3">
           重名文件自动追加序号，不会覆盖已有文件；旋转方向与星级等应用内编辑不会写入导出副本。

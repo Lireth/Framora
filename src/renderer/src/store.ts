@@ -74,6 +74,8 @@ interface AppState extends Filters {
   toasts: Toast[]
   settingsOpen: boolean
   exportOpen: boolean
+  /** 导出对话框形态：export = 导出到指定目录；convert = 库内格式转换（源进回收站） */
+  exportMode: 'export' | 'convert'
   exportIds: number[] | null
   confirmDeleteOpen: boolean
   helpOpen: boolean
@@ -118,6 +120,7 @@ interface AppState extends Filters {
   dismissToast: (id: number) => void
   setSettingsOpen: (v: boolean) => void
   openExport: (ids: number[] | null) => void
+  openConvert: (ids: number[] | null) => void
   closeExport: () => void
   setConfirmDeleteOpen: (v: boolean) => void
   setHelpOpen: (v: boolean) => void
@@ -279,6 +282,7 @@ export const useStore = create<AppState>((set, get) => ({
   toasts: [],
   settingsOpen: false,
   exportOpen: false,
+  exportMode: 'export',
   exportIds: null,
   confirmDeleteOpen: false,
   helpOpen: false,
@@ -647,7 +651,9 @@ export const useStore = create<AppState>((set, get) => ({
 
   setSettingsOpen: (v) => set({ settingsOpen: v }),
 
-  openExport: (ids) => set({ exportOpen: true, exportIds: ids }),
+  openExport: (ids) => set({ exportOpen: true, exportIds: ids, exportMode: 'export' }),
+
+  openConvert: (ids) => set({ exportOpen: true, exportIds: ids, exportMode: 'convert' }),
 
   closeExport: () => set({ exportOpen: false, exportIds: null }),
 

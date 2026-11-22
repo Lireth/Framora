@@ -19,6 +19,13 @@ export function mediaUrl(p: { path: string; mtime?: number }): string {
   return `media://img/?p=${encodeURIComponent(p.path)}&v=${p.mtime ?? 0}`
 }
 
+/** 纯字符串实现的父目录（渲染层无 node:path；兼容正反斜杠） */
+export function parentDir(p: string): string {
+  const sep = String.fromCharCode(92)
+  const idx = Math.max(p.lastIndexOf('/'), p.lastIndexOf(sep))
+  return idx > 0 ? p.slice(0, idx) : p
+}
+
 export function thumbUrl(p: { id: number; thumb_ts: number }): string {
   return `thumb://t/${p.id}.webp?v=${p.thumb_ts}`
 }

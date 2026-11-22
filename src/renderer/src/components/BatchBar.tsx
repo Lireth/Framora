@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { ArchiveRestore, Download, Images, Pencil, Star, Tag, Trash2, X } from 'lucide-react'
+import { ArchiveRestore, Download, Images, Pencil, Repeat, Star, Tag, Trash2, X } from 'lucide-react'
 import { useStore } from '../store'
 import { api } from '../lib/api'
 import { deletePhotosAction, purgePhotosAction, restorePhotosAction } from '../lib/actions'
@@ -13,6 +13,7 @@ export function BatchBar(): React.JSX.Element {
   const inTrash = scope === 'trash'
   const clearSelection = useStore((s) => s.clearSelection)
   const openExport = useStore((s) => s.openExport)
+  const openConvert = useStore((s) => s.openConvert)
   const confirmDeleteOpen = useStore((s) => s.confirmDeleteOpen)
   const setConfirmDeleteOpen = useStore((s) => s.setConfirmDeleteOpen)
   const albums = useStore((s) => s.albums)
@@ -93,6 +94,11 @@ export function BatchBar(): React.JSX.Element {
                 <BarBtn icon={<Images size={14} />} label="加入相册" onClick={openAlbumMenu} />
                 <BarBtn icon={<Pencil size={14} />} label="批量重命名" onClick={() => setRenameOpen(true)} />
                 <BarBtn icon={<Download size={14} />} label="批量导出" onClick={() => openExport(ids)} />
+                <BarBtn
+                  icon={<Repeat size={14} />}
+                  label="转换格式（输出到源文件夹，源移入回收站）"
+                  onClick={() => openConvert(ids)}
+                />
                 <BarBtn
                   icon={<Trash2 size={14} />}
                   label="批量删除"

@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import { BrowserWindow } from 'electron'
 import {
   addFolder,
+  checkpointWalPassive,
   findDeletedPhotoId,
   findPhotoByPath,
   getFolderByPath,
@@ -291,6 +292,8 @@ export async function importFolder(folderPath: string): Promise<ImportResult> {
       missing: missings.length,
     })
     broadcastLibraryChanged()
+    // 扫描写库阶段连续 4 个事务：PASSIVE 合并 WAL，控制库伴生文件体积
+    checkpointWalPassive()
     return { folderId, found, added, updated, unsupported, missing: missings.length }
   } catch (err) {
     broadcastScan({

@@ -19,15 +19,28 @@ import type {
 
 let db: Database.Database
 
-/** 预编译语句缓存：better-sqlite3 不缓存 prepare 结果，热路径重复编译有额外开销 */
+/**
+ * 预编译语句缓存：better-sqlite3 不缓存 prepare 结果，热路径重复编译有额外开销。
+ * 动态拼接的 SQL（IN 列表长度、LIMIT 组合）会产生无上界的新条目（OPT-30）——
+ * 超限时按插入序淘汰最旧条目（近似 LRU：热点语句命中即被 Map 重插到末尾）。
+ */
 const stmtCache = new Map<string, Database.Statement>()
+const STMT_CACHE_MAX = 256
 
 function stmt(sql: string): Database.Statement {
   let s = stmtCache.get(sql)
-  if (!s) {
-    s = db.prepare(sql)
+  if (s) {
+    // 重插到 Map 末尾实现近似 LRU
+    stmtCache.delete(sql)
     stmtCache.set(sql, s)
+    return s
   }
+  s = db.prepare(sql)
+  if (stmtCache.size >= STMT_CACHE_MAX) {
+    const oldest = stmtCache.keys().next().value
+    if (oldest !== undefined) stmtCache.delete(oldest)
+  }
+  stmtCache.set(sql, s)
   return s
 }
 
@@ -579,6 +592,9 @@ async function openAndMigrate(): Promise<void> {
   stmtCache.clear()
   db.pragma('journal_mode = WAL')
   db.pragma('synchronous = NORMAL')
+  // 收紧 WAL 自动合并阈值（默认 1000 页）：大批量导入的长事务期间 WAL 持续增长，
+  // 降低阈值让合并更频繁发生，控制 WAL 文件体积与后续备份/换库的合并成本
+  db.pragma('wal_autocheckpoint = 400')
   // 仅在确有迁移要执行时先备份（失败可回滚）；日常启动不再整库复制拖慢启动
   const current = db.pragma('user_version', { simple: true }) as number
   if (current < MIGRATIONS.length) {
@@ -647,6 +663,13 @@ export function closeDb(): void {
     logError('searchText', err)
   }
   discardSearchTextQueue()
+  // 关库前把 WAL 全量合并回主库并截断：缩小库文件足迹，换库/迁移备份的
+  // 「未合并 WAL」探测成本也随之归零
+  try {
+    db?.pragma('wal_checkpoint(TRUNCATE)')
+  } catch {
+    /* ignore */
+  }
   try {
     db?.close()
   } catch {
@@ -658,6 +681,12 @@ export function closeDb(): void {
 export async function exportBackup(destFile: string): Promise<void> {
   // 备份必须包含最新检索文本：先同步冲刷脏队列
   flushSearchText()
+  // 导出前全量合并 WAL：单文件备份即为完整最新状态
+  try {
+    db.pragma('wal_checkpoint(TRUNCATE)')
+  } catch {
+    /* 合并失败不阻断导出（backup API 本身对 WAL 安全） */
+  }
   await db.backup(destFile)
 }
 
@@ -1039,6 +1068,15 @@ export function recomputeSearchText(ids: number[]): void {
   flushSearchText()
 }
 
+/** 扫描等批量写入后合并 WAL（PASSIVE：不阻塞读写，失败静默） */
+export function checkpointWalPassive(): void {
+  try {
+    db.pragma('wal_checkpoint(PASSIVE)')
+  } catch {
+    /* ignore */
+  }
+}
+
 /** 检索前冲刷队列；失败时降级为略旧文本，不让搜索本身报错 */
 function flushSearchTextForRead(): void {
   try {
@@ -1298,10 +1336,12 @@ export function queryPhotos(q: PhotoQuery): QueryResult {
   const orderSql = buildOrderSql(resolved)
   const limit = Math.min(q.limit ?? 50000, 100000)
   const offset = Math.max(0, Math.floor(q.offset ?? 0))
-  // 窗口函数在单次查询中同时返回总数，避免额外的 COUNT 扫描
+  // 窗口函数在单次查询中同时返回总数，避免额外的 COUNT 扫描。
+  // LIMIT/OFFSET 参数绑定（OPT-30）：数值不再内插进 SQL 文本，翻页/换页大小
+  // 均复用同一预编译语句，stmtCache 不会随浏览无界增长
   const rows = stmt(
-    `SELECT ${PHOTO_LITE_COLS}, COUNT(*) OVER() AS _total FROM photos p ${whereSql} ${orderSql} LIMIT ${limit} OFFSET ${offset}`,
-  ).all(params) as (PhotoLite & { _total?: number })[]
+    `SELECT ${PHOTO_LITE_COLS}, COUNT(*) OVER() AS _total FROM photos p ${whereSql} ${orderSql} LIMIT @_limit OFFSET @_offset`,
+  ).all({ ...params, _limit: limit, _offset: offset }) as (PhotoLite & { _total?: number })[]
   let total: number
   if (rows.length) {
     total = Number(rows[0]._total ?? 0)

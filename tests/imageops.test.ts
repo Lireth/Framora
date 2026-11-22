@@ -139,6 +139,21 @@ describe('pickName 导出命名防覆盖', () => {
     const second = pickName(dir, 'a', 'png', used)
     expect(second.outName).toBe('a(1).png')
   })
+
+  it('序号超限后改用时间戳后缀，绝不返回已存在的路径（防覆盖）', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'framora-export-'))
+    // 预占 (1)-(999) 全部序号，模拟编号耗尽
+    for (let i = 1; i <= 999; i++) writeFileSync(path.join(dir, `IMG_1001(${i}).jpg`), 'x')
+    writeFileSync(path.join(dir, 'IMG_1001.jpg'), 'x')
+    const r = pickName(dir, 'IMG_1001', 'jpg', new Set())
+    expect(r.outName).toMatch(/^IMG_1001-\d+-\d+\.jpg$/)
+    expect(existsSync(r.outPath)).toBe(false)
+    // 分配出的新路径再次调用不重复
+    const used = new Set([r.outPath.toLowerCase()])
+    const again = pickName(dir, 'IMG_1001', 'jpg', used)
+    expect(again.outPath.toLowerCase()).not.toBe(r.outPath.toLowerCase())
+    expect(existsSync(again.outPath)).toBe(false)
+  })
 })
 
 describe('exportPhotos（两阶段并行导出回归）', () => {

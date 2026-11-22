@@ -188,10 +188,16 @@ export function pickName(
   let outPath = path.join(destDir, outName)
   let i = 1
   while (used.has(outPath.toLowerCase()) || fs.existsSync(outPath)) {
-    outName = `${base}(${i}).${ext}`
+    if (i <= 999) {
+      outName = `${base}(${i}).${ext}`
+    } else {
+      // 超出编号上限：改用时间戳后缀继续避让。原实现在此处 break 返回已存在的
+      // outPath，后续 copyFile/toFile 默认覆盖目标——会静默覆盖用户目录里的
+      // 同名无关文件，违背「重名自动改名不覆盖」承诺
+      outName = `${base}-${Date.now()}-${i - 999}.${ext}`
+    }
     outPath = path.join(destDir, outName)
     i++
-    if (i > 999) break
   }
   return { outName, outPath }
 }

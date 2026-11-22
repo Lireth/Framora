@@ -29,7 +29,7 @@ vi.mock('electron', () => ({
 import * as db from '../src/main/db'
 import * as storage from '../src/main/storage'
 import { backupsDir, previewStats, thumbsDir, writePreviewFile } from '../src/main/thumbs'
-import { backupStats } from '../src/main/imageops'
+import { backupStats, cleanupOrphanBackups } from '../src/main/imageops'
 
 const KB = 1024
 
@@ -140,6 +140,27 @@ describe('编辑备份预算', () => {
     db.setSetting('backupBudgetMb', '1')
     expect(storage.enforceStorageBudgets().backups).toEqual({ deleted: 0, bytes: 0 })
     expect(existsSync(a)).toBe(true)
+  })
+
+  it('无主备份（照片行不存在的 id 组）可被清理，有主备份保留', () => {
+    // id 999 不存在于索引库（删除照片/换库遗留）；id 1 通过插入行保留
+    const orphan1 = backupFile('999-cccccccc-1000.jpg', 100 * KB, 1000)
+    const orphan2 = backupFile('999-1000.jpg', 100 * KB, 1000)
+    const kept = backupFile('1-dddddddd-1000.jpg', 100 * KB, 1000)
+    db.insertPhoto({
+      folder_id: 0,
+      path: 'C:\\pics\\kept.jpg',
+      name: 'kept.jpg',
+      ext: 'jpg',
+      size: 1000,
+      mtime: 1,
+      imported_at: Date.now(),
+    })
+    const removed = cleanupOrphanBackups()
+    expect(removed).toBe(2)
+    expect(existsSync(orphan1)).toBe(false)
+    expect(existsSync(orphan2)).toBe(false)
+    expect(existsSync(kept)).toBe(true)
   })
 })
 

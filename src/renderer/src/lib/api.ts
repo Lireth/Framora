@@ -150,6 +150,7 @@ export const api = {
   openDataDir: (): Promise<void> => call('app:openDataDir'),
   openThumbsDir: (): Promise<void> => call('app:openThumbsDir'),
   clearBackups: (): Promise<number> => call('app:clearBackups'),
+  cleanupOrphanBackups: (): Promise<number> => call('app:cleanupOrphanBackups'),
   openLogsDir: (): Promise<void> => call('app:openLogsDir'),
   dragOutPhotos: (ids: number[]): Promise<void> => call('app:dragOutPhotos', ids),
 

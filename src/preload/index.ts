@@ -90,6 +90,7 @@ const CALLABLE = new Set([
   'app:openDataDir',
   'app:openThumbsDir',
   'app:clearBackups',
+  'app:cleanupOrphanBackups',
   'app:openLogsDir',
   'app:dragOutPhotos',
   'update:check',

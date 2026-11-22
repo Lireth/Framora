@@ -263,6 +263,55 @@ export async function clearAllBackups(): Promise<number> {
   return removed
 }
 
+/** 彻底删除后同步清理该照片的全部编辑备份（按 id 前缀匹配新旧两种命名） */
+export async function removePhotoBackups(id: number): Promise<void> {
+  let names: string[]
+  try {
+    names = await fs.promises.readdir(backupsDir())
+  } catch {
+    return
+  }
+  await Promise.all(
+    names
+      .filter((n) => backupNameRe(id).test(n) || LEGACY_BACKUP_NAME_RE.test(n))
+      .map((n) => fs.promises.rm(path.join(backupsDir(), n), { force: true }).catch(() => undefined)),
+  )
+}
+
+/**
+ * 清理无主编辑备份（OPT-21）：照片行已不存在的 id 组（删除照片/清空回收站/
+ * 换库遗留）。预算清理只裁剪历史、每组保底一份，孤儿组因此只增不减且对用户
+ * 不可见——此入口让 backups 目录可收敛。
+ */
+export function cleanupOrphanBackups(): number {
+  let names: string[]
+  try {
+    names = fs.readdirSync(backupsDir())
+  } catch {
+    return 0
+  }
+  let removed = 0
+  const existsCache = new Map<number, boolean>()
+  for (const n of names) {
+    const m = BACKUP_NAME_RE.exec(n) ?? LEGACY_BACKUP_NAME_RE.exec(n)
+    if (!m) continue
+    const id = Number(m[1])
+    let exists = existsCache.get(id)
+    if (exists === undefined) {
+      exists = getPhotoRow(id) !== undefined
+      existsCache.set(id, exists)
+    }
+    if (exists) continue
+    try {
+      fs.rmSync(path.join(backupsDir(), n), { force: true })
+      removed++
+    } catch {
+      /* 单个文件删除失败忽略 */
+    }
+  }
+  return removed
+}
+
 /* ---------- 编辑备份预算 ---------- */
 
 const BACKUP_BUDGET_KEY = 'backupBudgetMb'

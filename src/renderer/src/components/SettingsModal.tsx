@@ -237,6 +237,21 @@ export function SettingsModal(): React.JSX.Element | null {
               >
                 <FileClock size={13} /> 清理编辑备份
               </button>
+              <button
+                onClick={() =>
+                  api
+                    .cleanupOrphanBackups()
+                    .then((n) =>
+                      useStore
+                        .getState()
+                        .toast(n ? 'success' : 'info', n ? `已清理 ${n} 个无主备份` : '没有无主备份')
+                    )
+                    .catch(() => useStore.getState().toast('error', '清理失败'))
+                }
+                className="flex items-center gap-1.5 rounded-md border border-line px-3 py-1.5 text-[12px] text-ink2 hover:bg-hover hover:text-ink"
+              >
+                <FileClock size={13} /> 清理无主备份
+              </button>
             </div>
             <p className="mt-1.5 text-[11px] text-ink3">
               数据（索引库与缩略图）保存在应用数据目录，删除数据目录即完全重置。

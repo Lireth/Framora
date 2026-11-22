@@ -29,12 +29,14 @@ import { reconcileWatchers, startWatcher, stopAllWatchers, stopWatcher } from '.
 import {
   applyTemplate,
   cancelExport,
+  cleanupOrphanBackups,
   clearAllBackups,
   exportPhotos,
   listBackups,
   migrateLegacyEditBackups,
   pickName,
   rekeyEditBackups,
+  removePhotoBackups,
   revertEdits,
   saveEdits,
 } from './imageops'
@@ -531,6 +533,8 @@ export function registerIpc(): void {
       okIds.flatMap((id) => [
         fs.promises.rm(thumbPath(id), { force: true }).catch(() => undefined),
         fs.promises.rm(previewPath(id), { force: true }).catch(() => undefined),
+        // 编辑备份随照片彻底删除一并清理（OPT-21：否则 backups 只增不减且不可见）
+        removePhotoBackups(id),
       ]),
     )
     broadcastLibraryChanged()
@@ -771,6 +775,9 @@ export function registerIpc(): void {
   })
 
   ipcMain.handle('app:clearBackups', () => clearAllBackups())
+
+  // 清理无主编辑备份（照片行已不存在的 id 组）：删除照片/换库遗留，backups 可收敛
+  ipcMain.handle('app:cleanupOrphanBackups', () => cleanupOrphanBackups())
 
   ipcMain.handle('app:openLogsDir', () => {
     shell.openPath(logsDir())

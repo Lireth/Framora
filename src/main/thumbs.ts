@@ -20,8 +20,12 @@ import type { CleanupResult, ThumbEvent } from '@shared/types'
 
 const CONCURRENCY = Math.max(2, Math.min(6, os.cpus().length - 1))
 
-const queue: number[] = []
-const queued = new Set<number>()
+/** 双通道队列：urgent（浏览触发的按需生成）优先于 bulk（扫描/重建批量入队），
+ *  万级导入时用户翻到未生成的照片无需排到队尾 */
+const queueUrgent: number[] = []
+const queueBulk: number[] = []
+const queuedUrgent = new Set<number>()
+const queuedBulk = new Set<number>()
 let running = 0
 
 /** 库代次：换库（备份导入）后递增；在途任务按开始时捕获的代次校验，过期写入作废 */
@@ -224,32 +228,50 @@ function emit(e: ThumbEvent): void {
   }
 }
 
-export function enqueueThumb(id: number): void {
-  if (queued.has(id)) return
-  queued.add(id)
-  queue.push(id)
+export function enqueueThumb(id: number, priority: 'urgent' | 'bulk' = 'bulk'): void {
+  if (queuedUrgent.has(id) || queuedBulk.has(id)) return
+  if (priority === 'urgent') {
+    queuedUrgent.add(id)
+    queueUrgent.push(id)
+  } else {
+    queuedBulk.add(id)
+    queueBulk.push(id)
+  }
   pump()
 }
 
 export function dequeueThumb(id: number): void {
-  if (!queued.has(id)) return
-  const i = queue.indexOf(id)
-  if (i >= 0) queue.splice(i, 1)
-  queued.delete(id)
+  if (queuedUrgent.has(id)) {
+    const i = queueUrgent.indexOf(id)
+    if (i >= 0) queueUrgent.splice(i, 1)
+    queuedUrgent.delete(id)
+  } else if (queuedBulk.has(id)) {
+    const i = queueBulk.indexOf(id)
+    if (i >= 0) queueBulk.splice(i, 1)
+    queuedBulk.delete(id)
+  }
 }
 
 /** 清空待生成队列（进行中的单张会自然完成），返回被移除的数量；剩余照片下次启动续跑 */
 export function clearThumbQueue(): number {
-  const drained = queue.length
-  queue.length = 0
-  queued.clear()
+  const drained = queueUrgent.length + queueBulk.length
+  queueUrgent.length = 0
+  queueBulk.length = 0
+  queuedUrgent.clear()
+  queuedBulk.clear()
   return drained
 }
 
 function pump(): void {
-  while (running < CONCURRENCY && queue.length > 0) {
-    const id = queue.shift()!
-    queued.delete(id)
+  while (
+    running < CONCURRENCY &&
+    (queueUrgent.length > 0 || queueBulk.length > 0)
+  ) {
+    // urgent 通道优先取用；queued 双集合按所属通道清理
+    const urgent = queueUrgent.length > 0
+    const id = urgent ? queueUrgent.shift()! : queueBulk.shift()!
+    if (urgent) queuedUrgent.delete(id)
+    else queuedBulk.delete(id)
     running++
     run(id)
       .catch(() => undefined)
@@ -348,7 +370,8 @@ async function run(id: number): Promise<void> {
     const attempts = thumbRetries.get(id) ?? 0
     if (attempts < THUMB_RETRY_DELAYS.length) {
       thumbRetries.set(id, attempts + 1)
-      setTimeout(() => enqueueThumb(id), THUMB_RETRY_DELAYS[attempts])
+      // 重试以紧急优先级回归：已在处理中的照片不应沉底到批量导入队尾
+      setTimeout(() => enqueueThumb(id, 'urgent'), THUMB_RETRY_DELAYS[attempts])
       return
     }
     thumbRetries.delete(id)

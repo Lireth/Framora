@@ -569,7 +569,8 @@ export function registerIpc(): void {
 
   ipcMain.handle('photos:regenerateThumb', (_e, id: number) => {
     db.setThumbStatus(id, 0)
-    enqueueThumb(id)
+    // 用户显式请求：以紧急优先级入队，不排在批量导入之后
+    enqueueThumb(id, 'urgent')
   })
 
   ipcMain.handle('thumbs:rebuildAll', () => rebuildAllThumbs())

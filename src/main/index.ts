@@ -7,6 +7,7 @@ import {
   closeDb,
   getSetting,
   setSetting,
+  getPhotoRow,
   listFolders,
   listFolderPaths,
   listPhotoIdsPendingThumb,
@@ -204,7 +205,19 @@ function registerProtocols(): void {
         const id = previewIdFromName(name)
         if (id !== null) await ensurePreview(id, p)
       }
-      if (!fs.existsSync(p)) return new Response(null, { status: 404 })
+      if (!fs.existsSync(p)) {
+        // 缩略图缺失（生成中排队/缓存被外部清理）：以紧急优先级自动入队，
+        // 用户翻到的照片无需排在批量导入队尾；失败态（2）不自动重试，
+        // photos:regenerateThumb 是其手动恢复路径
+        if (name.endsWith('.webp')) {
+          const id = Number(name.slice(0, -'.webp'.length))
+          if (Number.isInteger(id) && id > 0) {
+            const row = getPhotoRow(id)
+            if (row && !row.missing && row.thumb_status !== 2) enqueueThumb(id, 'urgent')
+          }
+        }
+        return new Response(null, { status: 404 })
+      }
       // mtime 近似 LRU：用户实际看过的预览在预算淘汰时优先保留
       fs.promises.utimes(p, new Date(), new Date()).catch(() => undefined)
       return await fileResponse(p)

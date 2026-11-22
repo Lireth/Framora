@@ -3,7 +3,8 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { AlertTriangle, Check, FolderPlus, ImageOff, SearchX } from 'lucide-react'
 import { useStore } from '../store'
 import { thumbUrl } from '../lib/format'
-import { cn, ContextMenu, StarRating, type MenuItem } from './ui'
+import { cn, StarRating, type MenuItem } from './ui'
+import { useContextMenu } from './useContextMenu'
 import { api } from '../lib/api'
 import { importFolderAction, restorePhotosAction } from '../lib/actions'
 import { TagPicker } from './TagPicker'
@@ -40,7 +41,7 @@ const Tile = React.memo(function Tile({
   const scope = useStore((s) => s.scope)
   const toggleSelect = useStore((s) => s.toggleSelect)
   const openViewer = useStore((s) => s.openViewer)
-  const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null)
+  const { open: openMenu, element: menuElement } = useContextMenu()
   const [imgFailed, setImgFailed] = useState(false)
   const [tagPickerOpen, setTagPickerOpen] = useState(false)
 
@@ -118,7 +119,7 @@ const Tile = React.memo(function Tile({
       onContextMenu={(e) => {
         e.preventDefault()
         if (!selected) toggleSelect(p.id)
-        setMenu({ x: e.clientX, y: e.clientY, items: menuItems })
+        openMenu(e.clientX, e.clientY, menuItems)
       }}
     >
       {/* 缩略图 */}
@@ -176,9 +177,7 @@ const Tile = React.memo(function Tile({
         />
       )}
 
-      {menu && (
-        <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />
-      )}
+      {menuElement}
     </div>
   )
 })

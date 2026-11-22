@@ -18,9 +18,11 @@ import {
 import { useStore } from '../store'
 import { api } from '../lib/api'
 import { importFolderAction } from '../lib/actions'
-import { cn, ConfirmDialog, ContextMenu, type MenuItem } from './ui'
+import { cn, ConfirmDialog, InputDialog, type MenuItem } from './ui'
+import { useContextMenu } from './useContextMenu'
 import { useState } from 'react'
 import { formatCount, thumbUrl } from '../lib/format'
+import { SORT_LABELS } from '@shared/formats'
 import { SmartAlbumDialog } from './SmartAlbumDialog'
 import type {
   AlbumInfo,
@@ -57,14 +59,6 @@ function colorMenu(onPick: (color: string | null) => void): MenuItem[] {
     { separator: true },
     { label: '默认颜色', onClick: () => void onPick(null) },
   ]
-}
-
-const SORT_LABELS: Record<string, string> = {
-  taken: '拍摄时间',
-  imported: '导入时间',
-  name: '文件名',
-  rating: '星级',
-  size: '文件大小',
 }
 
 /** 智能相册条件摘要（悬停提示用）：名称缺失时回退为 id，便于诊断失效引用 */
@@ -202,13 +196,12 @@ export function Sidebar(): React.JSX.Element {
   const stats = useStore((s) => s.stats)
   const setScope = useStore((s) => s.setScope)
 
-  const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null)
+  const { open: openMenu, element: menuElement } = useContextMenu()
   const [rename, setRename] = useState<{
     kind: 'album' | 'tag' | 'smart'
     id: number
     name: string
   } | null>(null)
-  const [renameValue, setRenameValue] = useState('')
   /** 智能相册编辑器：album=null 表示用 draft（当前筛选）新建 */
   const [smartEdit, setSmartEdit] = useState<{
     album: SmartAlbumInfo | null
@@ -291,7 +284,6 @@ export function Sidebar(): React.JSX.Element {
       icon: <Pencil size={13} />,
       onClick: () => {
         setRename({ kind: 'album', id: album.id, name: album.name })
-        setRenameValue(album.name)
       },
     },
     {
@@ -320,7 +312,6 @@ export function Sidebar(): React.JSX.Element {
       icon: <Pencil size={13} />,
       onClick: () => {
         setRename({ kind: 'tag', id: tag.id, name: tag.name })
-        setRenameValue(tag.name)
       },
     },
     {
@@ -356,7 +347,6 @@ export function Sidebar(): React.JSX.Element {
       icon: <Pencil size={13} />,
       onClick: () => {
         setRename({ kind: 'smart', id: sa.id, name: sa.name })
-        setRenameValue(sa.name)
       },
     },
     { separator: true },
@@ -476,7 +466,7 @@ export function Sidebar(): React.JSX.Element {
           onClick={() => setScope('folder', f.id)}
           onContextMenu={(e) => {
             e.preventDefault()
-            setMenu({ x: e.clientX, y: e.clientY, items: folderMenu(f) })
+            openMenu(e.clientX, e.clientY, folderMenu(f))
           }}
         />
       ))}
@@ -489,7 +479,6 @@ export function Sidebar(): React.JSX.Element {
             title="新建相册"
             onClick={() => {
               setRename({ kind: 'album', id: -1, name: '' })
-              setRenameValue('')
             }}
           >
             <Images size={13} />
@@ -535,7 +524,7 @@ export function Sidebar(): React.JSX.Element {
           }
           onContextMenu={(e) => {
             e.preventDefault()
-            setMenu({ x: e.clientX, y: e.clientY, items: albumMenu(a) })
+            openMenu(e.clientX, e.clientY, albumMenu(a))
           }}
         />
       ))}
@@ -567,7 +556,7 @@ export function Sidebar(): React.JSX.Element {
           onClick={() => setScope('smart', sa.id)}
           onContextMenu={(e) => {
             e.preventDefault()
-            setMenu({ x: e.clientX, y: e.clientY, items: smartMenu(sa) })
+            openMenu(e.clientX, e.clientY, smartMenu(sa))
           }}
         />
       ))}
@@ -580,7 +569,6 @@ export function Sidebar(): React.JSX.Element {
             title="新建标签"
             onClick={() => {
               setRename({ kind: 'tag', id: -1, name: '' })
-              setRenameValue('')
             }}
           >
             <Tag size={13} />
@@ -613,14 +601,12 @@ export function Sidebar(): React.JSX.Element {
           }
           onContextMenu={(e) => {
             e.preventDefault()
-            setMenu({ x: e.clientX, y: e.clientY, items: tagMenu(t) })
+            openMenu(e.clientX, e.clientY, tagMenu(t))
           }}
         />
       ))}
 
-      {menu && (
-        <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />
-      )}
+      {menuElement}
 
       <ConfirmDialog
         open={confirmRemove !== null}
@@ -650,34 +636,51 @@ export function Sidebar(): React.JSX.Element {
         onConfirm={() => void runRemove()}
       />
 
-      {rename && (
-        <RenameDialog
-          kind={rename.kind}
-          isNew={rename.id === -1}
-          value={renameValue}
-          setValue={setRenameValue}
-          close={() => setRename(null)}
-          confirm={async () => {
-            const name = renameValue.trim()
-            if (!name) return
-            try {
-              if (rename.kind === 'album') {
-                if (rename.id === -1) await api.createAlbum(name, null)
-                else await api.renameAlbum(rename.id, name)
-              } else if (rename.kind === 'smart') {
-                // 新建走 SmartAlbumDialog；此处仅处理重命名
-                if (rename.id !== -1) await api.renameSmartAlbum(rename.id, name)
-              } else {
-                if (rename.id === -1) await api.createTag(name, null)
-                else await api.renameTag(rename.id, name)
-              }
-              useStore.getState().refreshLibrary()
-            } catch (e) {
-              useStore.getState().toast('error', e instanceof Error ? e.message : '操作失败')
+      <InputDialog
+        open={!!rename}
+        title={
+          rename?.kind === 'album'
+            ? rename.id === -1
+              ? '新建相册'
+              : '重命名相册'
+            : rename?.kind === 'smart'
+              ? rename.id === -1
+                ? '保存当前筛选为智能相册'
+                : '重命名智能相册'
+              : rename?.kind === 'tag'
+                ? rename.id === -1
+                  ? '新建标签'
+                  : '重命名标签'
+                : ''
+        }
+        initial={rename?.name ?? ''}
+        placeholder={
+          rename?.kind === 'album'
+            ? '例如：胶片风人像'
+            : rename?.kind === 'smart'
+              ? '例如：上个月的五星精选'
+              : '例如：室外'
+        }
+        onClose={() => setRename(null)}
+        onConfirm={async (raw) => {
+          if (!rename) return
+          try {
+            if (rename.kind === 'album') {
+              if (rename.id === -1) await api.createAlbum(raw, null)
+              else await api.renameAlbum(rename.id, raw)
+            } else if (rename.kind === 'smart') {
+              // 新建走 SmartAlbumDialog；此处仅处理重命名
+              if (rename.id !== -1) await api.renameSmartAlbum(rename.id, raw)
+            } else {
+              if (rename.id === -1) await api.createTag(raw, null)
+              else await api.renameTag(rename.id, raw)
             }
-          }}
-        />
-      )}
+            useStore.getState().refreshLibrary()
+          } catch (e) {
+            useStore.getState().toast('error', e instanceof Error ? e.message : '操作失败')
+          }
+        }}
+      />
 
       <SmartAlbumDialog
         open={!!smartEdit}
@@ -689,84 +692,3 @@ export function Sidebar(): React.JSX.Element {
   )
 }
 
-function RenameDialog({
-  kind,
-  isNew,
-  value,
-  setValue,
-  close,
-  confirm,
-}: {
-  kind: 'album' | 'tag' | 'smart'
-  isNew: boolean
-  value: string
-  setValue: (v: string) => void
-  close: () => void
-  confirm: () => Promise<void>
-}): React.JSX.Element {
-  const inputRef = React.useRef<HTMLInputElement>(null)
-  React.useEffect(() => {
-    setTimeout(() => inputRef.current?.focus(), 30)
-  }, [])
-  const title =
-    kind === 'album'
-      ? isNew
-        ? '新建相册'
-        : '重命名相册'
-      : kind === 'smart'
-        ? isNew
-          ? '保存当前筛选为智能相册'
-          : '重命名智能相册'
-        : isNew
-          ? '新建标签'
-          : '重命名标签'
-  return (
-    <div
-      className="fixed inset-x-0 bottom-0 top-10 z-50 flex items-center justify-center bg-black/50 animate-fadeIn"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) close()
-      }}
-    >
-      <div className="w-[360px] rounded-win border border-line bg-raised p-4 shadow-2xl animate-popIn">
-        <h3 className="mb-3 text-sm font-semibold">{title}</h3>
-        <input
-          ref={inputRef}
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          onKeyDown={async (e) => {
-            if (e.key === 'Enter') {
-              await confirm()
-              close()
-            }
-            if (e.key === 'Escape') close()
-          }}
-          placeholder={
-            kind === 'album'
-              ? '例如：胶片风人像'
-              : kind === 'smart'
-                ? '例如：上个月的五星精选'
-                : '例如：室外'
-          }
-          className="w-full rounded-md border border-line bg-panel px-3 py-2 text-sm outline-none focus:border-[var(--c-accent)]"
-        />
-        <div className="mt-4 flex justify-end gap-2">
-          <button
-            className="rounded-md border border-line px-3 py-1.5 text-sm text-ink2 hover:bg-hover"
-            onClick={close}
-          >
-            取消
-          </button>
-          <button
-            className="rounded-md bg-[var(--c-accent)] px-3.5 py-1.5 text-sm font-medium text-[#171310] hover:bg-[var(--c-accent-hover)]"
-            onClick={async () => {
-              await confirm()
-              close()
-            }}
-          >
-            确定
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}

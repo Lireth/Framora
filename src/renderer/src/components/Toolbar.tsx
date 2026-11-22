@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { Clock, FilePlus, FolderPlus, Grid3x3, Info, LayoutGrid, Search, SlidersHorizontal, Square, Trash2, X } from 'lucide-react'
 import { useStore, type SortKey } from '../store'
 import { emptyTrashAction, importFilesAction, importFolderAction, selectRedundantAction } from '../lib/actions'
+import { SORT_OPTIONS } from '@shared/formats'
 import { cn, ConfirmDialog, IconButton, StarRating, useOutsideClose } from './ui'
 
 function useScopeLabel(): string {
@@ -45,14 +46,6 @@ function FilterPopover({ onClose }: { onClose: () => void }): React.JSX.Element 
   const ref = useRef<HTMLDivElement>(null)
   useOutsideClose(ref, onClose)
 
-  const sortLabels: [SortKey, string][] = [
-    ['taken', '拍摄时间'],
-    ['imported', '导入时间'],
-    ['name', '文件名'],
-    ['rating', '星级'],
-    ['size', '文件大小']
-  ]
-
   return (
     <div
       ref={ref}
@@ -89,7 +82,7 @@ function FilterPopover({ onClose }: { onClose: () => void }): React.JSX.Element 
               onChange={(e) => setFilter({ sort: e.target.value as SortKey })}
               className="flex-1 rounded-md border border-line bg-panel px-2 py-1.5 text-xs outline-none"
             >
-              {sortLabels.map(([k, label]) => (
+              {SORT_OPTIONS.map(([k, label]) => (
                 <option key={k} value={k}>
                   {label}
                 </option>

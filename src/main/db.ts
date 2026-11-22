@@ -881,22 +881,6 @@ export function getPhotoRow(
   ).get(id) as never
 }
 
-/** 批量获取照片行（不存在的 id 不在返回值中） */
-export function getPhotoRows(ids: number[]): { id: number; path: string }[] {
-  if (!ids.length) return []
-  const rows: { id: number; path: string }[] = []
-  for (let i = 0; i < ids.length; i += 900) {
-    const chunk = ids.slice(i, i + 900)
-    const ph = chunk.map(() => '?').join(', ')
-    const part = stmt(`SELECT id, path FROM photos WHERE id IN (${ph})`).all(...chunk) as {
-      id: number
-      path: string
-    }[]
-    rows.push(...part)
-  }
-  return rows
-}
-
 export function findPhotoByPath(photoPath: string): PhotoLite | undefined {
   // 路径匹配大小写不敏感（Windows FS 语义），走 idx_photos_path_ci
   return stmt(`SELECT ${PHOTO_LITE_COLS} FROM photos WHERE path = ? COLLATE NOCASE`).get(
@@ -970,6 +954,16 @@ export function updatePhotoFilesBatch(
     for (const r of rows) updatePhotoFileFields(r.id, r)
   })
   run()
+}
+
+/** 按 900 个一批拆分 IN 子句（SQLite 变量上限），run 返回各批结果的拼接（OPT-35 去重） */
+function chunkedIn<T>(ids: number[], run: (chunk: number[], ph: string) => T[]): T[] {
+  const out: T[] = []
+  for (let i = 0; i < ids.length; i += 900) {
+    const chunk = ids.slice(i, i + 900)
+    out.push(...run(chunk, chunk.map(() => '?').join(', ')))
+  }
+  return out
 }
 
 /** 可见文件夹条件：已从资料库移除（软删除）的文件夹，其照片不参与任何常规视图/统计 */
@@ -1206,13 +1200,12 @@ export function deletePhotoRows(ids: number[]): void {
   if (!ids.length) return
   const run = db.transaction(() => {
     // 按 900 个一批拆分 IN 子句，避免超过 SQLite 变量上限
-    for (let i = 0; i < ids.length; i += 900) {
-      const chunk = ids.slice(i, i + 900)
-      const ph = chunk.map(() => '?').join(', ')
+    chunkedIn(ids, (chunk, ph) => {
       stmt(`DELETE FROM photo_tags WHERE photo_id IN (${ph})`).run(...chunk)
       stmt(`DELETE FROM album_photos WHERE photo_id IN (${ph})`).run(...chunk)
       stmt(`DELETE FROM photos WHERE id IN (${ph})`).run(...chunk)
-    }
+      return []
+    })
   })
   run()
   markPhashDirty()
@@ -1542,32 +1535,59 @@ function countTagPhotos(tagId: number): number {
 }
 
 /** 软删除标签：保留 photo_tags 关系，清除/恢复仅需翻转 deleted_at，可即时撤销 */
-export function deleteTag(id: number): { name: string; photos: number } | null {
-  const row = stmt('SELECT name FROM tags WHERE id = ? AND deleted_at IS NULL').get(id) as
+/**
+ * 标签/相册软删的公共实现（OPT-35 去重）：两域结构完全一致——查名 → 统计照片 →
+ * 收集受影响照片 → 翻转 deleted_at → 重算检索文本。表/关联列来自固定集合，无注入面。
+ */
+function softDeleteNamed(
+  table: 'tags' | 'albums',
+  relColumn: 'tag_id' | 'album_id',
+  countFn: (id: number) => number,
+  id: number,
+): { name: string; photos: number } | null {
+  const row = stmt(`SELECT name FROM ${table} WHERE id = ? AND deleted_at IS NULL`).get(id) as
     { name: string } | undefined
   if (!row) return null
-  const photos = countTagPhotos(id)
+  const photos = countFn(id)
   const affected = (
-    stmt('SELECT photo_id FROM photo_tags WHERE tag_id = ?').all(id) as { photo_id: number }[]
+    stmt(
+      `SELECT photo_id FROM ${table === 'tags' ? 'photo_tags' : 'album_photos'} WHERE ${relColumn} = ?`,
+    ).all(id) as { photo_id: number }[]
   ).map((r) => r.photo_id)
-  stmt('UPDATE tags SET deleted_at = ? WHERE id = ?').run(Date.now(), id)
-  // 标签名参与检索文本：删除后需从受影响照片的 search_text 中移除
+  stmt(`UPDATE ${table} SET deleted_at = ? WHERE id = ?`).run(Date.now(), id)
+  // 名称参与检索文本：删除后需从受影响照片的 search_text 中移除
   recomputeSearchText(affected)
   return { name: row.name, photos }
 }
 
-/** 撤销删除标签：恢复 deleted_at 并把标签名重新写回检索文本 */
-export function restoreTag(id: number): { name: string; photos: number } | null {
-  const row = stmt('SELECT name FROM tags WHERE id = ? AND deleted_at IS NOT NULL').get(id) as
+/** 撤销删除标签/相册：恢复 deleted_at 并把名称重新写回检索文本 */
+function restoreNamed(
+  table: 'tags' | 'albums',
+  relColumn: 'tag_id' | 'album_id',
+  countFn: (id: number) => number,
+  id: number,
+): { name: string; photos: number } | null {
+  const row = stmt(`SELECT name FROM ${table} WHERE id = ? AND deleted_at IS NOT NULL`).get(id) as
     { name: string } | undefined
   if (!row) return null
-  const photos = countTagPhotos(id)
+  const photos = countFn(id)
   const affected = (
-    stmt('SELECT photo_id FROM photo_tags WHERE tag_id = ?').all(id) as { photo_id: number }[]
+    stmt(
+      `SELECT photo_id FROM ${table === 'tags' ? 'photo_tags' : 'album_photos'} WHERE ${relColumn} = ?`,
+    ).all(id) as { photo_id: number }[]
   ).map((r) => r.photo_id)
-  stmt('UPDATE tags SET deleted_at = NULL WHERE id = ?').run(id)
+  stmt(`UPDATE ${table} SET deleted_at = NULL WHERE id = ?`).run(id)
   recomputeSearchText(affected)
   return { name: row.name, photos }
+}
+
+export function deleteTag(id: number): { name: string; photos: number } | null {
+  return softDeleteNamed('tags', 'tag_id', countTagPhotos, id)
+}
+
+/** 撤销删除标签：恢复 deleted_at 并把标签名重新写回检索文本 */
+export function restoreTag(id: number): { name: string; photos: number } | null {
+  return restoreNamed('tags', 'tag_id', countTagPhotos, id)
 }
 
 export function setPhotoTags(photoId: number, tagIds: number[]): void {
@@ -1669,31 +1689,12 @@ function countAlbumPhotos(albumId: number): number {
 
 /** 软删除相册：保留 album_photos 关系，撤销时清除 deleted_at 即可恢复成员 */
 export function deleteAlbum(id: number): { name: string; photos: number } | null {
-  const row = stmt('SELECT name FROM albums WHERE id = ? AND deleted_at IS NULL').get(id) as
-    { name: string } | undefined
-  if (!row) return null
-  const photos = countAlbumPhotos(id)
-  const affected = (
-    stmt('SELECT photo_id FROM album_photos WHERE album_id = ?').all(id) as { photo_id: number }[]
-  ).map((r) => r.photo_id)
-  stmt('UPDATE albums SET deleted_at = ? WHERE id = ?').run(Date.now(), id)
-  // 相册名参与检索文本：删除后从受影响照片的 search_text 中移除
-  recomputeSearchText(affected)
-  return { name: row.name, photos }
+  return softDeleteNamed('albums', 'album_id', countAlbumPhotos, id)
 }
 
 /** 撤销删除相册：恢复 deleted_at 并把相册名重新写回检索文本 */
 export function restoreAlbum(id: number): { name: string; photos: number } | null {
-  const row = stmt('SELECT name FROM albums WHERE id = ? AND deleted_at IS NOT NULL').get(id) as
-    { name: string } | undefined
-  if (!row) return null
-  const photos = countAlbumPhotos(id)
-  const affected = (
-    stmt('SELECT photo_id FROM album_photos WHERE album_id = ?').all(id) as { photo_id: number }[]
-  ).map((r) => r.photo_id)
-  stmt('UPDATE albums SET deleted_at = NULL WHERE id = ?').run(id)
-  recomputeSearchText(affected)
-  return { name: row.name, photos }
+  return restoreNamed('albums', 'album_id', countAlbumPhotos, id)
 }
 
 export function batchAlbum(ids: number[], albumId: number | null): void {
@@ -1758,16 +1759,11 @@ export function findDeletedPhotoId(photoPath: string): number | null {
 /** 指定 id 中已在回收站内的行（彻底删除前的安全过滤） */
 export function listDeletedRows(ids: number[]): { id: number; path: string }[] {
   if (!ids.length) return []
-  const rows: { id: number; path: string }[] = []
-  for (let i = 0; i < ids.length; i += 900) {
-    const chunk = ids.slice(i, i + 900)
-    const ph = chunk.map(() => '?').join(', ')
-    const part = stmt(
+  return chunkedIn(ids, (chunk, ph) =>
+    stmt(
       `SELECT p.id, p.path FROM photos p WHERE p.deleted_at IS NOT NULL AND ${VISIBLE_FOLDER_SQL} AND p.id IN (${ph})`,
-    ).all(...chunk) as { id: number; path: string }[]
-    rows.push(...part)
-  }
-  return rows
+    ).all(...chunk) as { id: number; path: string }[],
+  )
 }
 
 /** 回收站全部行（清空回收站用；已移除文件夹中的照片不参与） */

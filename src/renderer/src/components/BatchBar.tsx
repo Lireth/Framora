@@ -3,7 +3,8 @@ import { ArchiveRestore, Download, Images, Pencil, Star, Tag, Trash2, X } from '
 import { useStore } from '../store'
 import { api } from '../lib/api'
 import { deletePhotosAction, purgePhotosAction, restorePhotosAction } from '../lib/actions'
-import { ConfirmDialog, ContextMenu, InputDialog, type MenuItem } from './ui'
+import { ConfirmDialog, InputDialog, type MenuItem } from './ui'
+import { useContextMenu } from './useContextMenu'
 import { TagPicker } from './TagPicker'
 
 export function BatchBar(): React.JSX.Element {
@@ -18,7 +19,7 @@ export function BatchBar(): React.JSX.Element {
 
   const [tagPicker, setTagPicker] = useState(false)
   const [renameOpen, setRenameOpen] = useState(false)
-  const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null)
+  const { open: openMenu, element: menuElement } = useContextMenu()
   const ids = [...selection]
 
   if (selection.size === 0 && !confirmDeleteOpen) return <ConfirmHost />
@@ -45,7 +46,7 @@ export function BatchBar(): React.JSX.Element {
         }
       }
     ]
-    setMenu({ x: rect.left, y: rect.top - 8, items })
+    openMenu(rect.left, rect.top - 8, items)
   }
 
   const openRateMenu = (e: React.MouseEvent): void => {
@@ -58,7 +59,7 @@ export function BatchBar(): React.JSX.Element {
         useStore.getState().refreshPhotos()
       }
     }))
-    setMenu({ x: rect.left, y: rect.top - 8, items })
+    openMenu(rect.left, rect.top - 8, items)
   }
 
   return (
@@ -112,9 +113,7 @@ export function BatchBar(): React.JSX.Element {
           </div>
         </div>
       )}
-      {menu && (
-        <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />
-      )}
+      {menuElement}
       <InputDialog
         open={renameOpen}
         title={`批量重命名 ${ids.length} 张照片`}

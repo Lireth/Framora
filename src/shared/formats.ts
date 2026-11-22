@@ -48,6 +48,18 @@ export function isRawExt(ext: string): boolean {
   return RAW_EXT_SET.has(normalizeExt(ext))
 }
 
+/** 排序键 → 展示名的单一事实源（工具栏筛选/智能相册编辑器/排序标签共用） */
+export const SORT_LABELS = {
+  taken: '拍摄时间',
+  imported: '导入时间',
+  name: '文件名',
+  rating: '星级',
+  size: '文件大小',
+} as const
+
+/** 下拉/按钮组用的 [键, 名] 序列（保持定义顺序） */
+export const SORT_OPTIONS = Object.entries(SORT_LABELS) as [keyof typeof SORT_LABELS, string][]
+
 /* ---------- 展示格式化 ---------- */
 
 export function formatBytes(n: number): string {

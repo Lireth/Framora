@@ -3,15 +3,8 @@ import { Check } from 'lucide-react'
 import { useStore, type SortKey } from '../store'
 import { api } from '../lib/api'
 import { cn, GhostButton, Modal, PrimaryButton } from './ui'
+import { SORT_OPTIONS } from '@shared/formats'
 import type { SmartAlbumInfo, SmartAlbumQuery } from '@shared/types'
-
-const SORTS: [SortKey, string][] = [
-  ['taken', '拍摄时间'],
-  ['imported', '导入时间'],
-  ['name', '文件名'],
-  ['rating', '星级'],
-  ['size', '文件大小'],
-]
 
 const INPUT_CLS =
   'h-8 w-full rounded-md border border-line bg-panel px-2.5 text-xs outline-none focus:border-[var(--c-accent)]'
@@ -291,7 +284,7 @@ export function SmartAlbumDialog({
               onChange={(e) => setSort(e.target.value as SortKey)}
               className={INPUT_CLS}
             >
-              {SORTS.map(([v, label]) => (
+              {SORT_OPTIONS.map(([v, label]) => (
                 <option key={v} value={v}>
                   {label}
                 </option>

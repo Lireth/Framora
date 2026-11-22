@@ -21,6 +21,8 @@ vi.mock('../src/main/thumbs', async () => {
   const { promises } = await import('node:fs')
   return {
     schedulePreviewBudgetCheck: vi.fn(),
+    // 库代次恒为 0：测试中不换库，代次校验恒通过
+    currentThumbGeneration: () => 0,
     writePreviewFile: async (target: string, buf: Buffer): Promise<void> => {
       await promises.writeFile(target, buf)
     },

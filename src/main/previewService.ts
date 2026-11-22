@@ -5,7 +5,7 @@
 import fs from 'node:fs'
 import { getPhotoRow } from './db'
 import { extractRawPreview } from './rawPreview'
-import { schedulePreviewBudgetCheck, writePreviewFile } from './thumbs'
+import { currentThumbGeneration, schedulePreviewBudgetCheck, writePreviewFile } from './thumbs'
 import { isRawExt } from '@shared/formats'
 
 const PREVIEW_SUFFIX = '.preview.jpg'
@@ -28,12 +28,17 @@ export async function ensurePreview(id: number, target: string): Promise<void> {
   if (fs.existsSync(target)) return
   const pending = inflight.get(id)
   if (pending) return pending
+  // 换库检测基准：任务开始时捕获的库代次（与 thumbs 队列同款校验）
+  const gen = currentThumbGeneration()
   const task = (async (): Promise<void> => {
     const row = getPhotoRow(id)
     if (!row || row.missing || !isRawExt(row.ext)) return
     if (!fs.existsSync(row.path)) return
     const buf = await extractRawPreview(row.path)
     if (!buf?.length) return
+    // 库代次已变（备份导入换库）：旧库照片的预览不得写入新库 id 的缓存位，
+    // 否则查看器会显示错位图片
+    if (gen !== currentThumbGeneration()) return
     await writePreviewFile(target, buf)
     // 预算清理可能立刻淘汰旧预览；本次写入的 mtime 最新，会保留在缓存中
     schedulePreviewBudgetCheck()

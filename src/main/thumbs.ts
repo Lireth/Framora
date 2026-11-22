@@ -31,6 +31,11 @@ export function bumpThumbGeneration(): void {
   generation++
 }
 
+/** 当前库代次：thumbs 队列之外的旁路写盘方（如 previewService）捕获校验用 */
+export function currentThumbGeneration(): number {
+  return generation
+}
+
 /** 瞬时失败重试（短暂文件锁/杀毒扫描等）：有限次数 + 递增退避；耗尽后进入失败态 */
 const THUMB_RETRY_DELAYS = [1000, 3000]
 const thumbRetries = new Map<number, number>()

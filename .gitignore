@@ -57,6 +57,8 @@ $RECYCLE.BIN/
 
 # ---------- 其他 ----------
 .trae/
-docs/
+# docs 下的截图是 README 首屏展示资源，必须入库；其余文档产物不入库
+docs/*
+!docs/screenshots/
 # 本地协作助手的工作区数据（记忆 / 日志），不属于项目产物
 .workbuddy/

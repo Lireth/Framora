@@ -450,6 +450,12 @@ async function displayedDims(p: string): Promise<{ w: number; h: number }> {
  */
 async function atomicReplace(target: string, src: string): Promise<void> {
   const old = `${target}.framora-old`
+  // 崩溃残留恢复：目标缺失而残留存在时，说明上次替换中断在「原图已移位、新图未落位」
+  // 之间——残留即原图唯一副本，先放回原位再走正常流程（放回后 rm 成为无害空操作）。
+  // 若无条件 rm，会在 revertEdits 允许的目标缺失路径上删掉这份唯一副本。
+  if (!fs.existsSync(target) && fs.existsSync(old)) {
+    await fs.promises.rename(old, target).catch(() => undefined)
+  }
   await fs.promises.rm(old, { force: true })
   // 目标缺失（如恢复编辑到已丢失的源文件）：跳过移位，直接落位（恢复语义允许重建文件）
   const movedAside = fs.existsSync(target)

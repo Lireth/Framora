@@ -41,6 +41,28 @@ export function broadcastExport(e: ExportEvent): void {
   for (const w of BrowserWindow.getAllWindows()) w.webContents.send('evt:export', e)
 }
 
+/** 编辑写回中断的崩溃残留后缀（imageops.atomicReplace 的移位文件） */
+const FRAMORA_OLD_SUFFIX = '.framora-old'
+
+/**
+ * 恢复 .framora-old 崩溃残留：目标缺失时把原图唯一副本放回原位，目标仍在时安全移除。
+ * 目标仍在说明中断发生在「新图已落位、旧残留未清」之间，target 即最新内容，
+ * 且写回前已另有备份副本，残留可安全删除。
+ */
+async function recoverFramoraOld(residue: string): Promise<void> {
+  const target = residue.slice(0, -FRAMORA_OLD_SUFFIX.length)
+  try {
+    const t = await fs.promises.stat(target).catch(() => null)
+    if (t) {
+      await fs.promises.rm(residue, { force: true })
+      return
+    }
+    await fs.promises.rename(residue, target)
+  } catch {
+    /* 单个残留恢复失败忽略：不阻塞扫描 */
+  }
+}
+
 async function* walk(
   dir: string,
   onKnownUnsupported?: (p: string) => void,
@@ -61,6 +83,7 @@ async function* walk(
       yield* walk(full, onKnownUnsupported, token)
     } else if (e.isFile()) {
       if (isImagePath(full)) yield full
+      else if (full.toLowerCase().endsWith(FRAMORA_OLD_SUFFIX)) await recoverFramoraOld(full)
       else if (KNOWN_UNSUPPORTED_EXT_SET.has(normalizeExt(path.extname(full)))) {
         onKnownUnsupported?.(full)
       }

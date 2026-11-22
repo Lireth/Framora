@@ -386,6 +386,15 @@ export function registerIpc(): void {
     return { ids: redundant, clusters: clusters.length }
   })
 
+  /** 相似度阈值（汉明距离上限）：保存设置并置脏聚类缓存，下次查询按新阈值重算 */
+  ipcMain.handle('duplicates:setThreshold', (_e, v: number) => {
+    if (!Number.isFinite(v)) return db.phashThreshold()
+    const clamped = Math.min(12, Math.max(2, Math.floor(v)))
+    db.setSetting('phashThreshold', String(clamped))
+    db.markPhashDirty()
+    return clamped
+  })
+
   /* ---------- photos ---------- */
   ipcMain.handle('photos:query', (_e, q: PhotoQuery) =>
     q.scope === 'duplicates' ? db.queryDuplicates(q) : db.queryPhotos(q),

@@ -39,6 +39,7 @@ const CALLABLE = new Set([
   'undo:peek',
   'undo:perform',
   'duplicates:selectRedundant',
+  'duplicates:setThreshold',
   'photos:query',
   'photos:queryIds',
   'photos:get',

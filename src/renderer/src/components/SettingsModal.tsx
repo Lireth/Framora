@@ -60,19 +60,38 @@ export function SettingsModal(): React.JSX.Element | null {
   const [clearBackupsOpen, setClearBackupsOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
   const [importing, setImporting] = useState(false)
+  const [phashThreshold, setPhashThreshold] = useState(6)
   const [upd, setUpd] = useState<UpdateUi>({ kind: 'idle' })
 
   // 更新流程事件 → UI 状态机
   useEffect(() => onEvent('evt:update', (d) => setUpd(mapUpdateState(d as UpdateState))), [])
 
-  // 打开设置时恢复进行中的更新状态（如下载进度）
+  // 打开设置时恢复进行中的更新状态（如下载进度）与相似度阈值
   useEffect(() => {
     if (!open) return
     api
       .getUpdateState()
       .then((s) => setUpd(mapUpdateState(s)))
       .catch(() => undefined)
+    api
+      .getSetting('phashThreshold')
+      .then((raw) => {
+        const n = raw === null || raw === '' ? NaN : Number(raw)
+        setPhashThreshold(Number.isFinite(n) && n >= 2 && n <= 12 ? Math.floor(n) : 6)
+      })
+      .catch(() => undefined)
   }, [open])
+
+  const applyPhashThreshold = async (v: number): Promise<void> => {
+    setPhashThreshold(v)
+    try {
+      await api.setPhashThreshold(v)
+      // 当前正在浏览重复照片视图时立即按新阈值重查
+      if (useStore.getState().scope === 'duplicates') void useStore.getState().refreshPhotos()
+    } catch {
+      useStore.getState().toast('error', '保存相似度设置失败')
+    }
+  }
 
   const runCheck = async (): Promise<void> => {
     setUpd({ kind: 'checking' })
@@ -137,6 +156,35 @@ export function SettingsModal(): React.JSX.Element | null {
                 </button>
               ))}
             </div>
+          </div>
+
+          <div>
+            <p className="mb-2 font-medium">相似照片</p>
+            <div className="flex gap-2">
+              {(
+                [
+                  [4, '严格'],
+                  [6, '标准'],
+                  [8, '宽松']
+                ] as const
+              ).map(([v, label]) => (
+                <button
+                  key={v}
+                  onClick={() => void applyPhashThreshold(v)}
+                  className={cn(
+                    'flex-1 rounded-lg border py-2 text-[12.5px] transition-colors',
+                    phashThreshold === v
+                      ? 'border-[var(--c-accent)] bg-accent-soft text-accent'
+                      : 'border-line text-ink2 hover:bg-hover hover:text-ink'
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <p className="mt-1.5 text-[11px] text-ink3">
+              「重复照片」视图把感知哈希距离 ≤ 阈值的照片聚为一组：严格更少误报，宽松覆盖更多相似变体。
+            </p>
           </div>
 
           <StoragePanel open={open} />

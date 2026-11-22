@@ -1755,6 +1755,18 @@ export function markPhashDirty(): void {
   dupClustersCache = null
 }
 
+/** 相似聚类阈值设置：汉明距离上限，越小越严格；非法值回落标准 6 */
+export function phashThreshold(): number {
+  try {
+    const raw = getSetting('phashThreshold')
+    if (raw === null || raw === '') return 6
+    const n = Number(raw)
+    return Number.isFinite(n) ? Math.min(12, Math.max(2, Math.floor(n))) : 6
+  } catch {
+    return 6
+  }
+}
+
 /**
  * 疑似重复簇（仅含成员数 ≥ 2 的簇）。
  * 聚类在 worker 线程执行，不阻塞主进程；并发调用合并为同一次计算。
@@ -1768,7 +1780,7 @@ export async function duplicateClusters(): Promise<number[][]> {
   const myGen = dupGen
   const promise = (async (): Promise<number[][]> => {
     const rows = listPhashes().sort((a, b) => a.id - b.id)
-    return (await computePhashClusters(rows)).filter((c) => c.length >= 2)
+    return (await computePhashClusters(rows, phashThreshold())).filter((c) => c.length >= 2)
   })()
   dupInflight = promise
   let result: number[][]

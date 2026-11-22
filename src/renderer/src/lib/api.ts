@@ -71,6 +71,7 @@ export const api = {
   performUndo: (): Promise<UndoEntry | null> => call('undo:perform'),
   selectRedundant: (mode: 'best' | 'oldest'): Promise<{ ids: number[]; clusters: number }> =>
     call('duplicates:selectRedundant', mode),
+  setPhashThreshold: (v: number): Promise<number> => call('duplicates:setThreshold', v),
 
   queryPhotos: (q: PhotoQuery): Promise<QueryResult> => call('photos:query', q),
   queryPhotoIds: (q: PhotoQuery): Promise<number[]> => call('photos:queryIds', q),

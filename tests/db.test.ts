@@ -669,6 +669,25 @@ describe('dupCache 失效语义（第一批修复回归）', () => {
     expect(await db.duplicatePhotoIds()).toHaveLength(0)
   })
 
+  it('相似度阈值设置影响聚类（距离 8：标准 6 不聚簇、宽松 8 聚簇），置脏后生效', async () => {
+    const f = newFolder('C:\\pics')
+    const a = seed(f, 'dist-a')
+    const b = seed(f, 'dist-b')
+    // 汉明距离恰为 8：lo 低 8 位全异
+    db.setPhotoPhash(a, 0, 0)
+    db.setPhotoPhash(b, 0x000000ff, 0)
+    // 默认（未设置 = 标准 6）：距离 8 > 6，不聚簇
+    expect(await db.duplicatePhotoIds()).toHaveLength(0)
+    // 宽松 8：聚为一簇（setSetting 后必须置脏，与 IPC 处理器行为一致）
+    db.setSetting('phashThreshold', '8')
+    db.markPhashDirty()
+    expect((await db.duplicatePhotoIds()).sort()).toEqual([a, b].sort())
+    // 严格 4：回到不聚簇
+    db.setSetting('phashThreshold', '4')
+    db.markPhashDirty()
+    expect(await db.duplicatePhotoIds()).toHaveLength(0)
+  })
+
   it('标记 missing 后从重复簇排除', async () => {
     const f = newFolder('C:\\pics')
     const [, b] = dupPair(f, 2)

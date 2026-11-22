@@ -419,6 +419,7 @@ export const SHORTCUT_GROUPS: { title: string; items: ShortcutEntry[] }[] = [
     items: [
       { keys: 'Ctrl+A', desc: '全选当前视图照片' },
       { keys: '方向键', desc: '移动选中项' },
+      { keys: '0 – 5', desc: '为所选照片评分（无选中时评锚点照片），0 清除' },
       { keys: 'Enter / 空格', desc: '打开查看器（单选时）' },
       { keys: 'Delete', desc: '删除所选（确认后移入回收站）' },
       { keys: 'Esc', desc: '清除选择' },

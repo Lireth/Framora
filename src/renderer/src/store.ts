@@ -112,6 +112,8 @@ interface AppState extends Filters {
   setDraggingPhotos: (ids: number[] | null, paths?: string[]) => void
   applyThumbEvents: (list: { id: number; status: 'ok' | 'fail' }[]) => void
   patchPhoto: (id: number, patch: Partial<PhotoLite> & { mtime?: number }) => void
+  /** 批量同补丁更新（单次遍历）：网格快捷键批量评分等场景，避免逐张 patch 的 O(n·k) */
+  patchPhotos: (ids: number[], patch: Partial<PhotoLite> & { mtime?: number }) => void
 }
 
 let toastSeq = 1
@@ -632,6 +634,13 @@ export const useStore = create<AppState>((set, get) => ({
 
   patchPhoto: (id, patch) => {
     const photos = get().photos.map((p) => (p.id === id ? { ...p, ...patch } : p))
+    set({ photos })
+  },
+
+  patchPhotos: (ids, patch) => {
+    if (!ids.length) return
+    const targets = new Set(ids)
+    const photos = get().photos.map((p) => (targets.has(p.id) ? { ...p, ...patch } : p))
     set({ photos })
   },
 }))

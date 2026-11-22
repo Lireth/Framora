@@ -17,6 +17,7 @@ import { ShortcutHelpModal, Toasts } from './components/ui'
 import {
   deleteViewerPhotoAction,
   importDroppedPaths,
+  rateGridPhotosAction,
   rateViewerPhotoAction,
 } from './lib/actions'
 
@@ -219,6 +220,10 @@ export default function App(): React.JSX.Element {
         s.setConfirmDeleteOpen(true)
       } else if (e.key === 'Enter' && s.selection.size === 1) {
         s.openViewer([...s.selection][0])
+      } else if (e.key >= '0' && e.key <= '5' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        // 网格快速评分：多选作用于全部选中项，否则作用于锚点照片（0 清除）
+        e.preventDefault()
+        void rateGridPhotosAction(Number(e.key))
       } else if (e.key === ' ' && t.tagName !== 'BUTTON') {
         e.preventDefault()
         if (s.selection.size === 1) s.openViewer([...s.selection][0])

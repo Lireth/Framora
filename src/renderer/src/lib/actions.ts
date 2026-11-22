@@ -148,6 +148,25 @@ export async function rateViewerPhotoAction(rating: number): Promise<void> {
   }
 }
 
+/**
+ * 网格快捷键评分（0-5）：多选时批量作用于全部选中项，否则作用于锚点照片。
+ * 与批量栏相同的 batchRate 写入路径 + 单次遍历的乐观更新（patchPhotos），
+ * 0 为清除星级。
+ */
+export async function rateGridPhotosAction(rating: number): Promise<void> {
+  const s = useStore.getState()
+  if (s.viewerOpen || s.scope === 'trash') return
+  const ids = s.selection.size ? [...s.selection] : s.anchorId !== null ? [s.anchorId] : []
+  if (!ids.length) return
+  try {
+    await api.batchRate(ids, rating)
+    s.patchPhotos(ids, { rating })
+    s.toast('success', `已${rating === 0 ? '清除星级' : `设为 ${rating} 星`}（${ids.length} 张）`)
+  } catch (e) {
+    s.toast('error', e instanceof Error ? e.message : '评分失败')
+  }
+}
+
 /** 从回收站还原所选照片 */
 export async function restorePhotosAction(ids: number[]): Promise<void> {
   if (!ids.length) return

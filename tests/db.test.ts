@@ -484,7 +484,12 @@ describe('排序', () => {
       .all() as { detail: string }[]
     raw.close()
     await db.initDb()
-    expect(plan.some((p) => p.detail.includes('idx_photos_sort_ts'))).toBe(true)
+    // v10 单列索引或 v13 部分复合索引（更优，规划器实际选用）均可接受
+    expect(
+      plan.some(
+        (p) => p.detail.includes('idx_photos_sort_ts') || p.detail.includes('idx_photos_view_sort_ts'),
+      ),
+    ).toBe(true)
   })
 })
 
@@ -744,6 +749,77 @@ describe('dupCache 失效语义（第一批修复回归）', () => {
     expect(r.total).toBe(2)
     expect(r.items).toHaveLength(1)
     expect([a, b]).toContain(r.items[0].id)
+  })
+})
+
+describe('v13 插入路径搜索文本与部分复合索引', () => {
+  it('批量插入超过同步上限（>64 行）后立即检索，读取前冲刷兜底命中', () => {
+    const f = newFolder('C:\\pics')
+    const rows = Array.from({ length: 80 }, (_, i) => ({
+      folder_id: f,
+      path: `C:\\pics\\batch-${String(i).padStart(3, '0')}.jpg`,
+      name: `batch-${String(i).padStart(3, '0')}.jpg`,
+      ext: 'jpg',
+      size: 1000,
+      mtime: 1,
+      imported_at: Date.now() + i,
+    }))
+    const ids = db.insertPhotosBatch(rows)
+    expect(ids).toHaveLength(80)
+    // 后台脏队列尚未冲刷（setImmediate 未运行）：关键词检索的读取前冲刷必须兜底
+    const r = db.queryPhotos({ scope: 'all', keyword: 'batch-079' })
+    expect(r.total).toBe(1)
+    expect(r.items[0]?.name).toBe('batch-079.jpg')
+  })
+
+  it('单张插入走同步路径（≤64 行），检索即时一致', () => {
+    const f = newFolder('C:\\pics')
+    const id = db.insertPhoto({
+      folder_id: f,
+      path: 'C:\\pics\\single-樱花.jpg',
+      name: 'single-樱花.jpg',
+      ext: 'jpg',
+      size: 1000,
+      mtime: 1,
+      imported_at: Date.now(),
+    })
+    const r = db.queryPhotos({ scope: 'all', keyword: 'single-樱花' })
+    expect(r.items[0]?.id).toBe(id)
+  })
+
+  it('v13 部分复合索引建立，folder+sort 查询由复合索引供序', () => {
+    const f = newFolder('C:\\pics')
+    seed(f, 'ix1')
+    const raw = new Database(path.join(userData, 'framora.db'))
+    const names = (
+      raw
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'idx_photos_%sort%' OR name LIKE 'idx_photos_view_%'",
+        )
+        .all() as { name: string }[]
+    ).map((r) => r.name)
+    for (const expected of [
+      'idx_photos_view_sort_ts',
+      'idx_photos_folder_sort_ts',
+      'idx_photos_view_imported',
+      'idx_photos_view_name',
+      'idx_photos_view_rating',
+      'idx_photos_view_size',
+    ]) {
+      expect(names).toContain(expected)
+    }
+    // 与 buildPhotoFilter 的 folder 作用域 + 默认排序查询同构，计划应使用复合索引
+    const plan = raw
+      .prepare(
+        `EXPLAIN QUERY PLAN SELECT p.id FROM photos p
+         WHERE p.folder_id = @scopeId
+           AND p.folder_id IN (SELECT id FROM folders WHERE deleted_at IS NULL)
+           AND p.deleted_at IS NULL
+         ORDER BY p.sort_ts DESC, p.id DESC LIMIT 500 OFFSET 0`,
+      )
+      .all({ scopeId: f }) as { detail: string }[]
+    expect(plan.some((p) => p.detail.includes('idx_photos_folder_sort_ts'))).toBe(true)
+    raw.close()
   })
 })
 

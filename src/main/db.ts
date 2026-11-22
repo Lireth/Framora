@@ -329,6 +329,25 @@ const MIGRATIONS: ((db: Database.Database) => void)[] = [
       DROP TRIGGER IF EXISTS albums_search_rename;
     `)
   },
+  // v13: 插入路径搜索文本并入脏队列 + 常规视图部分复合索引（十万级演进）。
+  //      ① photos_search_insert 触发器逐行执行两条相关子查询并联动 FTS 重写，万级
+  //        导入即万次逐行计算——移除后新插入行走 recomputeSearchText 脏队列（与 v12
+  //        同款机制）；FTS 入库触发器对空文本天然跳过（v3 语义），重算 UPDATE 时
+  //        photos_fts_update 自动同步索引，无需回填存量（旧触发器已保证其完整）。
+  //      ② 常规视图 WHERE=可见文件夹 + 未删除、ORDER BY=单列的组合查询此前只能
+  //        多索引拼合；部分复合索引（WHERE deleted_at IS NULL，回收站零成本）让
+  //        「文件夹内按时间倒序」等查询在十万级仍由索引直接供序。
+  (db) => {
+    db.exec(`
+      DROP TRIGGER IF EXISTS photos_search_insert;
+      CREATE INDEX IF NOT EXISTS idx_photos_view_sort_ts ON photos(sort_ts, id) WHERE deleted_at IS NULL;
+      CREATE INDEX IF NOT EXISTS idx_photos_folder_sort_ts ON photos(folder_id, sort_ts) WHERE deleted_at IS NULL;
+      CREATE INDEX IF NOT EXISTS idx_photos_view_imported ON photos(imported_at, id) WHERE deleted_at IS NULL;
+      CREATE INDEX IF NOT EXISTS idx_photos_view_name ON photos(name COLLATE NOCASE, id) WHERE deleted_at IS NULL;
+      CREATE INDEX IF NOT EXISTS idx_photos_view_rating ON photos(rating, id) WHERE deleted_at IS NULL;
+      CREATE INDEX IF NOT EXISTS idx_photos_view_size ON photos(size, id) WHERE deleted_at IS NULL;
+    `)
+  },
 ]
 
 function migrate(): void {
@@ -877,7 +896,10 @@ export function insertPhoto(p: {
     `INSERT INTO photos (folder_id, path, name, ext, size, mtime, imported_at)
      VALUES (@folder_id, @path, @name, @ext, @size, @mtime, @imported_at)`,
   ).run(p)
-  return Number(info.lastInsertRowid)
+  const id = Number(info.lastInsertRowid)
+  // v13 起插入不再触发逐行重算：搜索文本并入脏队列（单张 ≤64 行同步冲刷，检索即时一致）
+  recomputeSearchText([id])
+  return id
 }
 
 /** 批量插入（单事务），返回实际新插入的照片 id 列表；
@@ -905,7 +927,10 @@ export function insertPhotosBatch(
     }
     return ids
   })
-  return run()
+  const ids = run()
+  // v13 起插入不再触发逐行重算：提交后统一入队后台重算（检索前 flushSearchTextForRead 兜底）
+  recomputeSearchText(ids)
+  return ids
 }
 
 /** 批量更新文件字段（size/mtime/missing），单事务 */

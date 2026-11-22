@@ -1,22 +1,8 @@
 import { resolve } from 'node:path'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import react from '@vitejs/plugin-react'
-import type { Plugin } from 'vite'
+import { prodCspPlugin } from './src/build/prodCsp'
 
-/**
- * 生产环境 CSP：移除 dev 专用源（localhost / ws）与 script unsafe-inline。
- * dev 保留宽松 CSP（Vite HMR 与 react-refresh 需要内联脚本与 ws）。
- */
-const prodCspPlugin = (): Plugin => ({
-  name: 'framora:prod-csp',
-  apply: 'build',
-  transformIndexHtml(html) {
-    return html.replace(
-      /<meta\s+http-equiv="Content-Security-Policy"[\s\S]*?\/>/,
-      `<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: media: thumb:; font-src 'self' data:; connect-src 'self'" />`
-    )
-  }
-})
 
 export default defineConfig({
   main: {

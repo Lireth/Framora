@@ -8,7 +8,6 @@ import {
   getSetting,
   setSetting,
   getPhotoRow,
-  listFolders,
   listFolderPaths,
   listPhotoIdsPendingThumb,
 } from './db'
@@ -16,7 +15,7 @@ import { themeBackground } from './theme'
 import type { ThemeMode } from '@shared/types'
 import { registerIpc } from './ipc'
 import { isImagePath } from './scanner'
-import { startWatcher, stopAllWatchers } from './watcher'
+import { stopAllWatchers, reconcileWatchers } from './watcher'
 import { thumbsDir, enqueueThumb } from './thumbs'
 import { ensurePreview, isPreviewFileName, previewIdFromName } from './previewService'
 import { enforceStorageBudgets } from './storage'
@@ -258,10 +257,8 @@ if (!gotLock) {
     registerProtocols()
     registerIpc()
     createWindow()
-    // 恢复已有文件夹的文件监听
-    for (const f of listFolders()) {
-      if (fs.existsSync(f.path)) startWatcher(f.id, f.path)
-    }
+    // 恢复已有文件夹的文件监听（对账补挂，缺啥补啥）
+    void reconcileWatchers()
     // 续跑上次未完成的缩略图生成（崩溃/退出遗留的 thumb_status=0）
     for (const id of listPhotoIdsPendingThumb()) {
       enqueueThumb(id)

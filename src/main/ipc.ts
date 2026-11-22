@@ -25,7 +25,7 @@ import {
   thumbsDir,
 } from './thumbs'
 import { bumpPhashGeneration } from './phash'
-import { startWatcher, stopAllWatchers, stopWatcher } from './watcher'
+import { reconcileWatchers, startWatcher, stopAllWatchers, stopWatcher } from './watcher'
 import {
   applyTemplate,
   cancelExport,
@@ -181,9 +181,19 @@ export function registerIpc(): void {
   ipcMain.handle('library:listFolders', () => listFolders())
 
   ipcMain.handle('library:importFolder', async (_e, folderPath: string) => {
+    // 新注册 / 待复活的文件夹先挂监听再扫描（OPT-17）：消除「扫描完成 → watcher
+    // 启动」窗口内新建/删除事件的同步盲区（此窗口内新建的文件直到下次手动重扫
+    // 才会被索引）。ignoreInitial 保证挂载本身不触发导入；扫描内部复用此处注册
+    // 的文件夹行。已有正常文件夹无此盲区，维持扫描后挂载。
+    const existing = db.getFolderByPath(folderPath)
+    const fresh = existing === undefined || existing.deleted_at != null
+    if (fresh && fs.existsSync(folderPath)) {
+      const folderId = existing ? existing.id : db.addFolder(folderPath, path.basename(folderPath))
+      await startWatcher(folderId, folderPath)
+    }
     const result = await importFolder(folderPath)
     const folder = db.getFolderByPath(folderPath)
-    if (folder) await startWatcher(folder.id, folder.path)
+    if (folder) await startWatcher(folder.id, folder.path) // 已挂载时为幂等 no-op
     // 重新导入同一路径会复活已移除的文件夹，对应撤销条目已失去意义
     dropUndo('folder', result.folderId)
     return result
@@ -351,11 +361,9 @@ export function registerIpc(): void {
     bumpThumbGeneration()
     bumpPhashGeneration()
     void db.markPhashDirty()
-    // 旧库的 watcher 与新库 id 不对应，全部停掉后按新库重建
+    // 旧库的 watcher 与新库 id 不对应，全部停掉后按新库对账重建
     await stopAllWatchers()
-    for (const f of listFolders()) {
-      if (fs.existsSync(f.path)) startWatcher(f.id, f.path)
-    }
+    await reconcileWatchers()
     // 清空全部按 id 命名的缩略图产物：旧库 id 与新库照片错位，immutable 缓存
     // 会把错位结果固化，必须全量重建而非仅补缺失
     const thumbs = thumbsDir()

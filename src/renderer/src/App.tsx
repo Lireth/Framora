@@ -138,7 +138,7 @@ export default function App(): React.JSX.Element {
           }
         }
       }),
-      onEvent('evt:thumb', (d) => pushThumbEvent([d as ThumbEvent])),
+      onEvent('evt:thumbBatch', (d) => pushThumbEvent(d as ThumbEvent[])),
       onEvent('evt:export', (d) => useStore.getState().setExportProgress(d as { done: number; total: number })),
       onEvent('evt:watch', (d) => {
         const e = d as WatchEvent

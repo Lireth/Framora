@@ -41,7 +41,7 @@
 | --- | --- | --- |
 | 框架 | Electron 38 + electron-vite | 主进程 / 渲染进程 / 预加载一体化构建 |
 | UI | React 18 + TypeScript + Tailwind CSS | 组件化界面，深浅主题 CSS 变量驱动 |
-| 状态 | Zustand | 轻量、可订阅，事件流 rAF 批量合并 |
+| 状态 | Zustand | 轻量、可订阅；缩略图事件两级合批（主进程 250ms 聚合 + 渲染端 32ms 合批） |
 | 索引 | better-sqlite3（SQLite WAL） | 同步查询极快，全量万级查询 < 10ms |
 | 图像 | sharp（libvips） | 多核并行缩略图队列 + 编辑管线 |
 | 元数据 | exifr | 高性能 EXIF 解析 |

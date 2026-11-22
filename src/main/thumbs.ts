@@ -16,7 +16,7 @@ import { enqueuePhash } from './phash'
 import { logError } from './log'
 import { isRawExt } from '@shared/formats'
 import { extractRawPreviewPair } from './rawPreview'
-import type { CleanupResult, ThumbEvent } from '@shared/types'
+import type { CleanupResult } from '@shared/types'
 
 const CONCURRENCY = Math.max(2, Math.min(6, os.cpus().length - 1))
 
@@ -222,10 +222,24 @@ export function schedulePreviewBudgetCheck(delay = 2000): void {
   }, delay)
 }
 
-function emit(e: ThumbEvent): void {
+/** 缩略图完成事件按 id 聚合，250ms 窗口批量推送（万级导入不再产生逐张 IPC 洪水） */
+const thumbEventBuffer = new Map<number, 'ok' | 'fail'>()
+let thumbEventTimer: ReturnType<typeof setTimeout> | null = null
+
+function flushThumbEvents(): void {
+  thumbEventTimer = null
+  if (!thumbEventBuffer.size) return
+  const list = [...thumbEventBuffer].map(([id, status]) => ({ id, status }))
+  thumbEventBuffer.clear()
   for (const w of BrowserWindow.getAllWindows()) {
-    w.webContents.send('evt:thumb', e)
+    w.webContents.send('evt:thumbBatch', list)
   }
+}
+
+function emit(id: number, status: 'ok' | 'fail'): void {
+  thumbEventBuffer.set(id, status)
+  if (thumbEventTimer !== null) return
+  thumbEventTimer = setTimeout(flushThumbEvents, 250)
 }
 
 export function enqueueThumb(id: number, priority: 'urgent' | 'bulk' = 'bulk'): void {
@@ -361,7 +375,7 @@ async function run(id: number): Promise<void> {
     thumbRetries.delete(id)
     setThumbStatus(id, 1)
     enqueuePhash(id)
-    emit({ id, status: 'ok' })
+    emit(id, 'ok')
   } catch (err) {
     logError('thumb', err)
     // 换库后旧任务的失败不再污染新库的状态位
@@ -376,7 +390,7 @@ async function run(id: number): Promise<void> {
     }
     thumbRetries.delete(id)
     setThumbStatus(id, 2)
-    emit({ id, status: 'fail' })
+    emit(id, 'fail')
   }
 }
 

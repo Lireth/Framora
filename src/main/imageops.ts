@@ -84,7 +84,9 @@ export async function exportPhotos(
       const row = getPhotoRow(ids[i])
       if (!row || row.missing || !fs.existsSync(row.path)) {
         failed++
-        broadcastExport({ done: ++done, total })
+        done++
+        // 进度节流：每 25 张或最后一张推送一次（千张导出不再逐张触发渲染端 set）
+        if (done % 25 === 0 || done === total) broadcastExport({ done, total })
         continue
       }
       const base = applyTemplate(opts.nameTemplate ?? '{name}', row, i)
@@ -166,12 +168,15 @@ export async function exportPhotos(
           logError('export', err)
           failed++
         }
-        broadcastExport({ done: ++done, total })
+        done++
+        // 进度节流：每 25 张或最后一张推送一次
+        if (done % 25 === 0 || done === total) broadcastExport({ done, total })
       }
     }
     await Promise.all(
       Array.from({ length: Math.max(1, Math.min(EXPORT_CONCURRENCY, tasks.length)) }, worker)
     )
+    if (token.cancelled) broadcastExport({ done, total })
     return token.cancelled ? { exported, failed, cancelled: true } : { exported, failed }
   } finally {
     activeExports.delete(token)

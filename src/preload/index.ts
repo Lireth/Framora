@@ -101,7 +101,7 @@ const CALLABLE = new Set([
 
 const EVENTS = new Set([
   'evt:scan',
-  'evt:thumb',
+  'evt:thumbBatch',
   'evt:watch',
   'evt:library',
   'evt:export',

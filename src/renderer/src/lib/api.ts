@@ -162,7 +162,7 @@ export const api = {
 
 export type EventChannel =
   | 'evt:scan'
-  | 'evt:thumb'
+  | 'evt:thumbBatch'
   | 'evt:watch'
   | 'evt:library'
   | 'evt:export'

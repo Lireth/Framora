@@ -204,6 +204,10 @@ export default function App(): React.JSX.Element {
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
         e.preventDefault()
         s.selectAll()
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) {
+        // 撤销最近一次元数据删除（文件夹/标签/相册；状态栏同款入口的快捷键化）
+        e.preventDefault()
+        void s.performUndo()
       } else if (e.key === 'ArrowLeft') {
         e.preventDefault()
         s.navigateGrid(-1, 0)

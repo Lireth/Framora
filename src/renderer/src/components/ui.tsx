@@ -502,6 +502,7 @@ export const SHORTCUT_GROUPS: { title: string; items: ShortcutEntry[] }[] = [
     title: '网格浏览',
     items: [
       { keys: 'Ctrl+A', desc: '全选当前视图照片' },
+      { keys: 'Ctrl+Z', desc: '撤销最近一次移除（文件夹/标签/相册）' },
       { keys: '方向键', desc: '移动选中项' },
       { keys: '0 – 5', desc: '为所选照片评分（无选中时评锚点照片），0 清除' },
       { keys: 'Enter / 空格', desc: '打开查看器（单选时）' },

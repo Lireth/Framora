@@ -9,7 +9,7 @@
 import { describe, expect, it } from 'vitest'
 import exifr from 'exifr'
 import sharp from 'sharp'
-import { findLargestJpeg } from '../src/main/rawPreview'
+import { extractRawPreviewPair, findLargestJpeg } from '../src/main/rawPreview'
 
 /** 构造最小合法 TIFF：II 字节序，IFD0{Make, Model, ExifIFDPointer} → ExifIFD{DateTimeOriginal} */
 function buildTiff(): Uint8Array {
@@ -165,5 +165,67 @@ describe('RAW 全尺寸预览扫描（findLargestJpeg）', () => {
   it('无 JPEG 数据或过小的伪标记段返回 null', () => {
     expect(findLargestJpeg(Buffer.alloc(4096, 0x33))).toBeNull()
     expect(findLargestJpeg(Buffer.from([0xff, 0xd8, 0xff, 0xd9]))).toBeNull()
+  })
+})
+
+describe('RAW 预览分档提取（extractRawPreviewPair）', () => {
+  /** 构造一个字节级合法的 JPEG 段（SOI + APP0 头 + 填充 + EOI），无需真实可解码 */
+  function synthSegment(fillBytes: number): Buffer {
+    return Buffer.concat([
+      Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x00, 0x00]), // SOI + APP0 头
+      Buffer.alloc(fillBytes, 0x55),
+      Buffer.from([0xff, 0xd9])
+    ])
+  }
+
+  function buildRawWithSegments(...segs: Buffer[]): Buffer {
+    const pad = Buffer.alloc(64, 0x33)
+    const parts: Buffer[] = [pad]
+    for (const s of segs) {
+      parts.push(Buffer.from([0x00, 0x00, 0x00, 0x00]), s, pad)
+    }
+    return Buffer.concat(parts)
+  }
+
+  it('分档：最大段给查看器，首个 ≥128KB 的最小段给缩略图', async () => {
+    // 需要写入真实文件走文件读取路径
+    const { mkdtempSync, writeFileSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const path = await import('node:path')
+    const dir = mkdtempSync(path.join(tmpdir(), 'framora-rawpair-'))
+    const tiny = synthSegment(600) // 600B < MIN_PREVIEW_BYTES，应被忽略
+    const small = synthSegment(100 * 1024) // 100KB < 128KB 中档下限，跳过
+    const mid = synthSegment(200 * 1024) // 200KB ≥ 128KB → 中档
+    const big = synthSegment(400 * 1024) // 400KB → 最大段
+    const file = path.join(dir, 'sample.raw')
+    writeFileSync(file, buildRawWithSegments(tiny, small, mid, big))
+    const pair = await extractRawPreviewPair(file)
+    expect(pair.largest!.length).toBe(big.length)
+    expect(pair.mid!.length).toBe(mid.length)
+    expect(pair.fileBuf).not.toBeNull()
+  })
+
+  it('仅有单一候选或候选均不达标时 mid 回退为 largest（共享视图）', async () => {
+    const { mkdtempSync, writeFileSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const path = await import('node:path')
+    const dir = mkdtempSync(path.join(tmpdir(), 'framora-rawpair-'))
+    const only = synthSegment(300 * 1024)
+    const file = path.join(dir, 'single.raw')
+    writeFileSync(file, buildRawWithSegments(only))
+    const pair = await extractRawPreviewPair(file)
+    expect(pair.largest!.length).toBe(only.length)
+    expect(pair.mid!.length).toBe(only.length)
+    expect(pair.mid === pair.largest).toBe(true)
+  })
+
+  it('无嵌入 JPEG 且容器不可解析时抛错（由调用方兜底，与旧行为一致）', async () => {
+    const { mkdtempSync, writeFileSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const path = await import('node:path')
+    const dir = mkdtempSync(path.join(tmpdir(), 'framora-rawpair-'))
+    const file = path.join(dir, 'empty.raw')
+    writeFileSync(file, Buffer.alloc(4096, 0x33))
+    await expect(extractRawPreviewPair(file)).rejects.toThrow()
   })
 })

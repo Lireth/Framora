@@ -15,7 +15,7 @@ import {
 import { enqueuePhash } from './phash'
 import { logError } from './log'
 import { isRawExt } from '@shared/formats'
-import { extractRawPreview } from './rawPreview'
+import { extractRawPreviewPair } from './rawPreview'
 import type { CleanupResult, ThumbEvent } from '@shared/types'
 
 const CONCURRENCY = Math.max(2, Math.min(6, os.cpus().length - 1))
@@ -260,9 +260,9 @@ function pump(): void {
   }
 }
 
-async function readTakenAt(p: string): Promise<number | null> {
+async function readTakenAt(src: string | Uint8Array): Promise<number | null> {
   try {
-    const d = await exifr.parse(p, {
+    const d = await exifr.parse(src, {
       tiff: true,
       exif: true,
       gps: false,
@@ -291,15 +291,23 @@ async function run(id: number): Promise<void> {
     if (!fs.existsSync(row.path)) throw new Error('file missing')
     let input: string | Uint8Array = row.path
     let preview: Buffer | null = null
+    let rawFileBuf: Buffer | null = null
     if (isRawExt(row.ext)) {
-      // RAW：优先提取最大嵌入预览（全尺寸 JPEG），缩略图兜底；先只读后校验，再统一落盘
-      preview = await extractRawPreview(row.path)
-      if (!preview || !preview.length) throw new Error('RAW 文件无可提取的嵌入预览')
-      input = preview
+      // RAW：分档提取嵌入预览（OPT-12）——最大段落盘为查看器预览，中档段（≥128KB 的
+      // 最小候选）做缩略图解码源，避免为 512px 缩略图解码全尺寸预览（像素量差数十倍）
+      const pair = await extractRawPreviewPair(row.path)
+      if (!pair.largest || !pair.largest.length) throw new Error('RAW 文件无可提取的嵌入预览')
+      preview = pair.largest
+      input = pair.mid && pair.mid.length ? pair.mid : pair.largest
+      // EXIF 拍摄时间直接解析已读入内存的 RAW 缓冲，免去对同一文件的二次读盘
+      rawFileBuf = pair.fileBuf
     }
     // 同一实例先读头部元数据再生成缩略图，避免重复解析
     const img = sharp(input, { failOn: 'none' })
-    const [meta, takenAt] = await Promise.all([img.metadata(), readTakenAt(row.path)])
+    const [meta, takenAt] = await Promise.all([
+      img.metadata(),
+      rawFileBuf ? readTakenAt(rawFileBuf) : readTakenAt(row.path)
+    ])
     // 库代次已变（备份导入换库）：本任务基于旧库行，全部写入作废
     if (gen !== generation) return
     if (preview) {

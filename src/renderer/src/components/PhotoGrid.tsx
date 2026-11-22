@@ -240,6 +240,7 @@ export function PhotoGrid(): React.JSX.Element {
   const photos = useStore((s) => s.photos)
   const tile = useStore((s) => s.tile)
   const loading = useStore((s) => s.loading)
+  const photosError = useStore((s) => s.photosError)
   const hasMore = useStore((s) => s.hasMore)
   const anchorId = useStore((s) => s.anchorId)
   const navTick = useStore((s) => s.navTick)
@@ -390,7 +391,32 @@ export function PhotoGrid(): React.JSX.Element {
         data-testid="photo-grid"
       >
         {photos.length === 0 ? (
-          <EmptyState />
+          photosError ? (
+            /* 查询失败：可重试错误态，避免误导性空态（OPT-20） */
+            <div className="flex h-full flex-col items-center justify-center gap-3 text-center text-ink3">
+              <SearchX size={30} />
+              <p className="text-[13px] text-ink2">照片查询失败：{photosError}</p>
+              <button
+                onClick={() => void useStore.getState().refreshPhotos()}
+                className="rounded-md border border-line px-3 py-1.5 text-xs text-ink2 hover:bg-hover hover:text-ink"
+              >
+                重试
+              </button>
+            </div>
+          ) : loading ? (
+            /* 首个 IPC 往返期间展示骨架屏，替代误导性的「没有照片」空态 */
+            <div className="flex flex-wrap content-start gap-[10px] px-1 pt-1">
+              {Array.from({ length: 24 }, (_, i) => (
+                <div
+                  key={i}
+                  className="thumb-skeleton rounded-lg"
+                  style={{ width: tileW, height: tileH }}
+                />
+              ))}
+            </div>
+          ) : (
+            <EmptyState />
+          )
         ) : (
           <div
             style={{ height: virtualizer.getTotalSize(), position: 'relative', width: '100%' }}

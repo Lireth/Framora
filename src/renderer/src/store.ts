@@ -55,6 +55,8 @@ interface AppState extends Filters {
   lastQueryKey: string | null
   /** 待生成缩略图数（照片替换时重算一次，状态栏只订阅该数字） */
   pendingThumbCount: number
+  /** 照片查询失败信息：网格展示可重试错误态而非误导性空态（OPT-20） */
+  photosError: string | null
   selection: Set<number>
   anchorId: number | null
   activeId: number | null
@@ -252,6 +254,7 @@ export const useStore = create<AppState>((set, get) => ({
   hasMore: false,
   lastQueryKey: null,
   pendingThumbCount: 0,
+  photosError: null,
   selection: new Set(),
   anchorId: null,
   activeId: null,
@@ -421,7 +424,7 @@ export const useStore = create<AppState>((set, get) => ({
     const snapshot = buildQuery(get())
     const queryKey = JSON.stringify(snapshot)
     const queryChanged = queryKey !== get().lastQueryKey
-    set({ loading: true })
+    set({ loading: true, photosError: null })
     try {
       const r = await api.queryPhotos({ ...snapshot, limit: PAGE_SIZE })
       if (JSON.stringify(buildQuery(get())) !== JSON.stringify(snapshot)) {
@@ -445,7 +448,7 @@ export const useStore = create<AppState>((set, get) => ({
         lastQueryKey: queryKey,
       })
     } catch (err) {
-      set({ loading: false })
+      set({ loading: false, photosError: err instanceof Error ? err.message : String(err) })
       get().toast('error', `照片查询失败：${err instanceof Error ? err.message : String(err)}`)
     }
   },

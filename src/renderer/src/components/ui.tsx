@@ -97,6 +97,12 @@ export function StarRating({
 
 /* ---------- 模态框 ---------- */
 
+/** Modal 栈：嵌套弹窗（设置页内确认框等）时仅栈顶响应 Escape 与焦点循环，
+ *  避免一次 Esc 把两层弹窗同时关掉、用户丢失内层状态 */
+const modalStack: symbol[] = []
+const FOCUSABLE =
+  'button:not([disabled]), input:not([disabled]):not([type="hidden"]), textarea:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
+
 export function Modal({
   open,
   onClose,
@@ -112,14 +118,57 @@ export function Modal({
   children: React.ReactNode
   footer?: React.ReactNode
 }): React.JSX.Element | null {
+  const panelRef = useRef<HTMLDivElement>(null)
+  const restoreRef = useRef<HTMLElement | null>(null)
+
   useEffect(() => {
     if (!open) return
+    const id = Symbol('modal')
+    const top = (): boolean => modalStack[modalStack.length - 1] === id
+    modalStack.push(id)
+    // 记录打开前的焦点，关闭时归还（无障碍基线）
+    restoreRef.current = document.activeElement as HTMLElement | null
+    panelRef.current?.focus()
+    const onCloseRef = onClose
     const esc = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onClose()
+      if (e.key !== 'Escape' || !top()) return
+      e.stopPropagation()
+      onCloseRef()
     }
-    window.addEventListener('keydown', esc)
-    return () => window.removeEventListener('keydown', esc)
-  }, [open, onClose])
+    // 焦点陷阱：Tab / Shift+Tab 在弹窗内循环
+    const trap = (e: KeyboardEvent): void => {
+      if (e.key !== 'Tab' || !top()) return
+      const root = panelRef.current
+      if (!root) return
+      const list = Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE))
+      if (!list.length) {
+        e.preventDefault()
+        return
+      }
+      const active = document.activeElement
+      const first = list[0]
+      const last = list[list.length - 1]
+      if (!e.shiftKey && (active === last || !root.contains(active))) {
+        e.preventDefault()
+        first.focus()
+      } else if (e.shiftKey && (active === first || !root.contains(active))) {
+        e.preventDefault()
+        last.focus()
+      }
+    }
+    window.addEventListener('keydown', esc, true)
+    window.addEventListener('keydown', trap, true)
+    return () => {
+      const i = modalStack.indexOf(id)
+      if (i >= 0) modalStack.splice(i, 1)
+      window.removeEventListener('keydown', esc, true)
+      window.removeEventListener('keydown', trap, true)
+      restoreRef.current?.focus?.()
+    }
+    // onClose 经 ref 间接使用，依赖仅 open：身份变化不重置栈/焦点状态
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
+
   if (!open) return null
   return (
     <div
@@ -129,7 +178,12 @@ export function Modal({
       }}
     >
       <div
-        className="flex max-h-[calc(100vh-80px)] flex-col rounded-win border border-line bg-raised shadow-2xl animate-popIn"
+        ref={panelRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        className="flex max-h-[calc(100vh-80px)] flex-col rounded-win border border-line bg-raised shadow-2xl animate-popIn outline-none"
         style={{ width }}
       >
         <div className="flex shrink-0 items-center justify-between border-b border-line px-4 py-3">

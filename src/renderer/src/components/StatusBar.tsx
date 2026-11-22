@@ -28,10 +28,11 @@ export function StatusBar(): React.JSX.Element {
   const stats = useStore((s) => s.stats)
   const selection = useStore((s) => s.selection)
   const scan = useStore((s) => s.scan)
-  const photos = useStore((s) => s.photos)
+  // 只订阅派生计数：订阅整个 photos 数组会在导入期间随 32ms 合批以约 30 次/秒重渲染
+  // 并对万级数组做 O(n) reduce（store 中随照片替换维护）
+  const pending = useStore((s) => s.pendingThumbCount)
   const undoEntry = useStore((s) => s.undoEntry)
   const performUndo = useStore((s) => s.performUndo)
-  const pending = photos.reduce((n, p) => n + (p.thumb_status === 0 && !p.missing ? 1 : 0), 0)
 
   return (
     <div className="flex h-7 shrink-0 items-center justify-between border-t border-line bg-panel px-3 text-[11px] text-ink3">

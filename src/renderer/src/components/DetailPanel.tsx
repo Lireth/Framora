@@ -10,7 +10,7 @@ import {
   Tag,
   X
 } from 'lucide-react'
-import { useStore } from '../store'
+import { photoIndexOf, useStore } from '../store'
 import { api } from '../lib/api'
 import { formatDateTime, formatBytes, thumbUrl } from '../lib/format'
 import { cn, StarRating } from './ui'
@@ -62,10 +62,10 @@ export function DetailPanel({ inViewer }: { inViewer?: boolean }): React.JSX.Ele
   const [albumMenuOpen, setAlbumMenuOpen] = useState(false)
 
   const id = inViewer ? activeId : selection.size === 1 ? [...selection][0] : activeId
-  // 评分订阅自 store 的照片列表：快捷键等外部评分更新时星级行即时反映
-  const storeRating = useStore((s) =>
-    id === null ? undefined : s.photos.find((p) => p.id === id)?.rating
-  )
+  // 评分订阅自 store 的照片列表：快捷键等外部评分更新时星级行即时反映。
+  // 先订阅共享 id→下标（O(1)），再按下标取值，避免每次 store 变更对万级数组 find
+  const photoIdx = useStore((s) => photoIndexOf(s.photos, id))
+  const storeRating = useStore((s) => (photoIdx >= 0 ? s.photos[photoIdx]?.rating : undefined))
 
   useEffect(() => {
     if (id === null) {

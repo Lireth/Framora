@@ -53,6 +53,8 @@ interface AppState extends Filters {
   loadingMore: boolean
   hasMore: boolean
   lastQueryKey: string | null
+  /** 待生成缩略图数（照片替换时重算一次，状态栏只订阅该数字） */
+  pendingThumbCount: number
   selection: Set<number>
   anchorId: number | null
   activeId: number | null
@@ -182,6 +184,27 @@ const VALID_SORTS: SortKey[] = ['taken', 'imported', 'name', 'rating', 'size']
 /** 分页加载数量：首屏与每次增量加载 */
 const PAGE_SIZE = 500
 
+/** photos 数组的 id→下标映射：按数组引用 WeakMap 缓存，每次数组替换只重建一次，
+ *  键盘导航/翻图/范围选择等高频路径 O(1) 定位（此前每次按键 findIndex 全量扫描） */
+const photoIndexCache = new WeakMap<PhotoLite[], Map<number, number>>()
+export function photoIndexOf(photos: PhotoLite[], id: number | null): number {
+  if (id === null) return -1
+  let m = photoIndexCache.get(photos)
+  if (!m) {
+    m = new Map()
+    for (let i = 0; i < photos.length; i++) m.set(photos[i].id, i)
+    photoIndexCache.set(photos, m)
+  }
+  return m.get(id) ?? -1
+}
+
+/** 待生成缩略图计数（与状态栏口径一致：thumb_status===0 且未缺失） */
+function countPendingThumbs(photos: PhotoLite[]): number {
+  let n = 0
+  for (const p of photos) if (p.thumb_status === 0 && !p.missing) n++
+  return n
+}
+
 /** 系统深浅色媒体查询：theme=system 时的解析依据 */
 const systemDarkMq =
   typeof window !== 'undefined' ? window.matchMedia('(prefers-color-scheme: dark)') : null
@@ -226,6 +249,7 @@ export const useStore = create<AppState>((set, get) => ({
   loadingMore: false,
   hasMore: false,
   lastQueryKey: null,
+  pendingThumbCount: 0,
   selection: new Set(),
   anchorId: null,
   activeId: null,
@@ -415,6 +439,7 @@ export const useStore = create<AppState>((set, get) => ({
         hasMore: items.length < r.total,
         loading: false,
         selection,
+        pendingThumbCount: countPendingThumbs(items),
         lastQueryKey: queryKey,
       })
     } catch (err) {
@@ -443,6 +468,7 @@ export const useStore = create<AppState>((set, get) => ({
         total: r.total,
         hasMore: merged.length < r.total,
         loadingMore: false,
+        pendingThumbCount: countPendingThumbs(merged),
       })
     } catch (err) {
       set({ loadingMore: false })
@@ -454,8 +480,8 @@ export const useStore = create<AppState>((set, get) => ({
     const { photos, selection, anchorId } = get()
     const next = new Set(selection)
     if (opts?.range && anchorId !== null) {
-      const a = photos.findIndex((p) => p.id === anchorId)
-      const b = photos.findIndex((p) => p.id === id)
+      const a = photoIndexOf(photos, anchorId)
+      const b = photoIndexOf(photos, id)
       if (a >= 0 && b >= 0) {
         const [lo, hi] = a < b ? [a, b] : [b, a]
         for (let i = lo; i <= hi; i++) next.add(photos[i].id)
@@ -497,28 +523,43 @@ export const useStore = create<AppState>((set, get) => ({
   stepViewer: (delta) => {
     const { photos, activeId } = get()
     if (!photos.length) return
-    const idx = photos.findIndex((p) => p.id === activeId)
+    const idx = photoIndexOf(photos, activeId)
     const next = idx < 0 ? 0 : Math.min(photos.length - 1, Math.max(0, idx + delta))
     set({ activeId: photos[next].id })
     // 接近已加载末尾时预取下一页，保证连续翻图
     if (next >= photos.length - 30) void get().loadMorePhotos()
   },
 
-  /** 查看器跳转：first 定位首张；last 先串行补齐未加载分页再定位末张 */
+  /** 查看器跳转：first 定位首张；last 反向取 1 条定位末张（串行补页仅在 dir 不被
+   *  主进程尊重的作用域下回退使用，避免特大库按 End 连续数十次分页请求） */
   jumpViewer: async (target) => {
     if (!get().photos.length) return
     if (target === 'first') {
       set({ activeId: get().photos[0].id })
       return
     }
-    // 末张语义为整个查询结果的最后一张：串行补齐剩余分页（每页 500，上限防失控）
-    let guard = 0
-    while (get().hasMore && guard < 400) {
-      await get().loadMorePhotos()
-      guard++
+    const fallback = async (): Promise<void> => {
+      let guard = 0
+      while (get().hasMore && guard < 400) {
+        await get().loadMorePhotos()
+        guard++
+      }
+      const photos = get().photos
+      if (photos.length) set({ activeId: photos[photos.length - 1].id })
     }
-    const photos = get().photos
-    if (photos.length) set({ activeId: photos[photos.length - 1].id })
+    const q = buildQuery(get())
+    // recent/trash/duplicates 的排序由主进程固定（dir 被忽略），反向查询取不到末张
+    if (q.scope === 'recent' || q.scope === 'trash' || q.scope === 'duplicates') {
+      await fallback()
+      return
+    }
+    try {
+      const r = await api.queryPhotos({ ...q, dir: q.dir === 'desc' ? 'asc' : 'desc', limit: 1 })
+      if (r.items.length) set({ activeId: r.items[0].id })
+      else await fallback()
+    } catch {
+      await fallback()
+    }
   },
 
   toggleDetail: () => set({ detailOpen: !get().detailOpen }),
@@ -536,7 +577,7 @@ export const useStore = create<AppState>((set, get) => ({
   navigateGrid: (dx, dy) => {
     const { photos, anchorId, gridCols, navTick } = get()
     if (!photos.length) return
-    const idx = photos.findIndex((p) => p.id === anchorId)
+    const idx = photoIndexOf(photos, anchorId)
     if (idx < 0) {
       set({ anchorId: photos[0].id, selection: new Set([photos[0].id]), navTick: navTick + 1 })
       return
@@ -610,11 +651,10 @@ export const useStore = create<AppState>((set, get) => ({
       const map = new Map(updates.map((u) => [u.id, u.status]))
       const now = Date.now()
       const photos = get().photos
-      const known = new Set(photos.map((p) => p.id))
-      // 事件早于列表到达：暂存，待 refreshPhotos / loadMorePhotos 按 id 合并
-      for (const u of updates) {
-        if (!known.has(u.id)) pendingThumb.set(u.id, u.status)
-      }
+      // 事件可能早于列表到达：先全部暂存，下方命中当前视图的条目会从暂存中删除，
+      // 剩余即「列表尚未包含」的事件，待 refreshPhotos / loadMorePhotos 按 id 合并
+      // （免去每批构建 O(n) known 集合）
+      for (const u of updates) pendingThumb.set(u.id, u.status)
       if (pendingThumb.size > 5000) pendingThumb.clear()
       let touched = false
       const next = photos.map((p) => {
@@ -628,20 +668,20 @@ export const useStore = create<AppState>((set, get) => ({
           thumb_ts: now,
         }
       })
-      if (touched) set({ photos: next })
+      if (touched) set({ photos: next, pendingThumbCount: countPendingThumbs(next) })
     }, 32)
   },
 
   patchPhoto: (id, patch) => {
     const photos = get().photos.map((p) => (p.id === id ? { ...p, ...patch } : p))
-    set({ photos })
+    set({ photos, pendingThumbCount: countPendingThumbs(photos) })
   },
 
   patchPhotos: (ids, patch) => {
     if (!ids.length) return
     const targets = new Set(ids)
     const photos = get().photos.map((p) => (targets.has(p.id) ? { ...p, ...patch } : p))
-    set({ photos })
+    set({ photos, pendingThumbCount: countPendingThumbs(photos) })
   },
 }))
 
@@ -662,7 +702,7 @@ export function schedulePhotosRefresh(delay = 400): void {
   }, delay)
 }
 
-/** 缩略图事件批量提交（rAF 节流） */
-export function pushThumbEvent(e: { id: number; status: 'ok' | 'fail' }): void {
-  useStore.getState().applyThumbEvents([e])
+/** 缩略图事件提交（32ms setTimeout 合批，原因见 applyThumbEvents 内注释） */
+export function pushThumbEvent(list: { id: number; status: 'ok' | 'fail' }[]): void {
+  useStore.getState().applyThumbEvents(list)
 }

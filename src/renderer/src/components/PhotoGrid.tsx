@@ -42,7 +42,6 @@ const Tile = React.memo(function Tile({
   const openViewer = useStore((s) => s.openViewer)
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null)
   const [imgFailed, setImgFailed] = useState(false)
-  const [hover, setHover] = useState(false)
   const [tagPickerOpen, setTagPickerOpen] = useState(false)
 
   const menuItems: MenuItem[] = [
@@ -112,8 +111,6 @@ const Tile = React.memo(function Tile({
         void api.dragOutPhotos(ids).catch(() => undefined)
       }}
       onDragEnd={() => useStore.getState().setDraggingPhotos(null)}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
       onClick={(e) =>
         toggleSelect(p.id, { additive: e.ctrlKey || e.metaKey, range: e.shiftKey })
       }
@@ -148,24 +145,22 @@ const Tile = React.memo(function Tile({
         />
       )}
 
-      {/* 选择圈标记 */}
-      {(selected || hover) && (
-        <button
-          className={cn(
-            'absolute left-1.5 top-1.5 grid h-[18px] w-[18px] place-items-center rounded-full border transition-colors',
-            selected
-              ? 'border-[var(--c-accent)] bg-[var(--c-accent)]'
-              : 'border-white/70 bg-black/30 backdrop-blur'
-          )}
-          onClick={(e) => {
-            e.stopPropagation()
-            toggleSelect(p.id, { additive: true })
-          }}
-          aria-label="选择"
-        >
-          {selected && <Check size={11} className="text-[#171310]" strokeWidth={3.2} />}
-        </button>
-      )}
+      {/* 选择圈标记：显隐由 CSS group-hover 驱动（外层已有 group 类），悬停不再触发 setState 重渲染 */}
+      <button
+        className={cn(
+          'absolute left-1.5 top-1.5 grid h-[18px] w-[18px] place-items-center rounded-full border transition-colors',
+          selected
+            ? 'border-[var(--c-accent)] bg-[var(--c-accent)] opacity-100'
+            : 'border-white/70 bg-black/30 opacity-0 backdrop-blur group-hover:opacity-100'
+        )}
+        onClick={(e) => {
+          e.stopPropagation()
+          toggleSelect(p.id, { additive: true })
+        }}
+        aria-label="选择"
+      >
+        {selected && <Check size={11} className="text-[#171310]" strokeWidth={3.2} />}
+      </button>
 
       {/* 星级角标 */}
       {p.rating > 0 && (

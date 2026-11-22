@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import {
   ChevronLeft,
@@ -20,7 +20,7 @@ import {
   ZoomIn,
   ZoomOut
 } from 'lucide-react'
-import { useStore } from '../store'
+import { photoIndexOf, useStore } from '../store'
 import { api } from '../lib/api'
 import { displayUrl, thumbUrl, formatBytes, formatDateTime } from '../lib/format'
 import { cn, IconButton, PrimaryButton, GhostButton } from './ui'
@@ -71,7 +71,7 @@ function clamp(v: number, lo: number, hi: number): number {
 const STRIP_ITEM = 56
 const STRIP_GAP = 6
 
-function Filmstrip({ activeId }: { activeId: number | null }): React.JSX.Element {
+function Filmstrip({ activeId, activeIdx }: { activeId: number | null; activeIdx: number }): React.JSX.Element {
   const photos = useStore((s) => s.photos)
   const setActive = useStore((s) => s.setActive)
   const stripRef = useRef<HTMLDivElement>(null)
@@ -86,11 +86,10 @@ function Filmstrip({ activeId }: { activeId: number | null }): React.JSX.Element
   })
 
   useEffect(() => {
-    if (activeId === null) return
-    const idx = photos.findIndex((p) => p.id === activeId)
-    if (idx >= 0) virtualizer.scrollToIndex(idx, { align: 'center' })
+    if (activeIdx < 0) return
+    virtualizer.scrollToIndex(activeIdx, { align: 'center' })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeId])
+  }, [activeIdx])
 
   return (
     <div
@@ -426,14 +425,9 @@ export function Viewer(): React.JSX.Element {
   const detailOpen = useStore((s) => s.detailOpen)
   const toggleDetail = useStore((s) => s.toggleDetail)
 
-  /* id → 下标索引：拖拽平移/缩放每帧渲染时 O(1) 定位当前照片
-     （此前 photos.find/findIndex 在每帧对万级数组做最多 3 次线性扫描） */
-  const indexById = useMemo(() => {
-    const m = new Map<number, number>()
-    for (let i = 0; i < photos.length; i++) m.set(photos[i].id, i)
-    return m
-  }, [photos])
-  const activeIdx = activeId !== null ? (indexById.get(activeId) ?? -1) : -1
+  /* id → 下标：使用 store 的共享 WeakMap 映射（数组替换时重建一次，O(1) 查询），
+     此前每次 photos 变化都在本组件与 Filmstrip 各重建一张 Map + 每帧线性扫描 */
+  const activeIdx = photoIndexOf(photos, activeId)
   // activeId 失效（过滤刷新移除等）时回退首张，与既有行为一致
   const photo = activeIdx >= 0 ? photos[activeIdx] : photos[0]
   /** 显示照片的真实下标（回退首张时为 0），供页码与前后导航判定 */
@@ -504,7 +498,7 @@ export function Viewer(): React.JSX.Element {
   // 预取相邻原图（±2），翻页时即时呈现
   useEffect(() => {
     if (!photo) return
-    const idx = indexById.get(photo.id) ?? -1
+    const idx = photoIndexOf(photos, photo.id)
     for (const d of [-1, 1, -2, 2]) {
       const p = photos[idx + d]
       if (!p || p.missing) continue
@@ -838,7 +832,7 @@ export function Viewer(): React.JSX.Element {
         </div>
       )}
 
-      <Filmstrip activeId={photo.id} />
+      <Filmstrip activeId={photo.id} activeIdx={idx} />
     </div>
   )
 }

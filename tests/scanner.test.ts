@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import sharp from 'sharp'
@@ -7,12 +7,15 @@ import sharp from 'sharp'
 vi.mock('electron', () => ({ BrowserWindow: { getAllWindows: () => [] } }))
 vi.mock('../src/main/db', () => ({
   addFolder: vi.fn(),
+  checkpointWalPassive: vi.fn(),
   findDeletedPhotoId: vi.fn(() => null),
   findPhotoByPath: vi.fn(),
   getFolderByPath: vi.fn(),
-  insertPhoto: vi.fn(),
+  getPhotoRow: vi.fn(),
+  insertPhoto: vi.fn(() => 10),
   insertPhotosBatch: vi.fn(() => [10]),
   listPhotoRowsByFolder: vi.fn(() => []),
+  recomputeSearchText: vi.fn(),
   restoreFolder: vi.fn(),
   updatePhotoFileFields: vi.fn(),
   updatePhotoFilesBatch: vi.fn(),
@@ -34,9 +37,11 @@ import {
   addFolder,
   findPhotoByPath,
   getFolderByPath,
+  getPhotoRow,
   insertPhoto,
   insertPhotosBatch,
   listPhotoRowsByFolder,
+  recomputeSearchText,
   restoreFolder,
   updatePhotoFileFields,
   updatePhotoFilesBatch,
@@ -264,5 +269,64 @@ describe('splitImportPaths 导入路径分流', () => {
     const r = await splitImportPaths(['C:/pic/a.jpg', 'C:/PIC/A.JPG', 'C:/pic/missing-folder'])
     expect(r.files).toEqual(['C:/pic/a.jpg'])
     expect(r.skipped).toBe(1)
+  })
+})
+
+
+describe('疑似改名迁移（OPT-39）', () => {
+  beforeEach(() => {
+    vi.mocked(findPhotoByPath).mockReset()
+    vi.mocked(getPhotoRow).mockReset()
+    vi.mocked(updatePhotoPath).mockReset()
+    vi.mocked(updatePhotoFileFields).mockReset()
+    vi.mocked(recomputeSearchText).mockReset()
+    vi.mocked(insertPhoto).mockReset()
+    vi.mocked(insertPhoto).mockReturnValue(10)
+  })
+
+  it('删除后同文件夹出现大小+mtime 相符的新文件：迁移旧行而非新建', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'framora-rename-'))
+    const newPath = path.join(dir, 'renamed.jpg')
+    writeFileSync(newPath, Buffer.alloc(1234, 1))
+    const st = statSync(newPath)
+    vi.mocked(findPhotoByPath)
+      .mockReturnValueOnce({ id: 42, path: path.join(dir, 'old.jpg') } as never) // trackDeletedFile
+      .mockReturnValue(undefined) // trackNewFile 路径未命中
+    vi.mocked(getPhotoRow).mockReturnValue({
+      id: 42,
+      folder_id: 1,
+      size: st.size,
+      mtime: Math.round(st.mtimeMs),
+      missing: 0,
+    } as never)
+    trackDeletedFile(1, path.join(dir, 'old.jpg'))
+    expect(updatePhotoFileFields).toHaveBeenCalledWith(42, { missing: 1 })
+
+    // 资源管理器改名 → 新路径 add 事件（awaitWriteFinish 延迟后到达）
+    const r = await trackNewFile(1, newPath)
+    expect(r).toBe(false)
+    expect(updatePhotoPath).toHaveBeenCalledWith(42, newPath, 'renamed.jpg')
+    expect(updatePhotoFileFields).toHaveBeenCalledWith(42, { missing: 0 })
+    expect(recomputeSearchText).toHaveBeenCalledWith([42])
+    expect(insertPhoto).not.toHaveBeenCalled()
+  })
+
+  it('大小不符或文件夹不同：按全新文件入库，不迁移', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'framora-rename-'))
+    const other = path.join(dir, 'other.jpg')
+    writeFileSync(other, Buffer.alloc(9999, 1))
+    vi.mocked(findPhotoByPath).mockReturnValue(undefined)
+    vi.mocked(getPhotoRow).mockReturnValue({
+      id: 42,
+      folder_id: 1,
+      size: 1234,
+      mtime: 5000,
+      missing: 0,
+    } as never)
+    trackDeletedFile(1, path.join(dir, 'old.jpg'))
+    // 尺寸不同 → 不迁移，按新文件入库
+    await trackNewFile(1, other)
+    expect(updatePhotoPath).not.toHaveBeenCalled()
+    expect(insertPhoto).toHaveBeenCalled()
   })
 })

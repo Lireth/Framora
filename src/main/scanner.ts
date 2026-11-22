@@ -5,6 +5,8 @@ import {
   addFolder,
   checkpointWalPassive,
   findDeletedPhotoId,
+  getPhotoRow,
+  recomputeSearchText,
   findPhotoByPath,
   getFolderByPath,
   insertPhoto,
@@ -325,6 +327,75 @@ function isSuppressed(p: string): boolean {
   return suppressedPaths.has(p.toLowerCase())
 }
 
+/* ---------- 疑似改名迁移（OPT-39） ---------- */
+
+/**
+ * 资源管理器重命名 = chokidar 的 unlink + add：旧行被标 missing、新路径全新入库，
+ * 该照片的标签/星级/相册/标题全部丢失（README 的「自动同步」承诺在此不成立）。
+ * 删除时登记嫌疑行（路径/大小/mtime），短窗内同文件夹出现大小+mtime 相符的
+ * 新文件即认定为改名：元数据迁移到新路径并复用原行。
+ */
+interface RenameSuspect {
+  id: number
+  folderId: number
+  size: number
+  mtime: number
+  at: number
+}
+const renameSuspects = new Map<string, RenameSuspect>()
+const RENAME_WINDOW_MS = 30_000
+const RENAME_SUSPECT_CAP = 500
+const MTIME_TOLERANCE_MS = 2000
+
+function recordRenameSuspect(
+  oldPath: string,
+  id: number,
+  folderId: number,
+  size: number,
+  mtime: number,
+): void {
+  // 容量上限：最旧优先淘汰
+  if (renameSuspects.size >= RENAME_SUSPECT_CAP) {
+    let oldestKey: string | null = null
+    let oldestAt = Infinity
+    for (const [k, v] of renameSuspects) {
+      if (v.at < oldestAt) {
+        oldestAt = v.at
+        oldestKey = k
+      }
+    }
+    if (oldestKey) renameSuspects.delete(oldestKey)
+  }
+  renameSuspects.set(oldPath.toLowerCase(), { id, folderId, size, mtime, at: Date.now() })
+}
+
+/** 消费嫌疑表：命中「同文件夹 + 大小相等 + mtime 容差内」的最新登记 */
+function takeRenameSuspect(
+  folderId: number,
+  size: number,
+  mtime: number,
+): { id: number } | null {
+  const now = Date.now()
+  let bestKey: string | null = null
+  let bestAt = -1
+  for (const [k, v] of renameSuspects) {
+    if (now - v.at > RENAME_WINDOW_MS) {
+      renameSuspects.delete(k)
+      continue
+    }
+    if (v.folderId !== folderId) continue
+    if (v.size !== size || Math.abs(v.mtime - mtime) > MTIME_TOLERANCE_MS) continue
+    if (v.at > bestAt) {
+      bestAt = v.at
+      bestKey = k
+    }
+  }
+  if (!bestKey) return null
+  const hit = renameSuspects.get(bestKey)!
+  renameSuspects.delete(bestKey)
+  return { id: hit.id }
+}
+
 /** 单文件新增（来自文件监听/导入）；返回是否真正新增（或从回收站还原）了索引行 */
 export async function trackNewFile(folderId: number, filePath: string): Promise<boolean> {
   if (isSuppressed(filePath)) return false
@@ -352,6 +423,16 @@ export async function trackNewFile(folderId: number, filePath: string): Promise<
   }
   try {
     const s = await fs.promises.stat(filePath)
+    // 疑似改名命中：迁移旧行元数据到新路径（标签/星级/相册/标题原样保留）
+    const suspect = takeRenameSuspect(folderId, s.size, Math.round(s.mtimeMs))
+    if (suspect) {
+      updatePhotoPath(suspect.id, filePath, path.basename(filePath))
+      updatePhotoFileFields(suspect.id, { missing: 0 })
+      // 文件名参与检索文本：改名后重算
+      recomputeSearchText([suspect.id])
+      broadcastWatch({ type: 'change', folderId, id: suspect.id })
+      return false
+    }
     const id = insertPhoto({
       folder_id: folderId,
       path: filePath,
@@ -398,6 +479,11 @@ export function trackDeletedFile(folderId: number, filePath: string): void {
   if (isSuppressed(filePath)) return
   const row = findPhotoByPath(filePath)
   if (!row) return
+  // 疑似改名登记：取完整行的 size/mtime 供 add 事件比对（文件已删，只能信索引）
+  const full = getPhotoRow(row.id)
+  if (full && !full.missing) {
+    recordRenameSuspect(filePath, row.id, full.folder_id, full.size, full.mtime)
+  }
   updatePhotoFileFields(row.id, { missing: 1 })
   broadcastWatch({ type: 'unlink', folderId, id: row.id })
 }

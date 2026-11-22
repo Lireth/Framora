@@ -178,15 +178,12 @@ function registerProtocols(): void {
       // 不再二次解码：文件名含字面 %（如 100%_test.jpg）时二次解码会抛 URIError 返回
       // 400，含 %20 字面量则被错误翻译成空格导致 404
       const p = u.searchParams.get('p') ?? ''
-      if (
-        !p ||
-        !isImagePath(p) ||
-        !isInsideLibrary(p) ||
-        !fs.existsSync(p) ||
-        !fs.statSync(p).isFile()
-      ) {
+      if (!p || !isImagePath(p) || !isInsideLibrary(p)) {
         return new Response(null, { status: 404 })
       }
+      // 协议层热路径改异步 stat（一次调用合并 exists+isFile），不再阻塞主进程事件循环
+      const st = await fs.promises.stat(p).catch(() => null)
+      if (!st || !st.isFile()) return new Response(null, { status: 404 })
       return await fileResponse(p)
     } catch {
       return new Response(null, { status: 400 })
@@ -199,12 +196,16 @@ function registerProtocols(): void {
       const name = u.hostname === 't' ? u.pathname.slice(1) : u.hostname + u.pathname
       if (!/^\d+(\.webp|\.preview\.jpg)$/.test(name)) return new Response(null, { status: 400 })
       const p = path.join(thumbsDir(), name)
+      let st = await fs.promises.stat(p).catch(() => null)
       // 预览缓存按预算淘汰后，首次查看时即时从 RAW 嵌入段重建
-      if (!fs.existsSync(p) && isPreviewFileName(name)) {
+      if (!st && isPreviewFileName(name)) {
         const id = previewIdFromName(name)
-        if (id !== null) await ensurePreview(id, p)
+        if (id !== null) {
+          await ensurePreview(id, p)
+          st = await fs.promises.stat(p).catch(() => null)
+        }
       }
-      if (!fs.existsSync(p)) {
+      if (!st) {
         // 缩略图缺失（生成中排队/缓存被外部清理）：以紧急优先级自动入队，
         // 用户翻到的照片无需排在批量导入队尾；失败态（2）不自动重试，
         // photos:regenerateThumb 是其手动恢复路径

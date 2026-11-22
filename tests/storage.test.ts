@@ -74,56 +74,56 @@ describe('RAW 预览预算', () => {
     expect(readdirSync(thumbsDir()).some((n) => n.endsWith('.tmp'))).toBe(false)
   })
 
-  it('按 mtime 淘汰最旧预览，保留最新一份并报告释放量', () => {
+  it('按 mtime 淘汰最旧预览，保留最新一份并报告释放量', async () => {
     const oldest = previewFile('1.preview.jpg', 600 * KB, 1000)
     const middle = previewFile('2.preview.jpg', 600 * KB, 2000)
     const newest = previewFile('3.preview.jpg', 600 * KB, 3000)
-    expect(previewStats()).toEqual({ files: 3, bytes: 1800 * KB })
+    expect(await previewStats()).toEqual({ files: 3, bytes: 1800 * KB })
 
     db.setSetting('previewBudgetMb', '1')
-    const r = storage.enforceStorageBudgets().previews
+    const r = (await storage.enforceStorageBudgets()).previews
     expect(r.deleted).toBe(2)
     expect(r.bytes).toBe(1200 * KB)
     expect(existsSync(oldest)).toBe(false)
     expect(existsSync(middle)).toBe(false)
     expect(existsSync(newest)).toBe(true)
-    expect(previewStats()).toEqual({ files: 1, bytes: 600 * KB })
+    expect(await previewStats()).toEqual({ files: 1, bytes: 600 * KB })
   })
 
-  it('预算为 0 时不清理；清空预览不影响缩略图', () => {
+  it('预算为 0 时不清理；清空预览不影响缩略图', async () => {
     const preview = previewFile('1.preview.jpg', 600 * KB, 1000)
     const thumb = path.join(thumbsDir(), '1.webp')
     writeSized(thumb, 40 * KB, 1000)
     db.setSetting('previewBudgetMb', '0')
 
-    expect(storage.enforceStorageBudgets().previews.deleted).toBe(0)
+    expect((await storage.enforceStorageBudgets()).previews.deleted).toBe(0)
     expect(existsSync(preview)).toBe(true)
 
-    const cleared = storage.cleanAllPreviews()
+    const cleared = await storage.cleanAllPreviews()
     expect(cleared.deleted).toBe(1)
     expect(existsSync(preview)).toBe(false)
     expect(existsSync(thumb)).toBe(true)
   })
 
-  it('单张预览本身超过预算时仍保留最新一份，避免反复重建', () => {
+  it('单张预览本身超过预算时仍保留最新一份，避免反复重建', async () => {
     const only = previewFile('9.preview.jpg', 2 * 1024 * KB, 1000)
     db.setSetting('previewBudgetMb', '1')
-    expect(storage.enforceStorageBudgets().previews.deleted).toBe(0)
+    expect((await storage.enforceStorageBudgets()).previews.deleted).toBe(0)
     expect(existsSync(only)).toBe(true)
   })
 })
 
 describe('编辑备份预算', () => {
-  it('每组保留最新一份，预算只裁剪更早的历史版本', () => {
+  it('每组保留最新一份，预算只裁剪更早的历史版本', async () => {
     const p1old = backupFile('1-aaaaaaaa-1000.jpg', 600 * KB, 1000)
     const p1mid = backupFile('1-aaaaaaaa-2000.jpg', 600 * KB, 2000)
     const p1new = backupFile('1-aaaaaaaa-3000.jpg', 600 * KB, 3000)
     const p2old = backupFile('2-bbbbbbbb-1000.jpg', 600 * KB, 1000)
     const p2new = backupFile('2-bbbbbbbb-2000.jpg', 600 * KB, 2000)
-    expect(backupStats()).toEqual({ files: 5, bytes: 3000 * KB })
+    expect(await backupStats()).toEqual({ files: 5, bytes: 3000 * KB })
 
     db.setSetting('backupBudgetMb', '1')
-    const r = storage.enforceStorageBudgets().backups
+    const r = (await storage.enforceStorageBudgets()).backups
     // 最新两份合计 1.2MB 已超 1MB，但必须保留；候选 3 份全部删除
     expect(r.deleted).toBe(3)
     expect(r.bytes).toBe(1800 * KB)
@@ -132,17 +132,17 @@ describe('编辑备份预算', () => {
     expect(existsSync(p2old)).toBe(false)
     expect(existsSync(p1new)).toBe(true)
     expect(existsSync(p2new)).toBe(true)
-    expect(backupStats()).toEqual({ files: 2, bytes: 1200 * KB })
+    expect(await backupStats()).toEqual({ files: 2, bytes: 1200 * KB })
   })
 
-  it('预算内不动任何备份', () => {
+  it('预算内不动任何备份', async () => {
     const a = backupFile('1-aaaaaaaa-1000.jpg', 100 * KB, 1000)
     db.setSetting('backupBudgetMb', '1')
-    expect(storage.enforceStorageBudgets().backups).toEqual({ deleted: 0, bytes: 0 })
+    expect((await storage.enforceStorageBudgets()).backups).toEqual({ deleted: 0, bytes: 0 })
     expect(existsSync(a)).toBe(true)
   })
 
-  it('无主备份（照片行不存在的 id 组）可被清理，有主备份保留', () => {
+  it('无主备份（照片行不存在的 id 组）可被清理，有主备份保留', async () => {
     // id 999 不存在于索引库（删除照片/换库遗留）；id 1 通过插入行保留
     const orphan1 = backupFile('999-cccccccc-1000.jpg', 100 * KB, 1000)
     const orphan2 = backupFile('999-1000.jpg', 100 * KB, 1000)

@@ -39,56 +39,59 @@ function userDataDir(): string {
   return app.getPath('userData')
 }
 
-function scanDir(dir: string, match: (name: string) => boolean): StorageBucket {
+async function scanDir(dir: string, match: (name: string) => boolean): Promise<StorageBucket> {
   let names: string[]
   try {
-    names = fs.readdirSync(dir)
+    names = await fs.promises.readdir(dir)
   } catch {
     return { bytes: 0, files: 0 }
   }
   let bytes = 0
   let files = 0
-  for (const name of names) {
-    if (!match(name)) continue
-    try {
-      const st = fs.statSync(path.join(dir, name))
-      if (st.isFile()) {
-        bytes += st.size
-        files++
+  await Promise.all(
+    names.filter(match).map(async (name) => {
+      try {
+        const st = await fs.promises.stat(path.join(dir, name))
+        if (st.isFile()) {
+          bytes += st.size
+          files++
+        }
+      } catch {
+        /* 单文件不可读忽略 */
       }
-    } catch {
-      /* 单文件不可读忽略 */
-    }
-  }
+    }),
+  )
   return { bytes, files }
 }
 
 /** 索引库主文件 + WAL/SHM */
-function dbStats(): StorageBucket {
+async function dbStats(): Promise<StorageBucket> {
   const base = path.join(userDataDir(), 'framora.db')
   let bytes = 0
   let files = 0
-  for (const suffix of ['', '-wal', '-shm']) {
-    try {
-      const st = fs.statSync(base + suffix)
-      if (st.isFile()) {
-        bytes += st.size
-        files++
+  await Promise.all(
+    ['', '-wal', '-shm'].map(async (suffix) => {
+      try {
+        const st = await fs.promises.stat(base + suffix)
+        if (st.isFile()) {
+          bytes += st.size
+          files++
+        }
+      } catch {
+        /* 文件不存在 */
       }
-    } catch {
-      /* 文件不存在 */
-    }
-  }
+    }),
+  )
   return { bytes, files }
 }
 
 /** 迁移前滚动备份 + 备份导入 .pre-import + 损坏隔离文件 */
-function dbBackupStats(): StorageBucket {
-  const rolling = scanDir(path.join(userDataDir(), 'db-backups'), (n) =>
+async function dbBackupStats(): Promise<StorageBucket> {
+  const rolling = await scanDir(path.join(userDataDir(), 'db-backups'), (n) =>
     n.startsWith('framora-')
   )
-  const preImport = scanDir(userDataDir(), (n) => n.startsWith('framora.db.pre-import-'))
-  const quarantined = scanDir(userDataDir(), (n) => n.startsWith('framora.db.corrupt-'))
+  const preImport = await scanDir(userDataDir(), (n) => n.startsWith('framora.db.pre-import-'))
+  const quarantined = await scanDir(userDataDir(), (n) => n.startsWith('framora.db.corrupt-'))
   return {
     bytes: rolling.bytes + preImport.bytes + quarantined.bytes,
     files: rolling.files + preImport.files + quarantined.files,
@@ -131,12 +134,14 @@ export function setStorageLimits(input: StorageLimits): StorageLimits {
 }
 
 export async function storageStats(): Promise<StorageStats> {
-  const dbBucket = dbStats()
-  const thumbs = scanDir(thumbsDir(), (n) => n.endsWith('.webp'))
-  const previews = previewStats()
-  const backups = backupStats()
-  const logs = scanDir(logsDir(), (n) => n.endsWith('.log'))
-  const dbBackups = dbBackupStats()
+  const [dbBucket, thumbs, previews, backups, logs, dbBackups] = await Promise.all([
+    dbStats(),
+    scanDir(thumbsDir(), (n) => n.endsWith('.webp')),
+    previewStats(),
+    backupStats(),
+    scanDir(logsDir(), (n) => n.endsWith('.log')),
+    dbBackupStats(),
+  ])
   const totalBytes =
     dbBucket.bytes + thumbs.bytes + previews.bytes + backups.bytes + logs.bytes + dbBackups.bytes
   return {
@@ -153,14 +158,14 @@ export async function storageStats(): Promise<StorageStats> {
 }
 
 /** 按当前预算清理 RAW 预览与编辑备份历史 */
-export function enforceStorageBudgets(): StorageEnforceResult {
+export async function enforceStorageBudgets(): Promise<StorageEnforceResult> {
   return {
-    previews: enforcePreviewBudget(),
-    backups: enforceBackupBudget(),
+    previews: await enforcePreviewBudget(),
+    backups: await enforceBackupBudget(),
   }
 }
 
 /** 清空全部 RAW 预览缓存（按需重建） */
-export function cleanAllPreviews(): CleanupResult {
+export async function cleanAllPreviews(): Promise<CleanupResult> {
   return clearPreviews()
 }

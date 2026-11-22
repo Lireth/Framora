@@ -107,55 +107,61 @@ export function previewBudgetMb(): number {
   }
 }
 
-/** 预览缓存占用（仅统计 *.preview.jpg） */
-export function previewStats(): { bytes: number; files: number } {
+/** 预览缓存占用（仅统计 *.preview.jpg）；异步化避免万级文件全目录 stat 阻塞主进程 */
+export async function previewStats(): Promise<{ bytes: number; files: number }> {
   const dir = thumbsDir()
   let names: string[]
   try {
-    names = fs.readdirSync(dir)
+    names = await fs.promises.readdir(dir)
   } catch {
     return { bytes: 0, files: 0 }
   }
   let bytes = 0
   let files = 0
-  for (const name of names) {
-    if (!name.endsWith('.preview.jpg')) continue
-    try {
-      const st = fs.statSync(path.join(dir, name))
-      if (st.isFile()) {
-        bytes += st.size
-        files++
-      }
-    } catch {
-      /* 单文件不可读忽略 */
-    }
-  }
+  await Promise.all(
+    names
+      .filter((name) => name.endsWith('.preview.jpg'))
+      .map(async (name) => {
+        try {
+          const st = await fs.promises.stat(path.join(dir, name))
+          if (st.isFile()) {
+            bytes += st.size
+            files++
+          }
+        } catch {
+          /* 单文件不可读忽略 */
+        }
+      }),
+  )
   return { bytes, files }
 }
 
 /** 清空全部 RAW 预览缓存；查看/导出时按需重建，不影响照片文件 */
-export function clearPreviews(): CleanupResult {
+export async function clearPreviews(): Promise<CleanupResult> {
   const dir = thumbsDir()
   let names: string[]
   try {
-    names = fs.readdirSync(dir)
+    names = await fs.promises.readdir(dir)
   } catch {
     return { deleted: 0, bytes: 0 }
   }
   let deleted = 0
   let bytes = 0
-  for (const name of names) {
-    if (!name.endsWith('.preview.jpg')) continue
-    const p = path.join(dir, name)
-    try {
-      const st = fs.statSync(p)
-      fs.rmSync(p, { force: true })
-      deleted++
-      bytes += st.size
-    } catch {
-      /* 被占用或已删除：跳过 */
-    }
-  }
+  await Promise.all(
+    names
+      .filter((name) => name.endsWith('.preview.jpg'))
+      .map(async (name) => {
+        const p = path.join(dir, name)
+        try {
+          const st = await fs.promises.stat(p)
+          await fs.promises.rm(p, { force: true })
+          deleted++
+          bytes += st.size
+        } catch {
+          /* 被占用或已删除：跳过 */
+        }
+      }),
+  )
   return { deleted, bytes }
 }
 
@@ -163,30 +169,33 @@ export function clearPreviews(): CleanupResult {
  * 按预算淘汰最旧的 RAW 预览（mtime 近似 LRU；协议层每次读取会 touch mtime）。
  * 预算为 0 时不限制。单个预览大于预算时也会保留最新一份，避免"永远无法显示"。
  */
-export function enforcePreviewBudget(): CleanupResult {
+export async function enforcePreviewBudget(): Promise<CleanupResult> {
   const budget = previewBudgetMb() * 1024 * 1024
   if (!budget) return { deleted: 0, bytes: 0 }
   const dir = thumbsDir()
   let names: string[]
   try {
-    names = fs.readdirSync(dir)
+    names = await fs.promises.readdir(dir)
   } catch {
     return { deleted: 0, bytes: 0 }
   }
   const entries: { name: string; path: string; size: number; mtimeMs: number }[] = []
   let total = 0
-  for (const name of names) {
-    if (!name.endsWith('.preview.jpg')) continue
-    const p = path.join(dir, name)
-    try {
-      const st = fs.statSync(p)
-      if (!st.isFile()) continue
-      entries.push({ name, path: p, size: st.size, mtimeMs: st.mtimeMs })
-      total += st.size
-    } catch {
-      /* 单文件不可读忽略 */
-    }
-  }
+  await Promise.all(
+    names
+      .filter((name) => name.endsWith('.preview.jpg'))
+      .map(async (name) => {
+        const p = path.join(dir, name)
+        try {
+          const st = await fs.promises.stat(p)
+          if (!st.isFile()) return
+          entries.push({ name, path: p, size: st.size, mtimeMs: st.mtimeMs })
+          total += st.size
+        } catch {
+          /* 单文件不可读忽略 */
+        }
+      }),
+  )
   if (total <= budget) return { deleted: 0, bytes: 0 }
   entries.sort((a, b) => a.mtimeMs - b.mtimeMs || a.name.localeCompare(b.name))
   let deleted = 0
@@ -196,7 +205,7 @@ export function enforcePreviewBudget(): CleanupResult {
     if (total <= budget) break
     const e = entries[i]
     try {
-      fs.rmSync(e.path, { force: true })
+      await fs.promises.rm(e.path, { force: true })
       total -= e.size
       bytes += e.size
       deleted++
@@ -214,11 +223,7 @@ export function schedulePreviewBudgetCheck(delay = 2000): void {
   if (previewBudgetTimer) clearTimeout(previewBudgetTimer)
   previewBudgetTimer = setTimeout(() => {
     previewBudgetTimer = null
-    try {
-      enforcePreviewBudget()
-    } catch (err) {
-      logError('previewBudget', err)
-    }
+    void enforcePreviewBudget().catch((err) => logError('previewBudget', err))
   }, delay)
 }
 
@@ -406,13 +411,13 @@ export async function rebuildAllThumbs(): Promise<void> {
 const TMP_RESIDUE_MIN_AGE_MS = 5 * 60 * 1000
 
 /** 清理索引库中不存在照片的孤儿缩略图文件，返回删除数量 */
-export function cleanupOrphanThumbs(): number {
+export async function cleanupOrphanThumbs(): Promise<number> {
   const ids = new Set(listAllPhotoIds())
   const dir = thumbsDir()
   let removed = 0
   let names: string[]
   try {
-    names = fs.readdirSync(dir)
+    names = await fs.promises.readdir(dir)
   } catch {
     return 0
   }
@@ -423,12 +428,12 @@ export function cleanupOrphanThumbs(): number {
     try {
       if (m[2] !== undefined) {
         // 原子写（tmp + rename）崩溃残留：仅清理超过最低年龄的，避开进行中的写入
-        const st = fs.statSync(p)
+        const st = await fs.promises.stat(p)
         if (Date.now() - st.mtimeMs < TMP_RESIDUE_MIN_AGE_MS) continue
       } else if (ids.has(Number(m[1]))) {
         continue
       }
-      fs.rmSync(p, { force: true })
+      await fs.promises.rm(p, { force: true })
       removed++
     } catch {
       /* 单个文件删除失败忽略 */

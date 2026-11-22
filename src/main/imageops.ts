@@ -331,43 +331,45 @@ interface BackupEntry {
   ts: number
 }
 
-function readBackupEntries(): BackupEntry[] {
+async function readBackupEntries(): Promise<BackupEntry[]> {
   const dir = backupsDir()
   let names: string[]
   try {
-    names = fs.readdirSync(dir)
+    names = await fs.promises.readdir(dir)
   } catch {
     return []
   }
   const out: BackupEntry[] = []
-  for (const name of names) {
-    const p = path.join(dir, name)
-    try {
-      const st = fs.statSync(p)
-      if (!st.isFile()) continue
-      const modern = BACKUP_NAME_RE.exec(name)
-      const legacy = LEGACY_BACKUP_NAME_RE.exec(name)
-      const id = modern ? Number(modern[1]) : legacy ? Number(legacy[1]) : null
-      const hash = modern ? modern[2].toLowerCase() : 'legacy'
-      const ts = modern ? Number(modern[3]) : legacy ? Number(legacy[2]) : st.mtimeMs
-      out.push({
-        name,
-        path: p,
-        size: st.size,
-        mtimeMs: st.mtimeMs,
-        group: id === null ? name : `${id}-${hash}`,
-        ts,
-      })
-    } catch {
-      /* 单文件不可读忽略 */
-    }
-  }
+  await Promise.all(
+    names.map(async (name) => {
+      const p = path.join(dir, name)
+      try {
+        const st = await fs.promises.stat(p)
+        if (!st.isFile()) return
+        const modern = BACKUP_NAME_RE.exec(name)
+        const legacy = LEGACY_BACKUP_NAME_RE.exec(name)
+        const id = modern ? Number(modern[1]) : legacy ? Number(legacy[1]) : null
+        const hash = modern ? modern[2].toLowerCase() : 'legacy'
+        const ts = modern ? Number(modern[3]) : legacy ? Number(legacy[2]) : st.mtimeMs
+        out.push({
+          name,
+          path: p,
+          size: st.size,
+          mtimeMs: st.mtimeMs,
+          group: id === null ? name : `${id}-${hash}`,
+          ts,
+        })
+      } catch {
+        /* 单文件不可读忽略 */
+      }
+    }),
+  )
   return out
 }
 
 /** 编辑备份占用（含历史版本） */
-export function backupStats(): { bytes: number; files: number } {
-  const entries = readBackupEntries()
+export async function backupStats(): Promise<{ bytes: number; files: number }> {
+  const entries = await readBackupEntries()
   return {
     bytes: entries.reduce((n, e) => n + e.size, 0),
     files: entries.length,
@@ -390,10 +392,10 @@ export function backupBudgetMb(): number {
  * 其余按时间从旧到新删除，直到低于预算。预算为 0 时不限制。
  * 即使"最新一份"总量已超预算，也不会继续删除——保证每张编辑过的照片仍可撤销。
  */
-export function enforceBackupBudget(): CleanupResult {
+export async function enforceBackupBudget(): Promise<CleanupResult> {
   const budget = backupBudgetMb() * 1024 * 1024
   if (!budget) return { deleted: 0, bytes: 0 }
-  const entries = readBackupEntries()
+  const entries = await readBackupEntries()
   if (!entries.length) return { deleted: 0, bytes: 0 }
   let total = entries.reduce((n, e) => n + e.size, 0)
   if (total <= budget) return { deleted: 0, bytes: 0 }
@@ -415,7 +417,7 @@ export function enforceBackupBudget(): CleanupResult {
   for (const e of candidates) {
     if (total <= budget) break
     try {
-      fs.rmSync(e.path, { force: true })
+      await fs.promises.rm(e.path, { force: true })
       total -= e.size
       bytes += e.size
       deleted++
@@ -433,11 +435,7 @@ export function scheduleBackupBudgetCheck(delay = 3000): void {
   if (backupBudgetTimer) clearTimeout(backupBudgetTimer)
   backupBudgetTimer = setTimeout(() => {
     backupBudgetTimer = null
-    try {
-      enforceBackupBudget()
-    } catch (err) {
-      logError('backupBudget', err)
-    }
+    void enforceBackupBudget().catch((err) => logError('backupBudget', err))
   }, delay)
 }
 

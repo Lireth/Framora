@@ -8,13 +8,20 @@ import { clusterPhashes, type PhashRow } from './phashCore'
 
 interface ClusterRequest {
   id: number
-  rows: PhashRow[]
+  /** 主进程打包的行数据（Transferable 移交，所有权归本 worker） */
+  ids: Uint32Array
+  lo: Uint32Array
+  hi: Uint32Array
   threshold?: number
 }
 
 parentPort?.on('message', (msg: ClusterRequest) => {
   try {
-    const clusters = clusterPhashes(msg.rows, msg.threshold)
+    const rows: PhashRow[] = new Array(msg.ids.length)
+    for (let i = 0; i < msg.ids.length; i++) {
+      rows[i] = { id: msg.ids[i], lo: msg.lo[i], hi: msg.hi[i] }
+    }
+    const clusters = clusterPhashes(rows, msg.threshold)
     parentPort!.postMessage({ id: msg.id, clusters })
   } catch (err) {
     parentPort!.postMessage({ id: msg.id, error: err instanceof Error ? err.message : String(err) })

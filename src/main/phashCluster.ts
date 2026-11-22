@@ -17,7 +17,10 @@ export type { PhashRow }
 
 interface ClusterRequest {
   id: number
-  rows: PhashRow[]
+  /** 打包后的行数据（与 lo/hi 等长）：Transferable 零拷贝传递，避免万级行对象结构化克隆 */
+  ids: Uint32Array
+  lo: Uint32Array
+  hi: Uint32Array
   threshold?: number
 }
 
@@ -31,8 +34,10 @@ interface ClusterResponse {
 class WorkerUnavailableError extends Error {}
 
 let worker: Worker | null = null
-/** worker 启动失败后置位：后续查询直接走主进程回退，避免每次重复失败 */
-let workerBroken = false
+/** worker 启动失败的时间戳：短窗内直接主进程回退，超过窗口后允许重试重建（OPT-34）——
+ *  此前一次失败永久降级，恰恰失去了 worker 存在的意义（隔离主进程秒级长任务） */
+let workerBrokenAt = 0
+const WORKER_RETRY_MS = 5 * 60 * 1000
 let seq = 0
 const pending = new Map<number, { resolve: (c: number[][]) => void; reject: (e: Error) => void }>()
 
@@ -57,6 +62,7 @@ function ensureWorker(): Worker {
     const p = pending.get(msg.id)
     if (!p) return
     pending.delete(msg.id)
+    workerBrokenAt = 0
     if (msg.error !== undefined) p.reject(new Error(`聚类 worker 计算失败: ${msg.error}`))
     else p.resolve(msg.clusters ?? [])
   })
@@ -70,20 +76,41 @@ function ensureWorker(): Worker {
   return w
 }
 
-/** 相似聚类：worker 内计算；worker 不可用时自动回退主进程同步计算 */
+/** 测试隔离：终止当前 worker 并清空降级时间戳（仅测试使用） */
+export function __resetPhashWorkerForTest(): void {
+  resetWorker(new WorkerUnavailableError('test reset'))
+  workerBrokenAt = 0
+}
+
+/** 相似聚类：worker 内计算；worker 不可用时自动回退主进程同步计算（时间窗后重试） */
 export async function computePhashClusters(rows: PhashRow[], threshold = 6): Promise<number[][]> {
   if (!rows.length) return []
-  if (!workerBroken) {
+  if (!workerBrokenAt || Date.now() - workerBrokenAt >= WORKER_RETRY_MS) {
     try {
       const w = ensureWorker()
       const id = ++seq
+      // 行对象数组经结构化克隆传递在十万级库上是数十 MB 级拷贝：打包为 3 个
+      // Uint32Array 以 Transferable 零拷贝移交，worker 内还原（OPT-34）
+      const n = rows.length
+      const ids = new Uint32Array(n)
+      const lo = new Uint32Array(n)
+      const hi = new Uint32Array(n)
+      for (let i = 0; i < n; i++) {
+        ids[i] = rows[i].id >>> 0
+        lo[i] = rows[i].lo >>> 0
+        hi[i] = rows[i].hi >>> 0
+      }
       return await new Promise<number[][]>((resolve, reject) => {
         pending.set(id, { resolve, reject })
-        w.postMessage({ id, rows, threshold } satisfies ClusterRequest)
+        w.postMessage({ id, ids, lo, hi, threshold } satisfies ClusterRequest, [
+          ids.buffer,
+          lo.buffer,
+          hi.buffer,
+        ])
       })
     } catch (err) {
       if (!(err instanceof WorkerUnavailableError)) throw err
-      workerBroken = true
+      workerBrokenAt = Date.now()
       logError('phashCluster', err)
     }
   }

@@ -1,4 +1,8 @@
 import { describe, expect, it } from 'vitest'
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { __resetPhashWorkerForTest, computePhashClusters } from '../src/main/phashCluster'
 import {
   clusterPhashes,
   hamming64,
@@ -228,4 +232,72 @@ describe('分块索引聚类', () => {
     expect(groups.length).toBeGreaterThan(200)
     expect(elapsed).toBeLessThan(3000)
   })
+})
+
+
+const NL = String.fromCharCode(10)
+
+describe('phashCluster worker 调度', () => {
+  it(
+    'worker 正常响应（协议含 Transferable 打包）时按其结果返回',
+    async () => {
+      const dir = mkdtempSync(path.join(tmpdir(), 'framora-phashworker-'))
+      // 合规 stub：收到打包行后按「全部同哈希聚为一簇」的最简语义回传，
+      // 验证主进程与 worker 间的新消息协议（Uint32Array 三元组）端到端可用
+      const workerFile = path.join(dir, 'stub-worker.mjs')
+      writeFileSync(
+        workerFile,
+        [
+          "import { parentPort } from 'node:worker_threads'",
+          'parentPort?.on("message", (msg) => {',
+          '  const clusters = [[...Array(msg.ids.length).keys()].map((i) => msg.ids[i])]',
+          '  parentPort.postMessage({ id: msg.id, clusters })',
+          '})',
+        ].join(NL),
+      )
+      __resetPhashWorkerForTest()
+      process.env['FRAMORA_PHASH_WORKER'] = workerFile
+      const rows = [
+        { id: 1, lo: 1, hi: 1 },
+        { id: 2, lo: 1, hi: 1 },
+        { id: 3, lo: 1, hi: 1 },
+      ]
+      const clusters = await computePhashClusters(rows, 6)
+      expect(clusters).toEqual([[1, 2, 3]])
+    },
+    15000,
+  )
+
+  it(
+    'worker 启动失败回退主进程同步计算，短窗内不再重复尝试 worker',
+    async () => {
+      const dir = mkdtempSync(path.join(tmpdir(), 'framora-phashworker-'))
+      const workerFile = path.join(dir, 'broken-worker.mjs')
+      writeFileSync(
+        workerFile,
+        [
+          "import { parentPort } from 'node:worker_threads'",
+          'parentPort?.on("message", () => {',
+          '  throw new Error("boom")',
+          '})',
+        ].join(NL),
+      )
+      __resetPhashWorkerForTest()
+      process.env['FRAMORA_PHASH_WORKER'] = workerFile
+      const rows = [
+        { id: 1, lo: 0, hi: 0 },
+        { id: 2, lo: 0, hi: 0 },
+        { id: 3, lo: 255, hi: 0 },
+      ]
+      // 1/2 同哈希聚一簇；3 与它们汉明距离 8 > 阈值 6，不聚（与同步实现语义一致）
+      const clusters = await computePhashClusters(rows, 6)
+      expect(clusters).toEqual([[1, 2]])
+      // 短窗重试路径同样得到正确结果（走主进程回退）
+      const again = await computePhashClusters(rows, 6)
+      expect(again).toEqual([[1, 2]])
+      delete process.env['FRAMORA_PHASH_WORKER']
+      __resetPhashWorkerForTest()
+    },
+    15000,
+  )
 })

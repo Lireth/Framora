@@ -174,7 +174,10 @@ function registerProtocols(): void {
   protocol.handle('media', async (req) => {
     try {
       const u = new URL(req.url)
-      const p = decodeURIComponent(u.searchParams.get('p') ?? '')
+      // searchParams.get 已完成一次百分号解码（渲染端 encodeURIComponent 编码一次），
+      // 不再二次解码：文件名含字面 %（如 100%_test.jpg）时二次解码会抛 URIError 返回
+      // 400，含 %20 字面量则被错误翻译成空格导致 404
+      const p = u.searchParams.get('p') ?? ''
       if (
         !p ||
         !isImagePath(p) ||

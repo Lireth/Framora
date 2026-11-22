@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { X } from 'lucide-react'
-import { useStore } from '../store'
+import { photoIndexOf, useStore } from '../store'
 import { api } from '../lib/api'
 import { displayUrl } from '../lib/format'
 import { cn, StarRating } from './ui'
@@ -28,8 +28,12 @@ export function CompareView(): React.JSX.Element | null {
   const dragRef = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
 
-  const a = compareIds ? photos.find((p) => p.id === compareIds[0]) : undefined
-  const b = compareIds ? photos.find((p) => p.id === compareIds[1]) : undefined
+  // O(1) 定位（store 的 WeakMap 共享索引）：对比视图打开期间 photos 高频替换时，
+  // 每帧 3 次 O(n) find 在万级库是最坏百万次比较/秒（OPT-41）
+  const aIdx = compareIds ? photoIndexOf(photos, compareIds[0]) : -1
+  const bIdx = compareIds ? photoIndexOf(photos, compareIds[1]) : -1
+  const a = aIdx >= 0 ? photos[aIdx] : undefined
+  const b = bIdx >= 0 ? photos[bIdx] : undefined
   const pair: [PhotoLite, PhotoLite] | null = a && b ? [a, b] : null
 
   // 缩放以视口中心为锚（双图共用同一组状态 → 天然同步）
@@ -88,7 +92,8 @@ export function CompareView(): React.JSX.Element | null {
 
   if (!compareIds || !pair) return null
   const focusId = pair[focus].id
-  const focusRating = photos.find((p) => p.id === focusId)?.rating ?? 0
+  // patchPhoto 会替换照片对象引用，此处直接读焦点照片的评分即为最新值
+  const focusRating = pair[focus].rating
 
   return (
     <div className="fixed inset-0 z-[55] flex flex-col bg-black/95 animate-fadeIn">

@@ -9,7 +9,7 @@
 import { describe, expect, it } from 'vitest'
 import exifr from 'exifr'
 import sharp from 'sharp'
-import { extractRawPreviewPair, findLargestJpeg } from '../src/main/rawPreview'
+import { extractRawPreviewPair, findLargestJpeg, readQuickExif } from '../src/main/rawPreview'
 
 /** 构造最小合法 TIFF：II 字节序，IFD0{Make, Model, ExifIFDPointer} → ExifIFD{DateTimeOriginal} */
 function buildTiff(): Uint8Array {
@@ -80,6 +80,16 @@ describe('RAW spike: exifr 对 TIFF 系容器的解析能力', () => {
   it('无嵌入缩略图时 thumbnail 优雅返回空值', async () => {
     const thumb = await exifr.thumbnail(buildTiff())
     expect(thumb == null).toBe(true)
+  })
+
+  it('readQuickExif 从缓冲解析轻量 EXIF（OPT-45：提取闸内解析后释放整块缓冲）', async () => {
+    const ex = await readQuickExif(buildTiff())
+    expect(ex.camera).toBe('FramoraTest TestCam')
+    expect(ex.takenAt).not.toBeNull()
+    const d = new Date(ex.takenAt!)
+    expect([d.getFullYear(), d.getMonth(), d.getDate()]).toEqual([2026, 0, 2])
+    expect(ex.lat).toBeNull()
+    expect(ex.lon).toBeNull()
   })
 })
 
@@ -202,7 +212,10 @@ describe('RAW 预览分档提取（extractRawPreviewPair）', () => {
     const pair = await extractRawPreviewPair(file)
     expect(pair.largest!.length).toBe(big.length)
     expect(pair.mid!.length).toBe(mid.length)
-    expect(pair.fileBuf).not.toBeNull()
+    // OPT-45：返回值携带轻量 EXIF（合成段无真实 EXIF，字段为 null 态）；不再返回
+    // fileBuf——预览段为独立副本，整块 RAW 缓冲在提取闸内解析后即释放
+    expect(pair.exif).toBeDefined()
+    expect(pair.exif.takenAt).toBeNull()
   })
 
   it('仅有单一候选或候选均不达标时 mid 回退为 largest（共享视图）', async () => {

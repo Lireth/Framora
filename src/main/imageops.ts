@@ -2,7 +2,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import { createHash } from 'node:crypto'
 import sharp from 'sharp'
-import { getPhotoRow, getSetting, updatePhotoFileFields, updatePhotoMeta } from './db'
+import { getPhotoRow, getSetting, listPhotoRowsByIds, updatePhotoFileFields, updatePhotoMeta } from './db'
 import { backupsDir, enqueueThumb, previewPath } from './thumbs'
 import { extractRawPreview } from './rawPreview'
 import { broadcastExport } from './scanner'
@@ -571,23 +571,39 @@ export function scheduleBackupBudgetCheck(delay = 3000): void {
 
 /** 路径变更（批量重命名）后把该照片的编辑备份重绑定到新路径哈希，历史保持可恢复（O3） */
 export function rekeyEditBackups(id: number, newPath: string): void {
-  const hash = pathHash(newPath)
+  rekeyEditBackupsBatch([{ id, newPath }])
+}
+
+/** 批量重命名的备份重绑定（OPT-43）：一次 readdir 建立 id→files 索引后整批处理，
+ *  替代逐张全目录扫描的 O(N×M) 同步 IO */
+export function rekeyEditBackupsBatch(entries: { id: number; newPath: string }[]): void {
+  if (!entries.length) return
   let names: string[]
   try {
     names = fs.readdirSync(backupsDir())
   } catch {
     return
   }
+  const byId = new Map<number, { name: string; hash: string; ts: string; ext: string }[]>()
   for (const n of names) {
-    const m = backupNameRe(id).exec(n)
-    if (!m || m[1].toLowerCase() === hash) continue
-    try {
-      fs.renameSync(
-        path.join(backupsDir(), n),
-        path.join(backupsDir(), `${id}-${hash}-${m[2]}.${m[3]}`)
-      )
-    } catch {
-      /* 单个失败忽略 */
+    const m = /^(\d+)-([0-9a-f]{8})-(\d+)\.([a-z0-9]+)$/i.exec(n)
+    if (!m) continue
+    const id = Number(m[1])
+    const list = byId.get(id)
+    const item = { name: n, hash: m[2].toLowerCase(), ts: m[3], ext: `.${m[4]}` }
+    if (list) list.push(item)
+    else byId.set(id, [item])
+  }
+  for (const { id, newPath } of entries) {
+    const hash = pathHash(newPath)
+    for (const f of byId.get(id) ?? []) {
+      // 哈希已匹配（含大小写变体重命名）：无需重绑定
+      if (f.hash === hash) continue
+      try {
+        fs.renameSync(path.join(backupsDir(), f.name), path.join(backupsDir(), `${id}-${hash}-${f.ts}${f.ext}`))
+      } catch {
+        /* 单个失败忽略 */
+      }
     }
   }
 }
@@ -603,11 +619,15 @@ export function migrateLegacyEditBackups(): void {
   } catch {
     return
   }
-  for (const n of names) {
-    // 旧版命名：{id}-{ts}.{ext}
-    const m = /^(\d+)-(\d+)\.([a-z0-9]+)$/i.exec(n)
-    if (!m) continue
-    const row = getPhotoRow(Number(m[1]))
+  // 旧版命名：{id}-{ts}.{ext}；行存在性经一次批量取行判定（OPT-43），不再逐文件点查
+  const legacy = names
+    .map((n) => ({ n, m: /^(\d+)-(\d+)\.([a-z0-9]+)$/i.exec(n) }))
+    .filter((x): x is { n: string; m: RegExpExecArray } => x.m !== null)
+  if (!legacy.length) return
+  const rows = listPhotoRowsByIds(legacy.map((x) => Number(x.m[1])))
+  const byId = new Map(rows.map((r) => [r.id, r]))
+  for (const { n, m } of legacy) {
+    const row = byId.get(Number(m[1]))
     if (!row) continue
     try {
       fs.renameSync(

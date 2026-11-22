@@ -452,6 +452,85 @@ export async function trackNewFile(folderId: number, filePath: string): Promise<
   }
 }
 
+/**
+ * 批量入库快速通道（OPT-43）：库外拖入的复制产物等整批新文件预判存后走一次
+ * 集合插入（insertPhotosBatch 单事务 + 单次检索文本重算），不再逐文件微事务——
+ * 每行独立事务 + 逐行点查在千级拖入时会把主进程事件循环切碎。
+ * 复杂分支（回收站还原 / 既有行大小写刷新 / 改名嫌疑迁移）语义分支多且通常占
+ * 少数，逐个回落到 trackNewFile 复用既有语义；返回值与逐文件调用逐位对齐。
+ */
+export async function trackNewFilesBatch(
+  folderId: number,
+  filePaths: string[]
+): Promise<boolean[]> {
+  const results = new Array<boolean>(filePaths.length).fill(false)
+  const freshIdx: number[] = []
+  const fallbackIdx: number[] = []
+  filePaths.forEach((p, i) => {
+    if (isSuppressed(p)) return
+    if (findDeletedPhotoId(p) !== null || findPhotoByPath(p)) {
+      fallbackIdx.push(i)
+      return
+    }
+    freshIdx.push(i)
+  })
+  for (const i of fallbackIdx) results[i] = await trackNewFile(folderId, filePaths[i])
+  if (!freshIdx.length) return results
+
+  // 新文件路径全部 stat（拖入批量为千级内，并发 stat 可接受）；失败按 trackNewFile
+  // 同款口径计入失败（结果保持 false），不中断整批
+  const stats = await Promise.all(
+    freshIdx.map(async (i) => ({ i, s: await fs.promises.stat(filePaths[i]).catch(() => null) }))
+  )
+  const rows: {
+    folder_id: number
+    path: string
+    name: string
+    ext: string
+    size: number
+    mtime: number
+    imported_at: number
+  }[] = []
+  const rowIdx: number[] = []
+  for (const { i, s } of stats) {
+    if (!s) continue
+    // 疑似改名命中（嫌疑表为内存 Map，无改名场景时空表零开销）：按既有语义迁移元数据
+    const suspect = takeRenameSuspect(folderId, s.size, Math.round(s.mtimeMs))
+    if (suspect) {
+      updatePhotoPath(suspect.id, filePaths[i], path.basename(filePaths[i]))
+      updatePhotoFileFields(suspect.id, { missing: 0 })
+      recomputeSearchText([suspect.id])
+      broadcastWatch({ type: 'change', folderId, id: suspect.id })
+      continue
+    }
+    rows.push({
+      folder_id: folderId,
+      path: filePaths[i],
+      name: path.basename(filePaths[i]),
+      ext: path.extname(filePaths[i]).toLowerCase().slice(1),
+      size: s.size,
+      mtime: Math.round(s.mtimeMs),
+      imported_at: Date.now(),
+    })
+    rowIdx.push(i)
+  }
+  if (rows.length) {
+    const ids = insertPhotosBatch(rows)
+    for (const id of ids) enqueueThumb(id)
+    // 集合插入为 INSERT OR IGNORE（防监听事件竞态重复入库）：数量一致时按下标对齐；
+    // 出现竞态插入时以「路径现已索引」为准（对用户同样是新增）
+    if (ids.length === rows.length) {
+      for (const i of rowIdx) results[i] = true
+    } else {
+      rowIdx.forEach((i, k) => {
+        results[i] = findPhotoByPath(rows[k].path) !== undefined
+      })
+    }
+    broadcastWatch({ type: 'add', folderId })
+  }
+  return results
+}
+
 export function trackChangedFile(folderId: number, filePath: string): void {
   if (isSuppressed(filePath)) return
   const row = findPhotoByPath(filePath)

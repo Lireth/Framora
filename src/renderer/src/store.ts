@@ -47,6 +47,14 @@ export interface Filters {
   dir: 'asc' | 'desc'
 }
 
+/** 缩略图事件覆盖（OPT-41）：事件状态按 id 存放于独立切片，photos 数组不再因
+ *  缩略图完成/失败而整表替换——行模型、月份头、查看器等只依赖列表结构 */
+export interface ThumbOverride {
+  status: 0 | 1 | 2
+  /** 事件接收时刻：覆盖行内 thumb_ts，作为 thumb:// 缓存戳（重生成后换 src） */
+  ts: number
+}
+
 interface AppState extends Filters {
   theme: ThemeMode
   /** 实际生效主题：theme=system 时跟随 OS 深浅色解析 */
@@ -66,6 +74,9 @@ interface AppState extends Filters {
   pendingThumbCount: number
   /** 照片查询失败信息：网格展示可重试错误态而非误导性空态（OPT-20） */
   photosError: string | null
+  /** 缩略图事件切片（OPT-41）：id → 覆盖状态。事件只更新此切片，photos 数组
+   *  仅在查询/补页/patch 时替换，导入期行模型与查看器不再 30fps 全量重建 */
+  thumbStatus: Map<number, ThumbOverride>
   selection: Set<number>
   anchorId: number | null
   activeId: number | null
@@ -156,26 +167,6 @@ let refreshPhotosTimer: ReturnType<typeof setTimeout> | null = null
 let viewStateTimer: ReturnType<typeof setTimeout> | null = null
 let thumbBuffer: { id: number; status: 'ok' | 'fail' }[] = []
 let thumbTimer: ReturnType<typeof setTimeout> | null = null
-/** 缩略图事件早于照片列表到达时的暂存（导入期间列表尚未刷新）；列表加载时按 id 合并 */
-const pendingThumb = new Map<number, 'ok' | 'fail'>()
-
-function mergePendingThumb(items: PhotoLite[]): PhotoLite[] {
-  if (!pendingThumb.size) return items
-  const now = Date.now()
-  let touched = false
-  const out = items.map((p) => {
-    const st = pendingThumb.get(p.id)
-    if (!st) return p
-    pendingThumb.delete(p.id)
-    touched = true
-    return {
-      ...p,
-      thumb_status: (st === 'ok' ? 1 : 2) as 0 | 1 | 2,
-      thumb_ts: now
-    }
-  })
-  return touched ? out : items
-}
 
 /** 防抖持久化视图状态（scope/tile/sort/dir），启动时恢复 */
 function persistViewState(): void {
@@ -231,11 +222,25 @@ export function photoIndexOf(photos: PhotoLite[], id: number | null): number {
   return m.get(id) ?? -1
 }
 
-/** 待生成缩略图计数（与状态栏口径一致：thumb_status===0 且未缺失） */
-function countPendingThumbs(photos: PhotoLite[]): number {
+/** 待生成缩略图计数（与状态栏口径一致：生效状态为 0 且未缺失） */
+function countPendingThumbs(photos: PhotoLite[], map: Map<number, ThumbOverride>): number {
   let n = 0
-  for (const p of photos) if (p.thumb_status === 0 && !p.missing) n++
+  for (const p of photos) {
+    const st = map.get(p.id)
+    if ((st ? st.status : p.thumb_status) === 0 && !p.missing) n++
+  }
   return n
+}
+
+/** 清除指定 id 的事件切片覆盖（编辑写回把行内 thumb_status 置 0 重生成时，
+ *  旧事件不得压过行值，否则瓦片永远显示旧缩略图） */
+function dropThumbOverride(
+  map: Map<number, ThumbOverride>,
+  ids: number[]
+): Map<number, ThumbOverride> {
+  const next = new Map(map)
+  for (const id of ids) next.delete(id)
+  return next
 }
 
 /** 系统深浅色媒体查询：theme=system 时的解析依据 */
@@ -293,6 +298,7 @@ export const useStore = create<AppState>((set, get) => ({
   lastQueryKey: null,
   pendingThumbCount: 0,
   photosError: null,
+  thumbStatus: new Map(),
   selection: new Set(),
   anchorId: null,
   activeId: null,
@@ -473,7 +479,7 @@ export const useStore = create<AppState>((set, get) => ({
       if (JSON.stringify(buildQuery(get())) !== JSON.stringify(snapshot)) {
         return // 过滤条件已变化，丢弃过期结果
       }
-      const items = mergePendingThumb(r.items)
+      const items = r.items
       // 仅在过滤条件变化时按已加载结果裁剪选择集，后台数据刷新不破坏既有选择
       const selection = queryChanged
         ? (() => {
@@ -487,7 +493,7 @@ export const useStore = create<AppState>((set, get) => ({
         hasMore: items.length < r.total,
         loading: false,
         selection,
-        pendingThumbCount: countPendingThumbs(items),
+        pendingThumbCount: countPendingThumbs(items, get().thumbStatus),
         lastQueryKey: queryKey,
       })
     } catch (err) {
@@ -509,14 +515,14 @@ export const useStore = create<AppState>((set, get) => ({
         return
       }
       const loaded = new Set(photos.map((p) => p.id))
-      const fresh = mergePendingThumb(r.items).filter((p) => !loaded.has(p.id))
+      const fresh = r.items.filter((p) => !loaded.has(p.id))
       const merged = [...photos, ...fresh]
       set({
         photos: merged,
         total: r.total,
         hasMore: merged.length < r.total,
         loadingMore: false,
-        pendingThumbCount: countPendingThumbs(merged),
+        pendingThumbCount: countPendingThumbs(merged, get().thumbStatus),
       })
     } catch (err) {
       set({ loadingMore: false })
@@ -710,12 +716,13 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   resetThumbStash: () => {
-    pendingThumb.clear()
+    // 换库后旧库 id 与新库错位：事件缓冲与状态切片全部作废
     thumbBuffer = []
     if (thumbTimer !== null) {
       clearTimeout(thumbTimer)
       thumbTimer = null
     }
+    set({ thumbStatus: new Map() })
   },
 
   applyThumbEvents: (list) => {
@@ -728,40 +735,34 @@ export const useStore = create<AppState>((set, get) => ({
       const updates = thumbBuffer
       thumbBuffer = []
       if (!updates.length) return
-      const map = new Map(updates.map((u) => [u.id, u.status]))
       const now = Date.now()
-      const photos = get().photos
-      // 事件可能早于列表到达：先全部暂存，下方命中当前视图的条目会从暂存中删除，
-      // 剩余即「列表尚未包含」的事件，待 refreshPhotos / loadMorePhotos 按 id 合并
-      // （免去每批构建 O(n) known 集合）
-      for (const u of updates) pendingThumb.set(u.id, u.status)
-      if (pendingThumb.size > 5000) pendingThumb.clear()
-      let touched = false
-      const next = photos.map((p) => {
-        const st = map.get(p.id)
-        if (!st) return p
-        pendingThumb.delete(p.id)
-        touched = true
-        return {
-          ...p,
-          thumb_status: (st === 'ok' ? 1 : 2) as 0 | 1 | 2,
-          thumb_ts: now,
-        }
-      })
-      if (touched) set({ photos: next, pendingThumbCount: countPendingThumbs(next) })
+      // 事件写入独立切片（OPT-41）：不再整表替换 photos——瓦片/胶片条按 id 细粒度
+      // 订阅生效状态，行模型与查看器在导入期保持稳定；事件早于列表到达时切片同样
+      // 生效（切片优先于行内值），无需暂存合并
+      const next = new Map(get().thumbStatus)
+      for (const u of updates) next.set(u.id, { status: u.status === 'ok' ? 1 : 2, ts: now })
+      set({ thumbStatus: next, pendingThumbCount: countPendingThumbs(get().photos, next) })
     }, 32)
   },
 
   patchPhoto: (id, patch) => {
     const photos = get().photos.map((p) => (p.id === id ? { ...p, ...patch } : p))
-    set({ photos, pendingThumbCount: countPendingThumbs(photos) })
+    const thumbStatus =
+      patch.thumb_status !== undefined
+        ? dropThumbOverride(get().thumbStatus, [id])
+        : get().thumbStatus
+    set({ photos, thumbStatus, pendingThumbCount: countPendingThumbs(photos, thumbStatus) })
   },
 
   patchPhotos: (ids, patch) => {
     if (!ids.length) return
     const targets = new Set(ids)
     const photos = get().photos.map((p) => (targets.has(p.id) ? { ...p, ...patch } : p))
-    set({ photos, pendingThumbCount: countPendingThumbs(photos) })
+    const thumbStatus =
+      patch.thumb_status !== undefined
+        ? dropThumbOverride(get().thumbStatus, ids)
+        : get().thumbStatus
+    set({ photos, thumbStatus, pendingThumbCount: countPendingThumbs(photos, thumbStatus) })
   },
 }))
 

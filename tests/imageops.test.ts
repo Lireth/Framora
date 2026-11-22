@@ -14,6 +14,9 @@ vi.mock('electron', () => ({
 }))
 vi.mock('../src/main/db', () => ({
   getPhotoRow: (id: number) => rows.get(id),
+  // OPT-43：migrateLegacyEditBackups 改经批量取行判定行存在性，与 getPhotoRow 同源
+  listPhotoRowsByIds: (ids: number[]) =>
+    ids.map((id) => rows.get(id)).filter((r) => r !== undefined),
   updatePhotoFileFields: vi.fn(),
   updatePhotoMeta: vi.fn()
 }))

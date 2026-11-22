@@ -915,6 +915,23 @@ export function findPhotoByPath(photoPath: string): PhotoLite | undefined {
   ) as PhotoLite | undefined
 }
 
+/** 按 id 批量取行（重复治理「保留最佳」、批量重命名等）：一次分块 IN 查询替代 N+1 点查（OPT-43） */
+export function listPhotoRowsByIds(
+  ids: number[],
+): { id: number; path: string; name: string; ext: string; size: number; imported_at: number; missing: number }[] {
+  const sql = (ph: string): string =>
+    `SELECT id, path, name, ext, size, imported_at, missing FROM photos p WHERE p.id IN (${ph})`
+  return chunkedIn(ids, (chunk, ph) => stmt(sql(ph)).all(chunk)) as {
+    id: number
+    path: string
+    name: string
+    ext: string
+    size: number
+    imported_at: number
+    missing: number
+  }[]
+}
+
 export function listPhotoRowsByFolder(
   folderId: number,
 ): { id: number; path: string; mtime: number; size: number; missing: number }[] {
@@ -1174,6 +1191,15 @@ export function setThumbStatus(id: number, status: 0 | 1 | 2, ts?: number): void
     ts ?? Date.now(),
     id,
   )
+}
+
+/** 批量置缩略图状态（OPT-43）：换库/全量重建的万级路径走单条 json_each 集合语句，
+ *  不再逐行隐式事务阻塞主进程（换库后 UI 正在重建的关键时刻尤甚） */
+export function setThumbStatusBatch(ids: number[], status: 0 | 1 | 2, ts?: number): void {
+  if (!ids.length) return
+  stmt(
+    'UPDATE photos SET thumb_status = ?, thumb_ts = ? WHERE id IN (SELECT value FROM json_each(?))',
+  ).run(status, ts ?? Date.now(), JSON.stringify(ids))
 }
 
 export function getPhotoRecord(id: number): PhotoRecord | undefined {
@@ -2051,31 +2077,16 @@ export function libraryStats(): {
   untagged: number
   trash: number
 } {
-  const total = (
-    stmt(
-      `SELECT COUNT(*) AS c FROM photos p WHERE p.missing = 0 AND p.deleted_at IS NULL AND ${VISIBLE_FOLDER_SQL}`,
-    ).get() as {
-      c: number
-    }
-  ).c
-  const missing = (
-    stmt(
-      `SELECT COUNT(*) AS c FROM photos p WHERE p.missing = 1 AND p.deleted_at IS NULL AND ${VISIBLE_FOLDER_SQL}`,
-    ).get() as {
-      c: number
-    }
-  ).c
-  const untagged = (
-    stmt(
-      `SELECT COUNT(*) AS c FROM photos p WHERE p.missing = 0 AND p.deleted_at IS NULL AND ${VISIBLE_FOLDER_SQL}
-        AND NOT EXISTS (SELECT 1 FROM photo_tags pt JOIN tags t ON t.id = pt.tag_id
-                        WHERE pt.photo_id = p.id AND t.deleted_at IS NULL)`,
-    ).get() as { c: number }
-  ).c
-  const trash = (
-    stmt(
-      `SELECT COUNT(*) AS c FROM photos p WHERE p.deleted_at IS NOT NULL AND ${VISIBLE_FOLDER_SQL}`,
-    ).get() as { c: number }
-  ).c
-  return { total, missing, untagged, trash }
+  // 单次扫描条件聚合（OPT-43）：此前四条独立全表 COUNT（各带可见文件夹子查询），
+  // evt:library 后 UI 反复触发时扫描次数 4→1
+  return stmt(
+    `SELECT
+       COALESCE(SUM(CASE WHEN p.deleted_at IS NULL AND p.missing = 0 THEN 1 ELSE 0 END), 0) AS total,
+       COALESCE(SUM(CASE WHEN p.deleted_at IS NULL AND p.missing = 1 THEN 1 ELSE 0 END), 0) AS missing,
+       COALESCE(SUM(CASE WHEN p.deleted_at IS NULL AND p.missing = 0 AND NOT EXISTS (
+         SELECT 1 FROM photo_tags pt JOIN tags t ON t.id = pt.tag_id
+         WHERE pt.photo_id = p.id AND t.deleted_at IS NULL) THEN 1 ELSE 0 END), 0) AS untagged,
+       COALESCE(SUM(CASE WHEN p.deleted_at IS NOT NULL THEN 1 ELSE 0 END), 0) AS trash
+     FROM photos p WHERE ${VISIBLE_FOLDER_SQL}`,
+  ).get() as { total: number; missing: number; untagged: number; trash: number }
 }

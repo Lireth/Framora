@@ -31,7 +31,16 @@ function clamp(v: number, lo: number, hi: number): number {
 }
 
 export function Viewer(): React.JSX.Element {
-  const photos = useStore((s) => s.photos)
+  // OPT-41：只订阅「当前照片对象 + 列表长度 + 当前下标」三个稳定值，不再订阅
+  // photos 数组引用——导入期的缩略图事件切片更新不会触发查看器整树重渲染。
+  // photoIndexOf 内部为 WeakMap 缓存 + O(1) 查询，选择器开销可忽略
+  const photo = useStore((s) => {
+    const i = photoIndexOf(s.photos, s.activeId)
+    return i >= 0 ? s.photos[i] : (s.photos[0] ?? null)
+  })
+  const totalCount = useStore((s) => s.photos.length)
+  const idx = useStore((s) => Math.max(0, photoIndexOf(s.photos, s.activeId)))
+  // 导航时重置缩放/编辑状态的依据（原始值订阅：number 基元，重渲染仅发生在翻图时）
   const activeId = useStore((s) => s.activeId)
   const stepViewer = useStore((s) => s.stepViewer)
   const closeViewer = useStore((s) => s.closeViewer)
@@ -39,14 +48,6 @@ export function Viewer(): React.JSX.Element {
   const toggleDetail = useStore((s) => s.toggleDetail)
   const slideshowOn = useStore((s) => s.slideshowOn)
   const slideshowPaused = useStore((s) => s.slideshowPaused)
-
-  /* id → 下标：使用 store 的共享 WeakMap 映射（数组替换时重建一次，O(1) 查询），
-     此前每次 photos 变化都在本组件与 Filmstrip 各重建一张 Map + 每帧线性扫描 */
-  const activeIdx = photoIndexOf(photos, activeId)
-  // activeId 失效（过滤刷新移除等）时回退首张，与既有行为一致
-  const photo = activeIdx >= 0 ? photos[activeIdx] : photos[0]
-  /** 显示照片的真实下标（回退首张时为 0），供页码与前后导航判定 */
-  const idx = photo ? Math.max(0, activeIdx) : -1
 
   const [zoom, setZoom] = useState(1)
   const [offset, setOffset] = useState({ x: 0, y: 0 })
@@ -117,12 +118,13 @@ export function Viewer(): React.JSX.Element {
     }
   }
 
-  // 预取相邻原图（±2），翻页时即时呈现
+  // 预取相邻原图（±2），翻页时即时呈现（读取 getState 快照，不订阅数组引用）
   useEffect(() => {
     if (!photo) return
-    const idx = photoIndexOf(photos, photo.id)
+    const list = useStore.getState().photos
+    const i = photoIndexOf(list, photo.id)
     for (const d of [-1, 1, -2, 2]) {
-      const p = photos[idx + d]
+      const p = list[i + d]
       if (!p || p.missing) continue
       const img = new Image()
       img.src = displayUrl(p)
@@ -280,7 +282,7 @@ export function Viewer(): React.JSX.Element {
           {photo.name}
         </span>
         <span className="text-[11px] text-white/35">
-          {idx + 1} / {photos.length} · {photo.width && photo.height ? `${photo.width}×${photo.height}` : ''} ·{' '}
+          {idx + 1} / {totalCount} · {photo.width && photo.height ? `${photo.width}×${photo.height}` : ''} ·{' '}
           {formatBytes(photo.size)}
         </span>
         <div className="flex-1" />
@@ -391,7 +393,7 @@ export function Viewer(): React.JSX.Element {
           <ChevronLeft size={22} />
         </button>
       )}
-      {idx < photos.length - 1 && (
+      {idx < totalCount - 1 && (
         <button
           className="absolute right-3 top-1/2 z-20 grid h-11 w-11 -translate-y-1/2 place-items-center rounded-full bg-black/45 text-white/80 backdrop-blur hover:bg-black/70 hover:text-white"
           style={{ right: editOpen ? 260 : 12 }}

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { ImagePlus } from 'lucide-react'
 import { useStore, scheduleLibraryRefresh, schedulePhotosRefresh, pushThumbEvent } from './store'
 import { onEvent } from './lib/api'
@@ -7,16 +7,28 @@ import { TitleBar } from './components/TitleBar'
 import { Sidebar } from './components/Sidebar'
 import { Toolbar } from './components/Toolbar'
 import { PhotoGrid } from './components/PhotoGrid'
-import { MapPanel } from './components/MapPanel'
 import { StatusBar } from './components/StatusBar'
 import { DetailPanel } from './components/DetailPanel'
 import { BatchBar } from './components/BatchBar'
-import { Viewer } from './components/Viewer'
-import { CompareView } from './components/CompareView'
-import { SettingsModal } from './components/SettingsModal'
-import { StatsModal } from './components/StatsModal'
-import { ExportDialog } from './components/ExportDialog'
 import { ShortcutHelpModal, Toasts, hasOpenOverlay } from './components/ui'
+
+/* 重组件代码分割（OPT-48）：查看器（含编辑面板）/ 对比视图 / 各 Modal / 地图面板
+ * 均为按需挂载，拆出首屏 bundle；首次打开有毫秒级 chunk 加载，fallback 留空即可。
+ * 组件均为命名导出，此处映射为 lazy 所需的 default */
+const Viewer = lazy(() => import('./components/Viewer').then((m) => ({ default: m.Viewer })))
+const CompareView = lazy(() =>
+  import('./components/CompareView').then((m) => ({ default: m.CompareView }))
+)
+const MapPanel = lazy(() => import('./components/MapPanel').then((m) => ({ default: m.MapPanel })))
+const SettingsModal = lazy(() =>
+  import('./components/SettingsModal').then((m) => ({ default: m.SettingsModal }))
+)
+const StatsModal = lazy(() =>
+  import('./components/StatsModal').then((m) => ({ default: m.StatsModal }))
+)
+const ExportDialog = lazy(() =>
+  import('./components/ExportDialog').then((m) => ({ default: m.ExportDialog }))
+)
 import {
   deleteViewerPhotoAction,
   importDroppedPaths,
@@ -30,6 +42,11 @@ export default function App(): React.JSX.Element {
   const viewerOpen = useStore((s) => s.viewerOpen)
   const scope = useStore((s) => s.scope)
   const compare = useStore((s) => s.compareIds)
+  // 三个 Modal 按开关条件挂载（配合 lazy 分割，OPT-48）：常挂载的 lazy 组件会在
+  // 首帧就拉取 chunk，分割失去意义；关闭即卸载，其状态本就由 store / 重开时拉取恢复
+  const settingsOpen = useStore((s) => s.settingsOpen)
+  const statsOpen = useStore((s) => s.statsOpen)
+  const exportOpen = useStore((s) => s.exportOpen)
   const [dropActive, setDropActive] = useState(false)
   /** dragenter/dragleave 成对计数：仅在真正离开窗口时收起投放层 */
   const dropDepth = useRef(0)
@@ -259,17 +276,43 @@ export default function App(): React.JSX.Element {
         <Sidebar />
         <div className="flex min-w-0 flex-1 flex-col">
           <Toolbar />
-          {scope === 'map' ? <MapPanel /> : <PhotoGrid />}
+          {scope === 'map' ? (
+            <Suspense fallback={null}>
+              <MapPanel />
+            </Suspense>
+          ) : (
+            <PhotoGrid />
+          )}
           <StatusBar />
         </div>
         {detailOpen && <DetailPanel />}
       </div>
       <BatchBar />
-      {viewerOpen && <Viewer />}
-      {compare && <CompareView />}
-      <SettingsModal />
-      <StatsModal />
-      <ExportDialog />
+      {viewerOpen && (
+        <Suspense fallback={null}>
+          <Viewer />
+        </Suspense>
+      )}
+      {compare && (
+        <Suspense fallback={null}>
+          <CompareView />
+        </Suspense>
+      )}
+      {settingsOpen && (
+        <Suspense fallback={null}>
+          <SettingsModal />
+        </Suspense>
+      )}
+      {statsOpen && (
+        <Suspense fallback={null}>
+          <StatsModal />
+        </Suspense>
+      )}
+      {exportOpen && (
+        <Suspense fallback={null}>
+          <ExportDialog />
+        </Suspense>
+      )}
       <ShortcutHelpModal />
       {dropActive && (
         <div className="pointer-events-none fixed inset-0 z-[60] flex items-center justify-center bg-black/45 backdrop-blur-[2px] animate-fadeIn">

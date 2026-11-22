@@ -25,8 +25,9 @@ interface GridRow {
 
 /**
  * 瓦片单元：memo 化后仅在自身 photo 引用 / 尺寸变化时重渲。
- * photos 数组被整体替换（patchPhoto/缩略图回填）时，未变更项引用不变，可跳过渲染；
- * 选择态经由 selection.has(id) 细粒度订阅，不依赖父级重渲。
+ * photos 数组被整体替换（patchPhoto/查询刷新）时，未变更项引用不变，可跳过渲染；
+ * 选择态与缩略图状态（OPT-41 独立切片）均按 id 细粒度订阅，不依赖父级重渲——
+ * 导入期的缩略图事件不再触发任何未变更瓦片与行模型的重建。
  */
 const Tile = React.memo(function Tile({
   p,
@@ -44,6 +45,13 @@ const Tile = React.memo(function Tile({
   const { open: openMenu, element: menuElement } = useContextMenu()
   const [imgFailed, setImgFailed] = useState(false)
   const [tagPickerOpen, setTagPickerOpen] = useState(false)
+  const thumbOv = useStore((s) => s.thumbStatus.get(p.id))
+  const eff = thumbOv ?? { status: p.thumb_status, ts: p.thumb_ts }
+
+  // 重新生成成功（事件切片 ts 变化）后重置本地 img 加载失败标记，换新缓存戳重载
+  useEffect(() => {
+    setImgFailed(false)
+  }, [eff.ts])
 
   const menuItems: MenuItem[] = [
     { label: '打开查看器', onClick: () => openViewer(p.id) },
@@ -83,7 +91,7 @@ const Tile = React.memo(function Tile({
             onClick: () => api.openInExplorer(p.id).catch(() => undefined)
           },
           // 缩略图生成失败的手动恢复路径：主进程以紧急优先级重排队（FEAT-19）
-          ...(p.thumb_status === 2 || imgFailed
+          ...(eff.status === 2 || imgFailed
             ? ([
                 {
                   label: '重新生成缩略图',
@@ -139,22 +147,22 @@ const Tile = React.memo(function Tile({
         openMenu(e.clientX, e.clientY, menuItems)
       }}
     >
-      {/* 缩略图 */}
+      {/* 缩略图（生效状态 = 事件切片覆盖 ?? 行内值，OPT-41） */}
       {p.missing ? (
         <div className="flex h-full w-full flex-col items-center justify-center gap-1.5 text-ink3">
           <ImageOff size={22} />
           <span className="text-[10px]">文件缺失</span>
         </div>
-      ) : p.thumb_status === 0 ? (
+      ) : eff.status === 0 ? (
         <div className="thumb-skeleton h-full w-full" />
-      ) : p.thumb_status === 2 || imgFailed ? (
+      ) : eff.status === 2 || imgFailed ? (
         <div className="flex h-full w-full flex-col items-center justify-center gap-1.5 text-ink3">
           <AlertTriangle size={20} />
           <span className="text-[10px]">无法生成缩略图</span>
         </div>
       ) : (
         <img
-          src={thumbUrl(p)}
+          src={thumbUrl({ id: p.id, thumb_ts: eff.ts })}
           alt={p.name}
           loading="lazy"
           draggable={false}

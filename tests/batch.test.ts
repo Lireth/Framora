@@ -234,3 +234,29 @@ describe('万级批量写基线', () => {
     expect(searchMs).toBeLessThan(5000)
   })
 })
+
+describe('缩略图状态批量置位与按 id 批量取行（OPT-43）', () => {
+  it('setThumbStatusBatch 单条集合语句置状态与时间戳（含超 900 行）', () => {
+    const ids = bulkPhotos(1200)
+    db.setThumbStatusBatch(ids, 0, 12345)
+    for (const id of [ids[0], ids[899], ids[1199]]) {
+      expect(db.getPhotoRow(id)?.thumb_status ?? null).toBe(0)
+      expect(db.getPhotoRow(id)?.thumb_ts).toBe(12345)
+    }
+    db.setThumbStatusBatch(ids, 2, 67890)
+    expect(db.getPhotoRow(ids[500])?.thumb_status).toBe(2)
+    expect(db.getPhotoRow(ids[500])?.thumb_ts).toBe(67890)
+    // 空集合为无害空操作
+    expect(() => db.setThumbStatusBatch([], 1)).not.toThrow()
+  })
+
+  it('listPhotoRowsByIds 跨 900 分批边界返回全部行', () => {
+    const ids = bulkPhotos(1900)
+    const rows = db.listPhotoRowsByIds(ids)
+    expect(rows).toHaveLength(1900)
+    expect(new Set(rows.map((r) => r.id))).toEqual(new Set(ids))
+    expect(rows.every((r) => typeof r.size === 'number' && typeof r.imported_at === 'number')).toBe(true)
+    // 空集合返回空数组
+    expect(db.listPhotoRowsByIds([])).toEqual([])
+  })
+})

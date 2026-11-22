@@ -17,6 +17,7 @@ vi.mock('../src/main/db', () => ({
   listPhotoRowsByFolder: vi.fn(() => []),
   recomputeSearchText: vi.fn(),
   restoreFolder: vi.fn(),
+  restorePhotos: vi.fn(),
   updatePhotoFileFields: vi.fn(),
   updatePhotoFilesBatch: vi.fn(),
   updatePhotoPath: vi.fn(),
@@ -32,9 +33,11 @@ import {
   trackChangedFile,
   trackDeletedFile,
   trackNewFile,
+  trackNewFilesBatch,
 } from '../src/main/scanner'
 import {
   addFolder,
+  findDeletedPhotoId,
   findPhotoByPath,
   getFolderByPath,
   getPhotoRow,
@@ -43,6 +46,7 @@ import {
   listPhotoRowsByFolder,
   recomputeSearchText,
   restoreFolder,
+  restorePhotos,
   updatePhotoFileFields,
   updatePhotoFilesBatch,
   updatePhotoPath,
@@ -101,6 +105,58 @@ describe('trackNewFile 路径大小写归一', () => {
     trackNewFile(1, 'C:\\pic\\a.jpg')
     expect(updatePhotoPath).not.toHaveBeenCalled()
     expect(insertPhoto).not.toHaveBeenCalled()
+  })
+})
+
+describe('trackNewFilesBatch 批量入库快速通道（OPT-43）', () => {
+  beforeEach(() => {
+    // 恢复工厂默认：findDeletedPhotoId → null、insertPhotosBatch → [10]
+    vi.mocked(findDeletedPhotoId).mockReset().mockReturnValue(null)
+    vi.mocked(findPhotoByPath).mockReset()
+    vi.mocked(insertPhotosBatch).mockReset().mockReturnValue([10])
+    vi.mocked(restorePhotos).mockReset()
+    vi.mocked(updatePhotoPath).mockReset()
+    vi.mocked(updatePhotoFileFields).mockReset()
+    vi.mocked(enqueueThumb).mockReset()
+  })
+
+  it('新文件集合插入一次 + 逐个入缩略图队列，返回值按位对齐；stat 失败计 false', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'framora-batchimport-'))
+    const p1 = path.join(dir, 'a.jpg')
+    const p2 = path.join(dir, 'b.jpg')
+    writeFileSync(p1, 'x')
+    writeFileSync(p2, 'x')
+    vi.mocked(findPhotoByPath).mockReturnValue(undefined)
+    vi.mocked(insertPhotosBatch).mockImplementationOnce((rows) => rows.map((_, k) => 100 + k))
+
+    const ghost = path.join(dir, 'ghost.jpg') // 磁盘上不存在 → stat 失败
+    const r = await trackNewFilesBatch(1, [p1, p2, ghost])
+
+    expect(r).toEqual([true, true, false])
+    expect(vi.mocked(insertPhotosBatch)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(insertPhotosBatch).mock.calls[0][0]).toHaveLength(2)
+    expect(enqueueThumb).toHaveBeenCalledWith(100)
+    expect(enqueueThumb).toHaveBeenCalledWith(101)
+  })
+
+  it('既有行 / 回收站还原路径回落 trackNewFile，不重复集合插入', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'framora-batchimport-'))
+    const fresh = path.join(dir, 'c.jpg')
+    writeFileSync(fresh, 'x')
+    vi.mocked(findPhotoByPath)
+      .mockReturnValueOnce({ id: 7, path: 'C:\\pic\\A.JPG', missing: 0 } as never) // 既有行
+      .mockReturnValue(undefined) // 其余走新文件分支
+    // 还原分支按路径精确命中（批量预检会先于回落路径逐个调用）
+    vi.mocked(findDeletedPhotoId).mockImplementation((p) => (p === 'C:\\trash\\b.jpg' ? 9 : null))
+
+    const r = await trackNewFilesBatch(1, ['C:\\pic\\a.jpg', 'C:\\trash\\b.jpg', fresh])
+
+    expect(r).toEqual([false, true, true]) // 既有行不计新增；还原计新增；新文件集合插入
+    expect(restorePhotos).toHaveBeenCalledWith([9])
+    // 仅 1 个新文件走了集合插入，既有/还原两个未进入
+    expect(vi.mocked(insertPhotosBatch)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(insertPhotosBatch).mock.calls[0][0]).toHaveLength(1)
+    expect(enqueueThumb).toHaveBeenCalledWith(10) // 工厂默认 mock 返回 [10]
   })
 })
 

@@ -12,6 +12,7 @@ import {
   suppressTracking,
   splitImportPaths,
   trackNewFile,
+  trackNewFilesBatch,
   waitForScansIdle,
 } from './scanner'
 import {
@@ -35,7 +36,7 @@ import {
   listBackups,
   migrateLegacyEditBackups,
   pickName,
-  rekeyEditBackups,
+  rekeyEditBackupsBatch,
   removePhotoBackups,
   revertEdits,
   saveEdits,
@@ -255,10 +256,11 @@ export function registerIpc(): void {
         copied = copiedPaths.length
         skipped += external.length - copied
         if (copiedPaths.length) {
-          // 目标已在某资料库内则逐文件入库，避免把子目录注册成嵌套根；否则按新文件夹导入并监听
+          // 目标已在某资料库内则批量入库，避免把子目录注册成嵌套根；否则按新文件夹导入并监听
           const owner = findOwnerFolder(dest, listFolders())
           if (owner) {
-            await Promise.all(copiedPaths.map((op) => trackNewFile(owner.id, op)))
+            // 复制产物整批走集合插入快速通道（OPT-43），不再逐文件微事务
+            await trackNewFilesBatch(owner.id, copiedPaths)
           } else {
             const res = await importFolder(dest)
             await startWatcher(res.folderId, dest)
@@ -366,29 +368,31 @@ export function registerIpc(): void {
       /* 目录尚不存在等 */
     }
     const ids = db.listAllPhotoIds()
-    for (const id of ids) {
-      db.setThumbStatus(id, 0)
-      enqueueThumb(id)
-    }
+    // 万级换库：单条集合语句置状态 + 逐个入队（队列为内存操作，非逐行事务）（OPT-43）
+    db.setThumbStatusBatch(ids, 0)
+    for (const id of ids) enqueueThumb(id)
     return { photos: db.libraryStats().total, rebuiltThumbs: ids.length }
   })
 
   /** 重复治理：每组保留一张（最佳=体积最大，其次最早；最早=导入时间最早），选中其余冗余项 */
   ipcMain.handle('duplicates:selectRedundant', async (_e, mode: 'best' | 'oldest') => {
     const clusters = await db.duplicateClusters()
+    // 一次分块 IN 批量取行 + 内存按 id 索引：替代逐簇 N+1 点查（万级重复照片曾达数千次点查）（OPT-43）
+    const rows = db.listPhotoRowsByIds(clusters.flat())
+    const byId = new Map(rows.map((r) => [r.id, r]))
     const redundant: number[] = []
     for (const cluster of clusters) {
-      const rows = cluster
-        .map((id) => db.getPhotoRow(id))
+      const members = cluster
+        .map((id) => byId.get(id))
         .filter((r): r is NonNullable<typeof r> => r !== undefined)
-      if (rows.length < 2) continue
-      const keeper = rows.reduce((a, b) => {
+      if (members.length < 2) continue
+      const keeper = members.reduce((a, b) => {
         // best：体积最大优先，其次最早导入；oldest：最早导入优先；并列取 id 小者
         if (mode === 'best' && b.size !== a.size) return b.size > a.size ? b : a
         if (b.imported_at !== a.imported_at) return b.imported_at < a.imported_at ? b : a
         return b.id < a.id ? b : a
       })
-      for (const r of rows) if (r.id !== keeper.id) redundant.push(r.id)
+      for (const r of members) if (r.id !== keeper.id) redundant.push(r.id)
     }
     return { ids: redundant, clusters: clusters.length }
   })
@@ -649,6 +653,8 @@ export function registerIpc(): void {
     let skipped = 0
     let failed = 0
     const used = new Set<string>()
+    // 备份重绑定收集后整批处理（OPT-43）：替代逐张全目录扫描
+    const rekeyEntries: { id: number; newPath: string }[] = []
     for (let i = 0; i < ids.length; i++) {
       const row = db.getPhotoRow(ids[i])
       if (!row || row.missing || !fs.existsSync(row.path)) {
@@ -678,13 +684,14 @@ export function registerIpc(): void {
         used.add(newPath.toLowerCase())
         db.updatePhotoPath(row.id, newPath, newName)
         // 路径哈希变化：编辑备份重绑定到新路径，历史保持可恢复（O3）
-        rekeyEditBackups(row.id, newPath)
+        rekeyEntries.push({ id: row.id, newPath })
         renamed++
       } catch (err) {
         logError('batchRename', err)
         failed++
       }
     }
+    rekeyEditBackupsBatch(rekeyEntries)
     return { renamed, skipped, failed }
   })
   ipcMain.handle('photos:batchRate', (_e, ids: number[], rating: number) =>

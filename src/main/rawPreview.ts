@@ -80,6 +80,56 @@ export function findLargestJpeg(buf: Buffer): Buffer | null {
   return segs.length ? segs[segs.length - 1] : null
 }
 
+/* ---------- 轻量 EXIF 提取（原 thumbs.readExifQuick，OPT-45 迁入） ---------- */
+
+/** 缩略图管线的轻量 EXIF：拍摄时间 + GPS 坐标 + 相机型号（同一解析趟，避免重复读盘） */
+export interface ExifQuick {
+  takenAt: number | null
+  lat: number | null
+  lon: number | null
+  camera: string | null
+}
+
+/** 接受路径或缓冲：RAW 路径传整块文件缓冲（在提取闸内解析后立即释放，OPT-45） */
+export async function readQuickExif(src: string | Uint8Array): Promise<ExifQuick> {
+  const out: ExifQuick = { takenAt: null, lat: null, lon: null, camera: null }
+  try {
+    const d = await exifr.parse(src, {
+      tiff: true,
+      exif: true,
+      gps: true,
+      xmp: false,
+      icc: false,
+      iptc: false
+    })
+    const raw = d?.DateTimeOriginal ?? d?.CreateDate ?? d?.ModifyDate
+    if (raw instanceof Date && !isNaN(raw.getTime())) out.takenAt = raw.getTime()
+    else if (typeof raw === 'string') {
+      const t = Date.parse(raw)
+      if (!isNaN(t)) out.takenAt = t
+    }
+    if (
+      typeof d?.latitude === 'number' &&
+      typeof d?.longitude === 'number' &&
+      Number.isFinite(d.latitude) &&
+      Number.isFinite(d.longitude) &&
+      Math.abs(d.latitude) <= 90 &&
+      Math.abs(d.longitude) <= 180
+    ) {
+      out.lat = d.latitude
+      out.lon = d.longitude
+    }
+    const camera = [d?.Make, d?.Model]
+      .filter((x): x is string => typeof x === 'string')
+      .join(' ')
+      .trim()
+    if (camera) out.camera = camera
+  } catch {
+    /* no exif */
+  }
+  return out
+}
+
 /* ---------- 提取并发闸（2 路受限并发，槽位直接接力避免计数竞态） ---------- */
 
 const RAW_EXTRACT_CONCURRENCY = 2
@@ -103,29 +153,37 @@ function releaseExtractSlot(): void {
 
 /** RAW 预览分档提取结果 */
 export interface RawPreviewPair {
-  /** 最大嵌入预览：查看器显示源 / 导出转码源，落盘为 .preview.jpg */
+  /** 最大嵌入预览：查看器显示源 / 导出转码源，落盘为 .preview.jpg（独立副本，不引用文件缓冲） */
   largest: Buffer | null
-  /** 中档预览：缩略图解码源；无更小候选时与 largest 相同（共享视图，零额外内存） */
+  /** 中档预览：缩略图解码源；无更小候选时与 largest 共享同一副本 */
   mid: Buffer | null
-  /** 完整 RAW 文件缓冲：供调用方在同一次读取上解析 EXIF（拍摄时间），免去二次读盘 */
-  fileBuf: Buffer | null
+  /** 轻量 EXIF（拍摄时间/GPS/相机）：从完整 RAW 缓冲解析——嵌入预览段未必内嵌 EXIF 块；
+   *  解析在提取闸内完成，整块 RAW 缓冲随即释放 */
+  exif: ExifQuick
 }
 
+/** RAW 文件缓冲读取后立即解析：JPEG 嵌入段是文件缓冲的 subarray 视图，视图会把
+ *  整块 RAW（50–200MB）钉在内存直到缩略图编码完成（OPT-45），此处复制脱离父缓冲 */
 async function extractPair(filePath: string): Promise<RawPreviewPair> {
   const buf = await fs.promises.readFile(filePath)
+  const exif = await readQuickExif(buf)
   const segs = collectJpegSegments(buf)
   if (!segs.length) {
-    const small = await exifr.thumbnail(filePath)
+    // 从已读入的缓冲提取 IFD1 缩略图，免去对同一文件的二次读盘；解析失败向上抛
+    // （容器完全不可解析时由调用方兜底，与旧行为一致）
+    const small = await exifr.thumbnail(buf)
     const smallBuf = small && small.length ? Buffer.from(small) : null
-    return { largest: smallBuf, mid: smallBuf, fileBuf: buf }
+    return { largest: smallBuf, mid: smallBuf, exif }
   }
-  const largest = segs[segs.length - 1]
-  // 中档 = 升序候选中首个达到中档下限的段；无达标候选（或仅有最大段）时与最大段共享视图
-  const mid = segs.find((s) => s.length >= MID_PREVIEW_MIN_BYTES) ?? largest
-  return { largest, mid, fileBuf: buf }
+  const largestSrc = segs[segs.length - 1]
+  // 中档 = 升序候选中首个达到中档下限的段；无达标候选（或仅有最大段）时与最大段共享副本
+  const midSrc = segs.find((s) => s.length >= MID_PREVIEW_MIN_BYTES) ?? largestSrc
+  const largest = Buffer.from(largestSrc)
+  const mid = midSrc === largestSrc ? largest : Buffer.from(midSrc)
+  return { largest, mid, exif }
 }
 
-/** RAW 预览分档提取：最大段 + 中档段 + 文件缓冲（供 EXIF 复用） */
+/** RAW 预览分档提取：最大段 + 中档段 + 轻量 EXIF（整块文件缓冲在返回前释放） */
 export async function extractRawPreviewPair(filePath: string): Promise<RawPreviewPair> {
   await acquireExtractSlot()
   try {

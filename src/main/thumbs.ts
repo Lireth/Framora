@@ -2,7 +2,6 @@ import os from 'node:os'
 import path from 'node:path'
 import fs from 'node:fs'
 import sharp from 'sharp'
-import exifr from 'exifr'
 import { BrowserWindow, app } from 'electron'
 import {
   getPhotoRow,
@@ -14,11 +13,12 @@ import {
   setPhotoDimsAndDate,
   setPhotoGps,
   setThumbStatus,
+  setThumbStatusBatch,
 } from './db'
 import { enqueuePhash } from './phash'
 import { logError } from './log'
 import { isRawExt } from '@shared/formats'
-import { extractRawPreviewPair } from './rawPreview'
+import { extractRawPreviewPair, readQuickExif, type ExifQuick } from './rawPreview'
 import type { CleanupResult } from '@shared/types'
 
 const CONCURRENCY = Math.max(2, Math.min(6, os.cpus().length - 1))
@@ -304,53 +304,6 @@ function pump(): void {
   }
 }
 
-/** 缩略图管线的轻量 EXIF 提取：拍摄时间 + GPS 坐标 + 相机型号（同一解析趟，避免重复读盘） */
-interface ExifQuick {
-  takenAt: number | null
-  lat: number | null
-  lon: number | null
-  camera: string | null
-}
-
-async function readExifQuick(src: string | Uint8Array): Promise<ExifQuick> {
-  const out: ExifQuick = { takenAt: null, lat: null, lon: null, camera: null }
-  try {
-    const d = await exifr.parse(src, {
-      tiff: true,
-      exif: true,
-      gps: true,
-      xmp: false,
-      icc: false,
-      iptc: false
-    })
-    const raw = d?.DateTimeOriginal ?? d?.CreateDate ?? d?.ModifyDate
-    if (raw instanceof Date && !isNaN(raw.getTime())) out.takenAt = raw.getTime()
-    else if (typeof raw === 'string') {
-      const t = Date.parse(raw)
-      if (!isNaN(t)) out.takenAt = t
-    }
-    if (
-      typeof d?.latitude === 'number' &&
-      typeof d?.longitude === 'number' &&
-      Number.isFinite(d.latitude) &&
-      Number.isFinite(d.longitude) &&
-      Math.abs(d.latitude) <= 90 &&
-      Math.abs(d.longitude) <= 180
-    ) {
-      out.lat = d.latitude
-      out.lon = d.longitude
-    }
-    const camera = [d?.Make, d?.Model]
-      .filter((x): x is string => typeof x === 'string')
-      .join(' ')
-      .trim()
-    if (camera) out.camera = camera
-  } catch {
-    /* no exif */
-  }
-  return out
-}
-
 async function run(id: number): Promise<void> {
   const row = getPhotoRow(id)
   if (!row || row.missing) return
@@ -360,23 +313,24 @@ async function run(id: number): Promise<void> {
     if (!fs.existsSync(row.path)) throw new Error('file missing')
     let input: string | Uint8Array = row.path
     let preview: Buffer | null = null
-    let rawFileBuf: Buffer | null = null
+    let rawExif: ExifQuick | null = null
     if (isRawExt(row.ext)) {
       // RAW：分档提取嵌入预览（OPT-12）——最大段落盘为查看器预览，中档段（≥128KB 的
-      // 最小候选）做缩略图解码源，避免为 512px 缩略图解码全尺寸预览（像素量差数十倍）
+      // 最小候选）做缩略图解码源，避免为 512px 缩略图解码全尺寸预览（像素量差数十倍）。
+      // 提取返回独立副本（OPT-45）：整块 RAW 缓冲与 EXIF 解析在提取闸内完成并释放，
+      // 不再随缩略图编码存活（旧实现峰值 ≈ 6×RAW 文件大小）
       const pair = await extractRawPreviewPair(row.path)
       if (!pair.largest || !pair.largest.length) throw new Error('RAW 文件无可提取的嵌入预览')
       preview = pair.largest
       input = pair.mid && pair.mid.length ? pair.mid : pair.largest
-      // EXIF 拍摄时间直接解析已读入内存的 RAW 缓冲，免去对同一文件的二次读盘
-      rawFileBuf = pair.fileBuf
+      rawExif = pair.exif
     }
     // 同一实例先读头部元数据再生成缩略图，避免重复解析
     const img = sharp(input, { failOn: 'none' })
     // 同趟提取 GPS/相机（FEAT-07/08）：新照片无需进入回填队列
     const [meta, ex] = await Promise.all([
       img.metadata(),
-      rawFileBuf ? readExifQuick(rawFileBuf) : readExifQuick(row.path)
+      rawExif ? Promise.resolve(rawExif) : readQuickExif(row.path)
     ])
     // 库代次已变（备份导入换库）：本任务基于旧库行，全部写入作废
     if (gen !== generation) return
@@ -433,10 +387,9 @@ async function run(id: number): Promise<void> {
 
 export async function rebuildAllThumbs(): Promise<void> {
   const ids = listPhotoIdsForRebuild()
-  for (const id of ids) {
-    setThumbStatus(id, 0)
-    enqueueThumb(id)
-  }
+  // 万级重建：单条集合语句置状态（OPT-43），逐个入队（内存操作）
+  setThumbStatusBatch(ids, 0)
+  for (const id of ids) enqueueThumb(id)
 }
 
 /** 原子写残留临时文件的最低年龄：避开进行中的写入，只清理崩溃残留 */

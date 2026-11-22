@@ -316,7 +316,13 @@ async function run(id: number): Promise<void> {
     }
     await writeThumbFile(
       thumbPath(id),
-      img.rotate().resize(512, 512, { fit: 'inside', withoutEnlargement: true }).webp({ quality: 80 })
+      img
+        .rotate()
+        .resize(512, 512, { fit: 'inside', withoutEnlargement: true })
+        .webp({ quality: 80 })
+        // 保留输入 ICC：非 sRGB 素材（Adobe RGB / Display P3 写真常见）丢 profile 后
+        // 浏览器按 sRGB 解读，网格缩略图与查看器（media:// 原图，ICC 正确）观感不一致
+        .keepIccProfile()
     )
     // 编码期间换库的残余窗口：已写出的错位产物随写随清，不污染新库
     if (gen !== generation) {

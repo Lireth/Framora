@@ -1333,13 +1333,48 @@ export function listSmartAlbums(): SmartAlbumInfo[] {
   return rows.map((r) => ({ ...r, query: parseSmartQuery(r.query) }))
 }
 
+/**
+ * 智能相册条件逐字段校验：query 由渲染层任意 JSON 持久化，损坏/旧版本/非法值若
+ * 直接进入 buildPhotoFilter（如 keyword 为非字符串时 .trim() 抛 TypeError、dateFrom
+ * 为数字时 better-sqlite3 拒绝绑定 NaN），photos:query 会持续报错且该相册在 UI 中
+ * 无法打开修复。这里按字段类型白名单过滤：非法字段一律丢弃（视为未设置），合法
+ * 语义不变（minRating ≤0 与原实现同样视为无过滤）。
+ */
+const SMART_SORT_KEYS = new Set(['taken', 'imported', 'name', 'rating', 'size'])
+
 function parseSmartQuery(raw: string): SmartAlbumQuery {
+  let q: unknown
   try {
-    const q = JSON.parse(raw) as SmartAlbumQuery
-    return typeof q === 'object' && q !== null ? q : {}
+    q = JSON.parse(raw)
   } catch {
     return {}
   }
+  if (typeof q !== 'object' || q === null || Array.isArray(q)) return {}
+  const src = q as Record<string, unknown>
+  const out: SmartAlbumQuery = {}
+  if (typeof src.keyword === 'string') out.keyword = src.keyword
+  if (typeof src.dateFrom === 'string') out.dateFrom = src.dateFrom
+  if (typeof src.dateTo === 'string') out.dateTo = src.dateTo
+  if (typeof src.minRating === 'number' && Number.isFinite(src.minRating) && src.minRating >= 1) {
+    out.minRating = Math.min(5, Math.floor(src.minRating))
+  }
+  const idsOf = (v: unknown): number[] | undefined => {
+    if (!Array.isArray(v)) return undefined
+    const arr = v.filter((n): n is number => typeof n === 'number' && Number.isFinite(n))
+    return arr.length ? arr : undefined
+  }
+  const tagIds = idsOf(src.tagIds)
+  if (tagIds) out.tagIds = tagIds
+  const albumIds = idsOf(src.albumIds)
+  if (albumIds) out.albumIds = albumIds
+  const folderIds = idsOf(src.folderIds)
+  if (folderIds) out.folderIds = folderIds
+  if (typeof src.untagged === 'boolean') out.untagged = src.untagged
+  if (typeof src.sort === 'string' && SMART_SORT_KEYS.has(src.sort)) {
+    out.sort = src.sort as SmartAlbumQuery['sort']
+  }
+  if (src.dir === 'asc' || src.dir === 'desc') out.dir = src.dir
+  return out
 }
 
 export function getSmartAlbumQuery(id: number): SmartAlbumQuery | undefined {

@@ -505,6 +505,36 @@ describe('智能相册（保存的搜索条件）', () => {
     db.deleteSmartAlbum(sa)
     expect(db.listSmartAlbums()).toHaveLength(0)
   })
+
+  it('损坏/非法的条件字段被丢弃，查询不再崩溃且相册可正常列出', () => {
+    const f = newFolder('C:\\pics')
+    seed(f, 'ok1', { title: '海边' })
+    // 直接写库模拟损坏数据：类型错误 / 非法值 / 非 JSON。
+    // 期望值区分两种语义：字段非法被丢弃 → 条件失效返回全部；
+    // id 数组类型合法但无匹配相册 → 条件正常生效返回空
+    const raw = new Database(path.join(userData, 'framora.db'))
+    const bad: [string, number][] = [
+      [JSON.stringify({ keyword: 123 }), 1],
+      [JSON.stringify({ dateFrom: 456, keyword: '海边' }), 1],
+      [JSON.stringify({ minRating: 'high', tagIds: 'x', albumIds: [1, 'y', 2] }), 0],
+      [JSON.stringify({ sort: 'drop table', dir: 'sideways', untagged: 'yes' }), 1],
+      ['not-json{', 1],
+      ['[1,2,3]', 1],
+    ]
+    for (const [json, expected] of bad) {
+      const info = raw
+        .prepare('INSERT INTO smart_albums (name, color, query, created_at) VALUES (?, NULL, ?, ?)')
+        .run('坏条件', json, Date.now())
+      const id = Number(info.lastInsertRowid)
+      expect(() => db.queryPhotos({ scope: 'smart', scopeId: id })).not.toThrow()
+      const r = db.queryPhotos({ scope: 'smart', scopeId: id })
+      expect(r.total).toBe(expected)
+      if (expected === 1) expect(r.items[0]?.name).toBe('ok1.jpg')
+      expect(db.listSmartAlbums().find((a) => a.id === id)).toBeDefined()
+      db.deleteSmartAlbum(id)
+    }
+    raw.close()
+  })
 })
 
 describe('智能相册条件模型（P1-5）', () => {

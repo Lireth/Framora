@@ -82,6 +82,21 @@ const Tile = React.memo(function Tile({
             label: '在资源管理器中显示',
             onClick: () => api.openInExplorer(p.id).catch(() => undefined)
           },
+          // 缩略图生成失败的手动恢复路径：主进程以紧急优先级重排队（FEAT-19）
+          ...(p.thumb_status === 2 || imgFailed
+            ? ([
+                {
+                  label: '重新生成缩略图',
+                  onClick: () => {
+                    // 重置本地 img 加载失败标记，重生成成功后新 thumb_ts 会换 src
+                    setImgFailed(false)
+                    api
+                      .regenerateThumb(p.id)
+                      .catch(() => useStore.getState().toast('error', '重新生成缩略图失败'))
+                  }
+                }
+              ] as MenuItem[])
+            : []),
           {
             label: '删除（移入回收站）',
             danger: true,
@@ -191,7 +206,20 @@ function EmptyState(): React.JSX.Element {
   const dateFrom = useStore((s) => s.dateFrom)
   const dateTo = useStore((s) => s.dateTo)
   const minRating = useStore((s) => s.minRating)
-  const hasFilter = !!(dateFrom || dateTo || minRating)
+  const tagIds = useStore((s) => s.tagIds)
+  const albumIds = useStore((s) => s.albumIds)
+  const folderIds = useStore((s) => s.folderIds)
+  const untagged = useStore((s) => s.untagged)
+  // 含组合筛选（FEAT-18）：空态需给出「清除搜索与筛选」的出路
+  const hasFilter = !!(
+    dateFrom ||
+    dateTo ||
+    minRating ||
+    tagIds.length ||
+    albumIds.length ||
+    folderIds.length ||
+    untagged
+  )
 
   if (folders.length === 0) {
     return (
@@ -225,7 +253,16 @@ function EmptyState(): React.JSX.Element {
       {(keyword || hasFilter) && (
         <button
           onClick={() =>
-            useStore.getState().setFilter({ keyword: '', dateFrom: '', dateTo: '', minRating: 0 })
+            useStore.getState().setFilter({
+              keyword: '',
+              dateFrom: '',
+              dateTo: '',
+              minRating: 0,
+              tagIds: [],
+              albumIds: [],
+              folderIds: [],
+              untagged: false
+            })
           }
           className="rounded-md border border-line px-3 py-1.5 text-xs text-ink2 hover:bg-hover hover:text-ink"
         >

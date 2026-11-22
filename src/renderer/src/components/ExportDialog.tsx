@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from 'react'
-import { FolderOpen, Loader2 } from 'lucide-react'
+import { FolderOpen, Loader2, Trash2 } from 'lucide-react'
 import { useStore } from '../store'
 import { api } from '../lib/api'
 import { parentDir } from '../lib/format'
 import { deletePhotosAction } from '../lib/actions'
-import { GhostButton, Modal, PrimaryButton } from './ui'
+import { ConfirmDialog, GhostButton, Modal, PrimaryButton } from './ui'
 import type { EditPreset, WatermarkOptions } from '@shared/types'
 import { cn } from './ui'
 
@@ -32,6 +32,8 @@ export function ExportDialog(): React.JSX.Element | null {
   const [wmSize, setWmSize] = useState(36)
   const [wmOpacity, setWmOpacity] = useState(60)
   const [busy, setBusy] = useState(false)
+  /** 删除当前选中预设的确认框（FEAT-19：此前预设只能存不能删） */
+  const [delPresetOpen, setDelPresetOpen] = useState(false)
 
   useEffect(() => {
     if (open) {
@@ -161,7 +163,8 @@ export function ExportDialog(): React.JSX.Element | null {
   ]
 
   return (
-    <Modal
+    <>
+      <Modal
       open={open}
       onClose={close}
         title={isConvert ? `转换 ${ids.length} 张照片的格式` : `导出 ${ids.length} 张照片`}
@@ -256,18 +259,28 @@ export function ExportDialog(): React.JSX.Element | null {
         {presets.length > 0 && (
           <div>
             <p className="mb-1.5 text-[12px] text-ink3">编辑预设（可选，写导出副本不改原图）</p>
-            <select
-              value={presetId}
-              onChange={(e) => setPresetId(e.target.value)}
-              className="h-8 w-full rounded-md border border-line bg-panel px-2 text-xs outline-none"
-            >
-              <option value="">不应用</option>
-              {presets.map((x) => (
-                <option key={x.id} value={x.id}>
-                  {x.name}
-                </option>
-              ))}
-            </select>
+            <div className="flex gap-2">
+              <select
+                value={presetId}
+                onChange={(e) => setPresetId(e.target.value)}
+                className="h-8 min-w-0 flex-1 rounded-md border border-line bg-panel px-2 text-xs outline-none"
+              >
+                <option value="">不应用</option>
+                {presets.map((x) => (
+                  <option key={x.id} value={x.id}>
+                    {x.name}
+                  </option>
+                ))}
+              </select>
+              <GhostButton
+                onClick={() => setDelPresetOpen(true)}
+                disabled={!presetId}
+                title="删除当前选中的预设"
+                ariaLabel="删除当前选中的预设"
+              >
+                <Trash2 size={13} />
+              </GhostButton>
+            </div>
           </div>
         )}
 
@@ -375,6 +388,30 @@ export function ExportDialog(): React.JSX.Element | null {
           重名文件自动追加序号，不会覆盖已有文件；旋转方向与星级等应用内编辑不会写入导出副本。
         </p>
       </div>
-    </Modal>
+      </Modal>
+
+      <ConfirmDialog
+        open={delPresetOpen}
+        title="删除编辑预设"
+        message={`将删除预设「${presets.find((x) => x.id === presetId)?.name ?? ''}」。该操作不可撤销，确定继续吗？`}
+        confirmText="删除预设"
+        danger
+        onClose={() => setDelPresetOpen(false)}
+        onConfirm={() => {
+          const id = presetId
+          setDelPresetOpen(false)
+          if (!id) return
+          api
+            .deletePreset(id)
+            .then((list) => {
+              setPresets(list)
+              // 被删预设可能正被选中，回退到「不应用」
+              setPresetId('')
+              useStore.getState().toast('success', '预设已删除')
+            })
+            .catch(() => useStore.getState().toast('error', '删除预设失败'))
+        }}
+      />
+    </>
   )
 }

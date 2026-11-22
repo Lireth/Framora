@@ -55,7 +55,7 @@ export function SettingsModal(): React.JSX.Element | null {
   const setOpen = useStore((s) => s.setSettingsOpen)
   const theme = useStore((s) => s.theme)
   const setTheme = useStore((s) => s.setTheme)
-  const appVersion = useStore((s) => s.appVersion)
+  const appInfo = useStore((s) => s.appInfo)
   const [rebuildOpen, setRebuildOpen] = useState(false)
   const [clearBackupsOpen, setClearBackupsOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
@@ -302,8 +302,12 @@ export function SettingsModal(): React.JSX.Element | null {
           <div>
             <p className="mb-2 font-medium">关于</p>
             <div className="rounded-lg border border-line bg-panel px-3 py-2.5 text-[12px] leading-relaxed text-ink2">
-              <p className="font-semibold text-ink">拾帧 Framora {appVersion || ''}</p>
+              <p className="font-semibold text-ink">拾帧 Framora {appInfo?.version || ''}</p>
               <p>Windows 本地写真照片管理 · Electron + React + SQLite + sharp</p>
+              <p className="text-[11px] text-ink3">
+                Electron {appInfo?.electron || '—'} ·{' '}
+                {appInfo?.platform === 'win32' ? 'Windows' : appInfo?.platform || '—'}
+              </p>
               <p className="text-[11px] text-ink3">
                 所有数据均保存在本机，不主动联网；仅在手动检查更新时访问 GitHub。
               </p>

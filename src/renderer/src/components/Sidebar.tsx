@@ -368,7 +368,7 @@ export function Sidebar(): React.JSX.Element {
     },
   ]
 
-  /** 把当前视图的筛选条件（含标签/相册/文件夹作用域）带进智能相册编辑器 */
+  /** 把当前视图的筛选条件（含组合筛选与标签/相册/文件夹作用域）带进智能相册编辑器 */
   const saveCurrentFiltersAsSmart = (): void => {
     const s = useStore.getState()
     const q: SmartAlbumQuery = {
@@ -379,10 +379,23 @@ export function Sidebar(): React.JSX.Element {
       sort: s.sort,
       dir: s.dir,
     }
-    if (s.scope === 'tag' && s.scopeId) q.tagIds = [s.scopeId]
-    else if (s.scope === 'album' && s.scopeId) q.albumIds = [s.scopeId]
-    else if (s.scope === 'folder' && s.scopeId) q.folderIds = [s.scopeId]
-    else if (s.scope === 'untagged') q.untagged = true
+    // 组合筛选（FEAT-18）与作用域归属合并：同类条件取并集
+    const untagged = s.untagged || s.scope === 'untagged'
+    if (untagged) q.untagged = true
+    if (!untagged) {
+      const tagIds = [
+        ...new Set([...s.tagIds, ...(s.scope === 'tag' && s.scopeId ? [s.scopeId] : [])]),
+      ]
+      if (tagIds.length) q.tagIds = tagIds
+    }
+    const albumIds = [
+      ...new Set([...s.albumIds, ...(s.scope === 'album' && s.scopeId ? [s.scopeId] : [])]),
+    ]
+    if (albumIds.length) q.albumIds = albumIds
+    const folderIds = [
+      ...new Set([...s.folderIds, ...(s.scope === 'folder' && s.scopeId ? [s.scopeId] : [])]),
+    ]
+    if (folderIds.length) q.folderIds = folderIds
     const hasFilter =
       !!q.keyword ||
       !!q.dateFrom ||

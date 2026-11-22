@@ -95,11 +95,46 @@ export function StarRating({
   )
 }
 
+/* ---------- 筛选 chip（FEAT-18）：智能相册编辑器与工具栏筛选面板共用 ---------- */
+
+export function chipCls(active: boolean): string {
+  return cn(
+    'flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11.5px] transition-colors',
+    active
+      ? 'border-[var(--c-accent)] bg-accent-soft text-accent'
+      : 'border-line text-ink2 hover:bg-hover hover:text-ink',
+    'disabled:cursor-not-allowed disabled:opacity-40'
+  )
+}
+
+export function toggleId(list: number[], id: number): number[] {
+  return list.includes(id) ? list.filter((x) => x !== id) : [...list, id]
+}
+
 /* ---------- 模态框 ---------- */
 
-/** Modal 栈：嵌套弹窗（设置页内确认框等）时仅栈顶响应 Escape 与焦点循环，
- *  避免一次 Esc 把两层弹窗同时关掉、用户丢失内层状态 */
+/** 弹层栈：Modal 与非 Modal 浮层（右键菜单 / 标签选择器 / 筛选面板）共用。
+ *  嵌套弹窗（设置页内确认框等）仅栈顶响应 Escape 与焦点循环，避免一次 Esc
+ *  把两层弹窗同时关掉、用户丢失内层状态；全局快捷键守卫（App.tsx）据此在
+ *  任何弹层打开时停用网格快捷键，防止按键「穿透」到底层（OPT-42） */
 const modalStack: symbol[] = []
+
+/** 任何 Modal / 浮层打开时为 true：全局快捷键应让位 */
+export function hasOpenOverlay(): boolean {
+  return modalStack.length > 0
+}
+
+/** 非 Modal 浮层入栈：组件卸载时自动出栈，供 ContextMenu / TagPicker 等使用 */
+export function useOverlayGuard(): void {
+  useEffect(() => {
+    const id = Symbol('overlay')
+    modalStack.push(id)
+    return () => {
+      const i = modalStack.indexOf(id)
+      if (i >= 0) modalStack.splice(i, 1)
+    }
+  }, [])
+}
 const FOCUSABLE =
   'button:not([disabled]), input:not([disabled]):not([type="hidden"]), textarea:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
 
@@ -231,16 +266,22 @@ export function PrimaryButton({
 export function GhostButton({
   children,
   onClick,
-  disabled
+  disabled,
+  title,
+  ariaLabel
 }: {
   children: React.ReactNode
   onClick?: () => void
   disabled?: boolean
+  title?: string
+  ariaLabel?: string
 }): React.JSX.Element {
   return (
     <button
       onClick={onClick}
       disabled={disabled}
+      title={title}
+      aria-label={ariaLabel}
       className="rounded-md border border-line px-3.5 py-1.5 text-sm text-ink2 transition-colors hover:bg-hover hover:text-ink disabled:opacity-40"
     >
       {children}
@@ -473,6 +514,8 @@ export function ContextMenu({
 }): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
   useOutsideClose(ref, onClose)
+  // 右键菜单打开期间进入弹层栈：全局快捷键守卫据此停用网格按键（OPT-42）
+  useOverlayGuard()
   const [pos, setPos] = useState({ left: x, top: y })
   useEffect(() => {
     const el = ref.current

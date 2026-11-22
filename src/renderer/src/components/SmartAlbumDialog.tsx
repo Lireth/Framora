@@ -2,26 +2,12 @@ import React, { useEffect, useState } from 'react'
 import { Check } from 'lucide-react'
 import { useStore, type SortKey } from '../store'
 import { api } from '../lib/api'
-import { cn, GhostButton, Modal, PrimaryButton } from './ui'
+import { chipCls, GhostButton, Modal, PrimaryButton, toggleId } from './ui'
 import { SORT_OPTIONS } from '@shared/formats'
 import type { SmartAlbumInfo, SmartAlbumQuery } from '@shared/types'
 
 const INPUT_CLS =
   'h-8 w-full rounded-md border border-line bg-panel px-2.5 text-xs outline-none focus:border-[var(--c-accent)]'
-
-function chipCls(active: boolean): string {
-  return cn(
-    'flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11.5px] transition-colors',
-    active
-      ? 'border-[var(--c-accent)] bg-accent-soft text-accent'
-      : 'border-line text-ink2 hover:bg-hover hover:text-ink',
-    'disabled:cursor-not-allowed disabled:opacity-40',
-  )
-}
-
-function toggleId(list: number[], id: number): number[] {
-  return list.includes(id) ? list.filter((x) => x !== id) : [...list, id]
-}
 
 /**
  * 智能相册条件编辑器：新建（album=null，draft 为当前筛选）与编辑已有相册共用。

@@ -3,7 +3,16 @@ import { Clock, FilePlus, FolderPlus, Grid3x3, Info, LayoutGrid, Search, Sliders
 import { useStore, type SortKey } from '../store'
 import { emptyTrashAction, importFilesAction, importFolderAction, selectRedundantAction } from '../lib/actions'
 import { SORT_OPTIONS } from '@shared/formats'
-import { cn, ConfirmDialog, IconButton, StarRating, useOutsideClose } from './ui'
+import {
+  chipCls,
+  cn,
+  ConfirmDialog,
+  IconButton,
+  StarRating,
+  toggleId,
+  useOutsideClose,
+  useOverlayGuard
+} from './ui'
 
 function useScopeLabel(): string {
   const scope = useStore((s) => s.scope)
@@ -37,21 +46,45 @@ function useScopeLabel(): string {
 }
 
 function FilterPopover({ onClose }: { onClose: () => void }): React.JSX.Element {
+  const scope = useStore((s) => s.scope)
   const dateFrom = useStore((s) => s.dateFrom)
   const dateTo = useStore((s) => s.dateTo)
   const minRating = useStore((s) => s.minRating)
+  const tagIds = useStore((s) => s.tagIds)
+  const albumIds = useStore((s) => s.albumIds)
+  const folderIds = useStore((s) => s.folderIds)
+  const untagged = useStore((s) => s.untagged)
+  const tags = useStore((s) => s.tags)
+  const albums = useStore((s) => s.albums)
+  const folders = useStore((s) => s.folders)
   const sort = useStore((s) => s.sort)
   const dir = useStore((s) => s.dir)
   const setFilter = useStore((s) => s.setFilter)
   const ref = useRef<HTMLDivElement>(null)
   useOutsideClose(ref, onClose)
+  // 打开期间进入弹层栈：全局快捷键守卫据此停用网格按键（OPT-42）
+  useOverlayGuard()
+
+  /* 组合筛选（FEAT-18）：多标签 AND、多相册/文件夹 OR，语义与智能相册条件一致 */
+  const hasCombo = tagIds.length > 0 || albumIds.length > 0 || folderIds.length > 0 || untagged
 
   return (
     <div
       ref={ref}
-      className="absolute right-0 top-10 z-40 w-[300px] rounded-xl border border-line bg-raised p-4 shadow-2xl animate-popIn"
+      className="absolute right-0 top-10 z-40 max-h-[calc(100vh-64px)] w-[320px] overflow-y-auto rounded-xl border border-line bg-raised p-4 shadow-2xl animate-popIn"
     >
       <div className="space-y-3.5 text-[13px]">
+        {scope === 'smart' && (
+          <p className="text-[11px] leading-relaxed text-ink3">
+            智能相册按其保存的条件过滤（含关键词/日期/星级/组合条件），此面板的筛选不参与计算；
+            未固定排序时排序方式仍生效。
+          </p>
+        )}
+        {scope === 'duplicates' && (
+          <p className="text-[11px] leading-relaxed text-ink3">
+            重复照片视图按簇排列，此面板的筛选不参与计算。
+          </p>
+        )}
         <div>
           <p className="mb-1.5 text-[11.5px] text-ink3">日期范围</p>
           <div className="flex items-center gap-2">
@@ -75,6 +108,86 @@ function FilterPopover({ onClose }: { onClose: () => void }): React.JSX.Element 
           <StarRating value={minRating} onChange={(v) => setFilter({ minRating: v })} size={17} />
         </div>
         <div>
+          <div className="mb-1.5 flex items-center justify-between">
+            <p className="text-[11.5px] text-ink3">标签（同时包含全部所选）</p>
+            <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-ink3">
+              <input
+                type="checkbox"
+                checked={untagged}
+                onChange={(e) =>
+                  setFilter({
+                    untagged: e.target.checked,
+                    // 仅未加标签与标签条件互斥：勾选时清空已选标签
+                    ...(e.target.checked ? { tagIds: [] } : {})
+                  })
+                }
+                className="accent-[var(--c-accent)]"
+              />
+              仅未加标签
+            </label>
+          </div>
+          {tags.length ? (
+            <div className="flex max-h-24 flex-wrap gap-1.5 overflow-y-auto pr-1">
+              {tags.map((t) => (
+                <button
+                  key={t.id}
+                  disabled={untagged}
+                  onClick={() => setFilter({ tagIds: toggleId(tagIds, t.id) })}
+                  className={chipCls(!untagged && tagIds.includes(t.id))}
+                >
+                  <span
+                    className="h-2 w-2 shrink-0 rounded-full border border-black/20"
+                    style={{ background: t.color ?? 'var(--c-ink-3)' }}
+                  />
+                  {t.name}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="text-[11px] text-ink3">暂无标签</p>
+          )}
+        </div>
+        <div>
+          <p className="mb-1.5 text-[11.5px] text-ink3">相册（属于任一所选）</p>
+          {albums.length ? (
+            <div className="flex max-h-24 flex-wrap gap-1.5 overflow-y-auto pr-1">
+              {albums.map((a) => (
+                <button
+                  key={a.id}
+                  onClick={() => setFilter({ albumIds: toggleId(albumIds, a.id) })}
+                  className={chipCls(albumIds.includes(a.id))}
+                >
+                  <span
+                    className="h-2 w-2 shrink-0 rounded-full border border-black/20"
+                    style={{ background: a.color ?? 'var(--c-ink-3)' }}
+                  />
+                  {a.name}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="text-[11px] text-ink3">暂无相册</p>
+          )}
+        </div>
+        <div>
+          <p className="mb-1.5 text-[11.5px] text-ink3">文件夹（限定在任一所选，留空为全库）</p>
+          {folders.length ? (
+            <div className="flex max-h-24 flex-wrap gap-1.5 overflow-y-auto pr-1">
+              {folders.map((f) => (
+                <button
+                  key={f.id}
+                  onClick={() => setFilter({ folderIds: toggleId(folderIds, f.id) })}
+                  className={chipCls(folderIds.includes(f.id))}
+                >
+                  {f.name}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="text-[11px] text-ink3">暂无资料库文件夹</p>
+          )}
+        </div>
+        <div>
           <p className="mb-1.5 text-[11.5px] text-ink3">排序方式</p>
           <div className="flex gap-2">
             <select
@@ -96,9 +209,19 @@ function FilterPopover({ onClose }: { onClose: () => void }): React.JSX.Element 
             </button>
           </div>
         </div>
-        {(dateFrom || dateTo || minRating > 0) && (
+        {(dateFrom || dateTo || minRating > 0 || hasCombo) && (
           <button
-            onClick={() => setFilter({ dateFrom: '', dateTo: '', minRating: 0 })}
+            onClick={() =>
+              setFilter({
+                dateFrom: '',
+                dateTo: '',
+                minRating: 0,
+                tagIds: [],
+                albumIds: [],
+                folderIds: [],
+                untagged: false
+              })
+            }
             className="flex w-full items-center justify-center gap-1.5 rounded-md border border-line py-1.5 text-xs text-ink2 hover:bg-hover hover:text-ink"
           >
             <X size={12} /> 清除筛选条件
@@ -118,6 +241,10 @@ export function Toolbar(): React.JSX.Element {
   const dateFrom = useStore((s) => s.dateFrom)
   const dateTo = useStore((s) => s.dateTo)
   const minRating = useStore((s) => s.minRating)
+  const tagIds = useStore((s) => s.tagIds)
+  const albumIds = useStore((s) => s.albumIds)
+  const folderIds = useStore((s) => s.folderIds)
+  const untagged = useStore((s) => s.untagged)
   const searchHistory = useStore((s) => s.searchHistory)
   const stats = useStore((s) => s.stats)
   const setKeyword = useStore((s) => s.setFilter)
@@ -163,7 +290,13 @@ export function Toolbar(): React.JSX.Element {
   }
 
   const activeFilterCount =
-    (dateFrom ? 1 : 0) + (dateTo ? 1 : 0) + (minRating > 0 ? 1 : 0)
+    (dateFrom ? 1 : 0) +
+    (dateTo ? 1 : 0) +
+    (minRating > 0 ? 1 : 0) +
+    (tagIds.length ? 1 : 0) +
+    (albumIds.length ? 1 : 0) +
+    (folderIds.length ? 1 : 0) +
+    (untagged ? 1 : 0)
 
   return (
     <div className="relative flex h-12 shrink-0 items-center gap-2 border-b border-line bg-app px-4">
@@ -234,7 +367,7 @@ export function Toolbar(): React.JSX.Element {
             <span className="relative">
               <SlidersHorizontal size={15} />
               {activeFilterCount > 0 && (
-                <span className="absolute -right-1.5 -top-1.5 grid h-3.5 w-3.5 place-items-center rounded-full bg-[var(--c-accent)] text-[8px] font-bold text-[#171310]">
+                <span className="absolute -right-1.5 -top-1.5 grid h-3.5 min-w-3.5 place-items-center rounded-full bg-[var(--c-accent)] px-0.5 text-[8px] font-bold text-[#171310]">
                   {activeFilterCount}
                 </span>
               )}

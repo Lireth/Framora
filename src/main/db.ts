@@ -1989,15 +1989,21 @@ export async function queryDuplicates(q: {
   const ids = await duplicatePhotoIds()
   const limit = Math.min(q.limit ?? 50000, 100000)
   const offset = Math.max(0, Math.floor(q.offset ?? 0))
-  // CASE WHEN 以字符串内插拼接：id 来源于自身库，但入口仍按类型约束过滤
-  // 非有限值（OPT-32），异常数据不会进入 SQL
+  // id 来源于自身库，但入口仍按类型约束过滤非有限值（OPT-32），异常数据不会进入 SQL
   const slice = ids.slice(offset, offset + limit).filter((id) => Number.isInteger(id) && id > 0)
   if (!slice.length) return { items: [], total: ids.length }
-  const ph = slice.map(() => '?').join(', ')
-  const caseWhen = slice.map((id, i) => `WHEN ${id} THEN ${i}`).join(' ')
-  const items = stmt(
-    `SELECT ${PHOTO_LITE_COLS} FROM photos p WHERE p.id IN (${ph}) ORDER BY CASE p.id ${caseWhen} END`,
-  ).all(...slice) as PhotoLite[]
+  // 分块 IN 查询 + 内存按 ids 顺序重排（OPT-44）：原先把整段 id 列表直接作为绑定
+  // 参数并用 CASE WHEN 内插排序，重复照片超过 SQLite 变量上限（32766）时默认调用
+  // 路径必抛「Too many parameter variables」，且数万分支的 SQL 文本达 MB 级反复解析
+  const byId = new Map<number, PhotoLite>(
+    chunkedIn(slice, (chunk, ph) =>
+      stmt(`SELECT ${PHOTO_LITE_COLS} FROM photos p WHERE p.id IN (${ph})`).all(chunk) as PhotoLite[]
+    ).map((p) => [p.id, p])
+  )
+  // 簇计算与查询之间被彻底删除的照片行自然缺失，与原 WHERE 语义一致：跳过即可
+  const items = slice
+    .map((id) => byId.get(id))
+    .filter((p): p is PhotoLite => p !== undefined)
   return { items, total: ids.length }
 }
 

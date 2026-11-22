@@ -769,6 +769,56 @@ describe('dupCache 失效语义（第一批修复回归）', () => {
   })
 })
 
+describe('queryDuplicates 分块查询（OPT-44）', () => {
+  /** 批量构造成对同哈希照片：对内距离 0 聚簇，对间经乘法混合散开（距离 > 阈值） */
+  function bulkDupPairs(folderId: number, pairs: number): number[] {
+    const rows = Array.from({ length: pairs * 2 }, (_, i) => ({
+      folder_id: folderId,
+      path: `C:\\pics\\dup-${i}.jpg`,
+      name: `dup-${i}.jpg`,
+      ext: 'jpg',
+      size: 1000 + i,
+      mtime: 1,
+      imported_at: IMPORT_TS,
+    }))
+    const ids = db.insertPhotosBatch(rows)
+    ids.forEach((id, i) => {
+      // Fibonacci 散列：相邻索引的哈希在汉明距离上充分散开，避免退化成单一巨簇
+      const lo = Math.imul(Math.floor(i / 2), 2654435761) >>> 0
+      db.setPhotoPhash(id, lo, 0)
+    })
+    return ids
+  }
+
+  it('跨 900 分批边界：顺序与 total 保持，跨批分页切片正确', async () => {
+    const f = newFolder('C:\\pics')
+    bulkDupPairs(f, 950)
+    const expected = await db.duplicatePhotoIds()
+    expect(expected).toHaveLength(1900)
+
+    const r = await db.queryDuplicates({})
+    expect(r.total).toBe(1900)
+    expect(r.items.map((p) => p.id)).toEqual(expected)
+
+    // 900/批：该页起点恰在两批之间，切片端点亦跨批
+    const page = await db.queryDuplicates({ limit: 950, offset: 900 })
+    expect(page.items.map((p) => p.id)).toEqual(expected.slice(900, 1850))
+  })
+
+  it('重复照片数超过 SQLite 变量上限（33000 > 32766）时默认调用路径可用', async () => {
+    const f = newFolder('C:\\pics')
+    bulkDupPairs(f, 16500)
+    // 旧实现将整段 id 直接作为 IN 参数：> 32766 必抛「Too many parameter variables」
+    const r = await db.queryDuplicates({})
+    expect(r.total).toBe(33000)
+    expect(r.items).toHaveLength(33000)
+    // 末页不足一批：分页路径同样不依赖巨型参数列表
+    const page = await db.queryDuplicates({ limit: 500, offset: 32900 })
+    expect(page.items).toHaveLength(100)
+    expect(page.total).toBe(33000)
+  })
+})
+
 describe('v15 检索文本纳入文件夹名', () => {
   it('按文件夹名检索命中其中照片（存量重算与新插入路径一致）', () => {
     const f = newFolder('C:/travel-photos')

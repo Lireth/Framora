@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { Plus, X } from 'lucide-react'
 import { useStore } from '../store'
 import { api } from '../lib/api'
-import { cn, useOutsideClose } from './ui'
+import { cn, useOutsideClose, useOverlayGuard } from './ui'
 
 /**
  * 标签选择器：
@@ -27,6 +27,8 @@ export function TagPicker({
   const [filter, setFilter] = useState('')
   const ref = useRef<HTMLDivElement>(null)
   useOutsideClose(ref, onClose)
+  // 打开期间进入弹层栈：全局快捷键守卫据此停用网格按键（OPT-42）
+  useOverlayGuard()
 
   useEffect(() => {
     // 单张照片时读取其当前标签

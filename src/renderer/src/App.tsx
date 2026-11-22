@@ -16,7 +16,7 @@ import { CompareView } from './components/CompareView'
 import { SettingsModal } from './components/SettingsModal'
 import { StatsModal } from './components/StatsModal'
 import { ExportDialog } from './components/ExportDialog'
-import { ShortcutHelpModal, Toasts } from './components/ui'
+import { ShortcutHelpModal, Toasts, hasOpenOverlay } from './components/ui'
 import {
   deleteViewerPhotoAction,
   importDroppedPaths,
@@ -166,12 +166,16 @@ export default function App(): React.JSX.Element {
     const handler = (e: KeyboardEvent): void => {
       const s = useStore.getState()
       const t = e.target as HTMLElement
-      if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable) return
+      // SELECT（排序下拉等）聚焦时数字/方向键属于控件本身（OPT-42）
+      if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable) return
       if (s.helpOpen) {
         if (e.key === 'Escape') s.setHelpOpen(false)
         return
       }
-      if (s.settingsOpen || s.exportOpen || s.confirmDeleteOpen) return
+      // 任何 Modal / 浮层（右键菜单、标签选择器、筛选面板、各对话框）打开时一律让位，
+      // 不再逐一枚举弹层开关——此前 SmartAlbumDialog / StatsModal / TagPicker 等不在
+      // 枚举内，弹窗内按 Delete 会叠加弹出底层删除确认（OPT-42）
+      if (hasOpenOverlay()) return
       if (e.key === '?' && !e.ctrlKey && !e.metaKey && !e.altKey) {
         e.preventDefault()
         s.setHelpOpen(true)
@@ -210,7 +214,6 @@ export default function App(): React.JSX.Element {
         return
       }
       if (s.compareIds) return // 对比视图自带键盘处理（CompareView）
-      if (s.settingsOpen || s.exportOpen || s.confirmDeleteOpen) return
       if (e.key === 'Escape') {
         if (s.selection.size) s.clearSelection()
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {

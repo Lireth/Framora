@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { api } from './lib/api'
 import type {
   AlbumInfo,
+  AppInfo,
   FolderInfo,
   LibraryStats,
   PhotoLite,
@@ -34,6 +35,14 @@ export interface Filters {
   dateFrom: string
   dateTo: string
   minRating: number
+  /** 组合筛选（FEAT-18）：必须同时包含这些标签（AND），语义与智能相册条件一致 */
+  tagIds: number[]
+  /** 组合筛选：属于其中任一相册（OR） */
+  albumIds: number[]
+  /** 组合筛选：限定在任一资料库文件夹（OR） */
+  folderIds: number[]
+  /** 组合筛选：仅看未加标签的照片（与标签互斥） */
+  untagged: boolean
   sort: SortKey
   dir: 'asc' | 'desc'
 }
@@ -85,7 +94,8 @@ interface AppState extends Filters {
   helpOpen: boolean
   /** 当前原生拖拽携带的照片 id 与路径（瓦片/查看器拖出会话），at 为发起时间戳供新鲜度校验 */
   draggingPhotos: { ids: number[]; paths: string[]; at: number } | null
-  appVersion: string
+  /** 应用信息（关于页展示 version/Electron 版本/平台，FEAT-19 补全此前未展示的字段） */
+  appInfo: AppInfo | null
   /** 最近一次可撤销的元数据删除（文件夹/标签/相册） */
   undoEntry: UndoEntry | null
 
@@ -245,6 +255,11 @@ function buildQuery(s: AppState): PhotoQuery {
     dateFrom: s.dateFrom || undefined,
     dateTo: s.dateTo || undefined,
     minRating: s.minRating || undefined,
+    // 组合筛选（FEAT-18）：主进程 buildPhotoFilter 对任意 scope 均支持这些附加条件
+    tagIds: s.tagIds.length ? s.tagIds : undefined,
+    albumIds: s.albumIds.length ? s.albumIds : undefined,
+    folderIds: s.folderIds.length ? s.folderIds : undefined,
+    untagged: s.untagged || undefined,
     sort: s.sort,
     dir: s.dir,
   }
@@ -259,6 +274,10 @@ export const useStore = create<AppState>((set, get) => ({
   dateFrom: '',
   dateTo: '',
   minRating: 0,
+  tagIds: [],
+  albumIds: [],
+  folderIds: [],
+  untagged: false,
   sort: 'taken',
   dir: 'desc',
   folders: [],
@@ -297,7 +316,7 @@ export const useStore = create<AppState>((set, get) => ({
   confirmDeleteOpen: false,
   helpOpen: false,
   draggingPhotos: null,
-  appVersion: '',
+  appInfo: null,
   undoEntry: null,
 
   init: async () => {
@@ -371,7 +390,7 @@ export const useStore = create<AppState>((set, get) => ({
     get().refreshPhotos()
     api
       .info()
-      .then((i) => set({ appVersion: i.version }))
+      .then((i) => set({ appInfo: i }))
       .catch(() => undefined)
   },
 

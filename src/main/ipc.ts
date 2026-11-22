@@ -617,7 +617,6 @@ export function registerIpc(): void {
     let skipped = 0
     let failed = 0
     const used = new Set<string>()
-    const touchedPaths: string[] = []
     for (let i = 0; i < ids.length; i++) {
       const row = db.getPhotoRow(ids[i])
       if (!row || row.missing || !fs.existsSync(row.path)) {
@@ -638,9 +637,13 @@ export function registerIpc(): void {
           skipped++
           continue
         }
+        // 重命名的 unlink/add 监听事件异步到达（awaitWriteFinish 约 600ms），必须在
+        // rename 之前逐对抑制：大批量超过该延迟后，循环结束才抑制会让早期事件
+        // 先行触发——旧行误标缺失、新路径重复入库、随后撞唯一路径索引计 failed。
+        // suppressTracking 为集合累加 + 15s 滑动清空，逐对调用使抑制窗口覆盖整批。
+        suppressTracking([row.path, newPath])
         await fs.promises.rename(row.path, newPath)
         used.add(newPath.toLowerCase())
-        touchedPaths.push(row.path, newPath)
         db.updatePhotoPath(row.id, newPath, newName)
         // 路径哈希变化：编辑备份重绑定到新路径，历史保持可恢复（O3）
         rekeyEditBackups(row.id, newPath)
@@ -650,8 +653,6 @@ export function registerIpc(): void {
         failed++
       }
     }
-    // 重命名的 unlink/add 监听事件异步到达，按路径抑制避免误标缺失/重复入库
-    suppressTracking(touchedPaths)
     return { renamed, skipped, failed }
   })
   ipcMain.handle('photos:batchRate', (_e, ids: number[], rating: number) =>

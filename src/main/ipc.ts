@@ -12,6 +12,7 @@ import {
   isImagePath,
   suppressTracking,
   trackNewFile,
+  waitForScansIdle,
 } from './scanner'
 import {
   bumpThumbGeneration,
@@ -336,6 +337,13 @@ export function registerIpc(): void {
       filters: [{ name: 'SQLite 数据库', extensions: ['db'] }],
     })
     if (r.canceled || !r.filePaths[0]) return null
+    // 换库前置闸门（OPT-16）：db.importBackup 会 closeDb → 文件替换 → 重开，
+    // 在途扫描闭包持有的语句将指向已关闭/被移走的库文件（SQLITE_MISUSE 或 IO 错误），
+    // 且取消令牌无法跨换库生效。先取消扫描并等待全部退出、清空缩略图待生成队列，
+    // 再执行换库；导出任务只读已解析到内存的行且产物写库外，不受换库影响。
+    cancelScan()
+    await waitForScansIdle()
+    clearThumbQueue()
     await db.importBackup(r.filePaths[0])
     // 换库后旧库实体 id 全部失效，撤销栈必须清空
     clearUndoStack()

@@ -112,6 +112,8 @@ interface AppState extends Filters {
   setConfirmDeleteOpen: (v: boolean) => void
   setHelpOpen: (v: boolean) => void
   setDraggingPhotos: (ids: number[] | null, paths?: string[]) => void
+  /** 换库（备份导入）后清空缩略图事件缓冲与暂存：旧库 id 与新库照片错位，绝不能套用 */
+  resetThumbStash: () => void
   applyThumbEvents: (list: { id: number; status: 'ok' | 'fail' }[]) => void
   patchPhoto: (id: number, patch: Partial<PhotoLite> & { mtime?: number }) => void
   /** 批量同补丁更新（单次遍历）：网格快捷键批量评分等场景，避免逐张 patch 的 O(n·k) */
@@ -636,6 +638,15 @@ export const useStore = create<AppState>((set, get) => ({
       return p ? [p] : []
     })
     set({ draggingPhotos: { ids, paths: known, at: Date.now() } })
+  },
+
+  resetThumbStash: () => {
+    pendingThumb.clear()
+    thumbBuffer = []
+    if (thumbTimer !== null) {
+      clearTimeout(thumbTimer)
+      thumbTimer = null
+    }
   },
 
   applyThumbEvents: (list) => {

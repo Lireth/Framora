@@ -93,9 +93,17 @@ async function* walk(
 
 /** 进行中的扫描任务（取消标记）：library:cancelScan 使全部在途扫描尽快中止 */
 const activeScans = new Set<{ cancelled: boolean }>()
+/** 扫描全部退出时的等待者（备份导入换库等需要独占库句柄的操作用） */
+const scanIdleWaiters: (() => void)[] = []
 
 export function cancelScan(): void {
   for (const t of activeScans) t.cancelled = true
+}
+
+/** 等待全部在途扫描结束：应先 cancelScan() 再等待（取消令牌在各阶段边界生效） */
+export function waitForScansIdle(): Promise<void> {
+  if (!activeScans.size) return Promise.resolve()
+  return new Promise((resolve) => scanIdleWaiters.push(resolve))
 }
 
 interface FileStat {
@@ -258,6 +266,10 @@ export async function importFolder(folderPath: string): Promise<ImportResult> {
     throw err
   } finally {
     activeScans.delete(token)
+    if (!activeScans.size) {
+      // 全部扫描退出：释放等待者（importBackup 换库闸门等）
+      for (const w of scanIdleWaiters.splice(0)) w()
+    }
   }
 }
 

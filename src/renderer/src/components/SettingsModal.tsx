@@ -396,6 +396,8 @@ export function SettingsModal(): React.JSX.Element | null {
             .importBackup()
             .then((r) => {
               if (!r) return
+              // 换库后旧库的缩略图事件缓冲/暂存按 id 套用会错位，先清空再刷新
+              useStore.getState().resetThumbStash()
               useStore
                 .getState()
                 .toast('success', `导入完成：${r.photos} 张照片${r.rebuiltThumbs ? `，补建 ${r.rebuiltThumbs} 个缩略图` : ''}`)

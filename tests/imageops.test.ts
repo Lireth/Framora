@@ -207,9 +207,8 @@ describe('exportPhotos（两阶段并行导出回归）', () => {
     expect(r).toEqual({ exported: 6, failed: 0 })
     const names = ['001', '002', '003', '004', '005', '006'].map((n) => `${n}.webp`)
     for (const n of names) expect(readFileSync(path.join(dest4, n)).length).toBeGreaterThan(0)
-    expect(broadcasts).toHaveLength(6)
-    expect(broadcasts.map((b) => b.done).sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5, 6])
-    expect(broadcasts.every((b) => b.total === 6)).toBe(true)
+    // 进度节流（OPT-19）：每 25 张或末张推送——6 张导出只产生末张事件
+    expect(broadcasts).toEqual([{ done: 6, total: 6 }])
   })
 
   it('源文件缺失计入 failed 且仍广播进度', async () => {
@@ -218,6 +217,7 @@ describe('exportPhotos（两阶段并行导出回归）', () => {
     addRow({ id: 9, file: undefined })
     const r = await exportPhotos([9], destDir, { format: 'jpeg' } as ExportOptions)
     expect(r).toEqual({ exported: 0, failed: 1 })
+    // 单张导出：末张即首次推送
     expect(broadcasts).toEqual([{ done: 1, total: 1 }])
   })
 

@@ -121,7 +121,7 @@ describe('批量星级 / 相册 / 回收站（集合写入）', () => {
 })
 
 describe('搜索文本脏队列', () => {
-  it('v12 移除相册同步搜索触发器，保留照片插入触发器', () => {
+  it('v13 移除照片插入同步搜索触发器（全量脏队列化），相册触发器亦不存在', () => {
     const raw = new Database(path.join(userData, 'framora.db'), { readonly: true })
     try {
       const names = (
@@ -129,10 +129,14 @@ describe('搜索文本脏队列', () => {
           name: string
         }[]
       ).map((r) => r.name)
-      expect(names).toContain('photos_search_insert')
+      // v13 起插入路径同样并入脏队列：仅保留 FTS 同步触发器（insert/delete/update）
+      expect(names).not.toContain('photos_search_insert')
       expect(names).not.toContain('album_photos_search_insert')
       expect(names).not.toContain('album_photos_search_delete')
       expect(names).not.toContain('albums_search_rename')
+      expect(names).toEqual(
+        expect.arrayContaining(['photos_fts_insert', 'photos_fts_delete', 'photos_fts_update']),
+      )
     } finally {
       raw.close()
     }

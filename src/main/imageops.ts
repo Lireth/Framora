@@ -100,6 +100,9 @@ export async function exportPhotos(
         else if (fmt === 'png') ext = 'png'
         // original 保持 RAW 扩展名会产出 JPEG 内容配 RAW 扩展名的文件，统一落为 jpg
         else if (rawPreviewSrc) ext = 'jpg'
+        // original 保持 GIF/BMP 扩展名会产出重编码内容配原扩展名的文件：
+        // 重编码管线不支持回写这两种格式，统一落为 PNG（导出是副本，不涉及写回守卫）
+        else if (row.ext === 'gif' || row.ext === 'bmp') ext = 'png'
       }
       const { outPath } = pickName(destDir, base, ext, used)
       used.add(outPath.toLowerCase())
@@ -152,6 +155,9 @@ export async function exportPhotos(
             else if (t.fmt === 'png') pipe = pipe.png()
             else if (t.srcExt === 'webp') pipe = pipe.webp({ quality: 90 })
             else if (t.srcExt === 'png') pipe = pipe.png()
+            // 与上方 ext 映射配套：GIF/BMP 落 PNG、TIFF 保持 TIFF，避免内容与扩展名不符
+            else if (t.srcExt === 'gif' || t.srcExt === 'bmp') pipe = pipe.png()
+            else if (t.srcExt === 'tif' || t.srcExt === 'tiff') pipe = pipe.tiff()
             else pipe = pipe.jpeg({ quality: 92 })
             await pipe.toFile(t.outPath)
           }
@@ -476,6 +482,10 @@ export async function saveEdits(
   if (!row) throw new Error('照片不存在')
   if (!fs.existsSync(row.path)) throw new Error('源文件已丢失，无法编辑')
   if (isRawExt(row.ext)) throw new Error('RAW 文件不支持写回编辑，请使用导出转换格式')
+  // GIF（动画写回会丢帧）与 BMP（无编码器）不支持写回：否则会落入下方 else 分支
+  // 静默产出 JPEG 内容并 atomicReplace 覆盖原文件，属数据破坏
+  if (row.ext === 'gif' || row.ext === 'bmp')
+    throw new Error('GIF/BMP 文件不支持写回编辑，请使用导出转换格式')
   const backupName = backupNameOf(id, row.path, Date.now(), path.extname(row.path))
   const backupPath = path.join(backupsDir(), backupName)
   // 备份副本与临时编码输出分别落在两个目录，需各自探测余量，避免写到一半 ENOSPC
@@ -532,6 +542,7 @@ export async function saveEdits(
     if (row.ext === 'jpg' || row.ext === 'jpeg') pipe = pipe.jpeg({ quality: 92 })
     else if (row.ext === 'webp') pipe = pipe.webp({ quality: 90 })
     else if (row.ext === 'png') pipe = pipe.png()
+    else if (row.ext === 'tif' || row.ext === 'tiff') pipe = pipe.tiff()
     else pipe = pipe.jpeg({ quality: 92 })
 
     await pipe.toFile(tmp)

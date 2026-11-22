@@ -9,7 +9,14 @@ import { broadcastExport } from './scanner'
 import { logError } from './log'
 import { assertFreeSpace } from './disk'
 import { isRawExt } from '@shared/formats'
-import type { BackupInfo, CleanupResult, ExportOptions, ExportResult } from '@shared/types'
+import type {
+  BackupInfo,
+  CleanupResult,
+  EditAdjustments,
+  ExportOptions,
+  ExportResult,
+  WatermarkOptions,
+} from '@shared/types'
 
 function clamp(v: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, v))
@@ -48,6 +55,8 @@ interface ExportTask {
   srcExt: string
   quality: number
   maxSide?: number
+  adjust?: EditAdjustments
+  watermark?: WatermarkOptions
 }
 
 /** 导出重编码并发数：与 libvips 内部线程池配合，重叠 I/O 等待 */
@@ -90,8 +99,15 @@ export async function exportPhotos(
         continue
       }
       const base = applyTemplate(opts.nameTemplate ?? '{name}', row, i)
+      // 有调整/水印时 original 格式也必须走重编码管线（否则变换被静默跳过）
       const noTransform =
-        fmt === 'original' && !opts.maxSide && !row.orientation && !row.flip_h && !row.flip_v
+        fmt === 'original' &&
+        !opts.maxSide &&
+        !row.orientation &&
+        !row.flip_h &&
+        !row.flip_v &&
+        !opts.adjust &&
+        !opts.watermark
       // sharp 预编译 libvips 不含 libraw，无法解码 RAW 本体；需转码时改用嵌入预览（JPEG）作为源
       const rawPreviewSrc = !noTransform && isRawExt(row.ext)
       let ext = row.ext
@@ -119,7 +135,9 @@ export async function exportPhotos(
         fmt,
         srcExt: row.ext,
         quality: opts.quality ?? 90,
-        maxSide: opts.maxSide
+        maxSide: opts.maxSide,
+        adjust: opts.adjust,
+        watermark: opts.watermark
       })
     }
 
@@ -149,6 +167,15 @@ export async function exportPhotos(
             if (t.flipV) pipe = pipe.flip()
             if (t.maxSide) {
               pipe = pipe.resize(t.maxSide, t.maxSide, { fit: 'inside', withoutEnlargement: true })
+            }
+            // 编辑预设调整（FEAT-10）：与查看器保存同一套算子
+            if (t.adjust) applyAdjustments(pipe, t.adjust)
+            // 文字水印（FEAT-11）：管线末端合成（重力作用于缩放后的最终画布）
+            if (t.watermark) {
+              const out = await estimateOutDims(srcInput, t.orientation, t.maxSide)
+              const overlay = await watermarkSvg(t.watermark, out)
+              const gravity = watermarkGravity(t.watermark.position)
+              pipe = pipe.composite([{ input: overlay, ...(gravity ? { gravity } : {}) }])
             }
             const q = clamp(t.quality, 10, 100)
             if (t.fmt === 'jpeg') pipe = pipe.jpeg({ quality: q })
@@ -180,6 +207,109 @@ export async function exportPhotos(
     return token.cancelled ? { exported, failed, cancelled: true } : { exported, failed }
   } finally {
     activeExports.delete(token)
+  }
+}
+
+/**
+ * 调整算子（FEAT-10 自 saveEdits 抽取）：亮度/饱和度 modulate + 色温色调对比度
+ * 逐通道 linear + 锐化。saveEdits 与导出/转换管线共用，保证预设与单张编辑观感一致。
+ */
+function applyAdjustments(pipe: sharp.Sharp, a: EditAdjustments): void {
+  const brightness = clamp(1 + (a.brightness ?? 0) / 100, 0.1, 2)
+  const saturation = clamp(1 + (a.saturation ?? 0) / 100, 0, 3)
+  const k = clamp(1 + (a.contrast ?? 0) / 100, 0.4, 1.8)
+  // 色温：暖(+) 红↑蓝↓；色调：品红(+) 绿↓；与对比度合并为逐通道 linear
+  const t = clamp(a.temperature ?? 0, -100, 100) / 100
+  const tint = clamp(a.tint ?? 0, -100, 100) / 100
+  const rGain = k * (1 + t * 0.3)
+  const gGain = k * (1 - tint * 0.25)
+  const bGain = k * (1 - t * 0.3)
+  pipe.modulate({ brightness, saturation }).linear(
+    [rGain, gGain, bGain],
+    [-(k - 1) * 128, -(k - 1) * 128, -(k - 1) * 128]
+  )
+  if (a.sharpen && a.sharpen > 0) {
+    pipe.sharpen({ sigma: 0.3 + (clamp(a.sharpen, 0, 100) / 100) * 1.7 })
+  }
+}
+
+/** XML 转义（水印文本进 SVG） */
+function escapeXml(text: string): string {
+  return text
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&apos;')
+}
+
+/** 输出画布尺寸估算：EXIF 旋转 → 应用旋转 → maxSide 缩放（与导出管线变换序一致） */
+async function estimateOutDims(
+  srcInput: string | Buffer,
+  orientation: number,
+  maxSide?: number
+): Promise<{ w: number; h: number }> {
+  const meta = await sharp(srcInput, { failOn: 'none' }).metadata()
+  let w = meta.width ?? 0
+  let h = meta.height ?? 0
+  if ((meta.orientation ?? 1) >= 5 && (meta.orientation ?? 1) <= 8) [w, h] = [h, w]
+  if (orientation === 90 || orientation === 270) [w, h] = [h, w]
+  if (maxSide && Math.max(w, h) > maxSide) {
+    const k = maxSide / Math.max(w, h)
+    w = Math.max(1, Math.round(w * k))
+    h = Math.max(1, Math.round(h * k))
+  }
+  return { w: Math.max(1, w), h: Math.max(1, h) }
+}
+
+/**
+ * 文字水印 SVG（FEAT-11）：白色文字 + 半透明黑描边保证浅底可读；
+ * position/tile 两种布局。composite 在 sharp 管线末端执行，
+ * 重力定位作用于最终画布（含缩放后的尺寸）。
+ */
+async function watermarkSvg(
+  wm: WatermarkOptions,
+  out: { w: number; h: number }
+): Promise<Buffer> {
+  const fsz = Math.max(8, Math.min(400, Math.round(wm.fontSize)))
+  const text = escapeXml(wm.text.slice(0, 60)) || 'Framora'
+  const opacity = clamp(wm.opacity, 1, 100) / 100
+  const stroke = Math.max(1, Math.round(fsz / 22))
+  const textAttrs = `font-family="sans-serif" font-size="${fsz}" font-weight="600" fill="#ffffff" fill-opacity="${opacity}" stroke="#000000" stroke-opacity="${opacity * 0.55}" stroke-width="${stroke}" paint-order="stroke"`
+  // 估算文字宽度：CJK 字符≈1em，其余≈0.55em
+  let textW = 0
+  for (const ch of wm.text.slice(0, 60)) textW += ch.charCodeAt(0) > 0x2e7f ? fsz : fsz * 0.55
+  textW = Math.max(fsz, Math.round(textW)) + stroke * 2
+  const textH = Math.round(fsz * 1.3)
+  if (wm.position === 'tile') {
+    const stepX = Math.max(textW + fsz * 2, 1)
+    const stepY = Math.max(textH + fsz * 2.5, 1)
+    const parts: string[] = []
+    for (let y = out.h * 0.1; y < out.h + stepY; y += stepY) {
+      for (let x = -textW; x < out.w + stepX; x += stepX) {
+        parts.push(
+          `<text x="${Math.round(x)}" y="${Math.round(y)}" ${textAttrs} transform="rotate(-30 ${Math.round(x)} ${Math.round(y)})">${text}</text>`
+        )
+      }
+    }
+    return Buffer.from(
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${out.w}" height="${out.h}">${parts.join('')}</svg>`
+    )
+  }
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${textW}" height="${textH}"><text x="${stroke}" y="${Math.round(textH * 0.78)}" ${textAttrs}>${text}</text></svg>`
+  return Buffer.from(svg)
+}
+
+function watermarkGravity(
+  position: WatermarkOptions['position']
+): 'northwest' | 'northeast' | 'southwest' | 'southeast' | 'centre' | undefined {
+  switch (position) {
+    case 'tl': return 'northwest'
+    case 'tr': return 'northeast'
+    case 'bl': return 'southwest'
+    case 'br': return 'southeast'
+    case 'center': return 'centre'
+    default: return undefined // tile：SVG 自带全幅尺寸，无重力
   }
 }
 
@@ -585,22 +715,7 @@ export async function saveEdits(
         pipe = pipe.extract({ left, top, width, height })
       }
     }
-    const brightness = clamp(1 + (edit.brightness ?? 0) / 100, 0.1, 2)
-    const saturation = clamp(1 + (edit.saturation ?? 0) / 100, 0, 3)
-    const k = clamp(1 + (edit.contrast ?? 0) / 100, 0.4, 1.8)
-    // 色温：暖(+) 红↑蓝↓；色调：品红(+) 绿↓；与对比度合并为逐通道 linear
-    const t = clamp(edit.temperature ?? 0, -100, 100) / 100
-    const tint = clamp(edit.tint ?? 0, -100, 100) / 100
-    const rGain = k * (1 + t * 0.3)
-    const gGain = k * (1 - tint * 0.25)
-    const bGain = k * (1 - t * 0.3)
-    pipe.modulate({ brightness, saturation }).linear(
-      [rGain, gGain, bGain],
-      [-(k - 1) * 128, -(k - 1) * 128, -(k - 1) * 128]
-    )
-    if (edit.sharpen && edit.sharpen > 0) {
-      pipe.sharpen({ sigma: 0.3 + (clamp(edit.sharpen, 0, 100) / 100) * 1.7 })
-    }
+    applyAdjustments(pipe, edit)
 
     // 保持源格式；PNG 保持无损，JPEG 默认 q92
     if (row.ext === 'jpg' || row.ext === 'jpeg') pipe = pipe.jpeg({ quality: 92 })

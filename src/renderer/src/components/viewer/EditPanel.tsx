@@ -18,7 +18,7 @@ import {
 import { useStore } from '../../store'
 import { api } from '../../lib/api'
 import { formatBytes, formatDateTime } from '../../lib/format'
-import { cn, PrimaryButton, GhostButton } from '../ui'
+import { cn, PrimaryButton, GhostButton, InputDialog } from '../ui'
 import { ASPECT_RATIOS, EDIT_RESET, type Aspect, type EditState } from './types'
 import type { BackupInfo, PhotoLite } from '@shared/types'
 
@@ -42,6 +42,7 @@ export function EditPanel({
   onToggleCrop: () => void
 }): React.JSX.Element {
   const [saving, setSaving] = useState(false)
+  const [presetNameOpen, setPresetNameOpen] = useState(false)
   const [exporting, setExporting] = useState(false)
 
   const slider = (
@@ -251,6 +252,38 @@ export function EditPanel({
       >
         <RotateCcw size={12} /> 重置调整
       </button>
+      <button
+        className="mt-1.5 flex h-8 w-full items-center justify-center gap-1.5 rounded-md border border-white/15 text-[12px] text-white/70 hover:bg-white/10"
+        onClick={() => setPresetNameOpen(true)}
+        title="把当前调整参数保存为预设，批量导出/转换时可应用"
+      >
+        存为预设…
+      </button>
+      <InputDialog
+        open={presetNameOpen}
+        title="保存编辑预设"
+        placeholder="例如：暖调柔肤"
+        onClose={() => setPresetNameOpen(false)}
+        onConfirm={async (name) => {
+          try {
+            await api.savePreset({
+              id: crypto.randomUUID(),
+              name,
+              adjust: {
+                brightness: edit.brightness,
+                contrast: edit.contrast,
+                saturation: edit.saturation,
+                temperature: edit.temperature,
+                tint: edit.tint,
+                sharpen: edit.sharpen,
+              },
+            })
+            useStore.getState().toast('success', '预设已保存（批量导出/转换时可应用）')
+          } catch (e) {
+            useStore.getState().toast('error', e instanceof Error ? e.message : '保存预设失败')
+          }
+        }}
+      />
 
       <div className="mt-4 space-y-2 border-t border-white/10 pt-3">
         <button

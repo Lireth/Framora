@@ -5,6 +5,7 @@ import { api } from '../lib/api'
 import { parentDir } from '../lib/format'
 import { deletePhotosAction } from '../lib/actions'
 import { GhostButton, Modal, PrimaryButton } from './ui'
+import type { EditPreset, WatermarkOptions } from '@shared/types'
 import { cn } from './ui'
 
 type Fmt = 'original' | 'jpeg' | 'webp' | 'png' | 'avif'
@@ -24,6 +25,12 @@ export function ExportDialog(): React.JSX.Element | null {
   const [maxSide, setMaxSide] = useState(0)
   const [quality, setQuality] = useState(92)
   const [nameTemplate, setNameTemplate] = useState('{name}')
+  const [presets, setPresets] = useState<EditPreset[]>([])
+  const [presetId, setPresetId] = useState('')
+  const [wmText, setWmText] = useState('')
+  const [wmPos, setWmPos] = useState<'tl' | 'tr' | 'bl' | 'br' | 'center' | 'tile'>('br')
+  const [wmSize, setWmSize] = useState(36)
+  const [wmOpacity, setWmOpacity] = useState(60)
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
@@ -33,6 +40,11 @@ export function ExportDialog(): React.JSX.Element | null {
       setMaxSide(0)
       setQuality(92)
       setNameTemplate('{name}')
+      setPresetId('')
+      api
+        .listPresets()
+        .then(setPresets)
+        .catch(() => setPresets([]))
     }
   }, [open])
 
@@ -45,6 +57,11 @@ export function ExportDialog(): React.JSX.Element | null {
     if (d) setDir(d)
   }
 
+  /** 水印参数组装：文本为空则不启用（FEAT-11） */
+  const buildWatermark = (): WatermarkOptions | undefined =>
+    wmText.trim()
+      ? { text: wmText.trim().slice(0, 60), position: wmPos, fontSize: wmSize, opacity: wmOpacity }
+      : undefined
   const run = async (): Promise<void> => {
     // 库内转换（FEAT-06）：逐张导出到源文件夹（复用导出管线与防覆盖命名），
     // 全部完成后源文件一次性移入应用内回收站（可还原）
@@ -64,6 +81,8 @@ export function ExportDialog(): React.JSX.Element | null {
             format: fmt,
             quality,
             maxSide: maxSide || undefined,
+            adjust: presets.find((x) => x.id === presetId)?.adjust,
+            watermark: buildWatermark(),
           })
           if (r.cancelled) {
             cancelled = true
@@ -101,7 +120,9 @@ export function ExportDialog(): React.JSX.Element | null {
         format: fmt,
         maxSide: maxSide || undefined,
         quality,
-        nameTemplate: nameTemplate.trim() || undefined
+        nameTemplate: nameTemplate.trim() || undefined,
+        adjust: presets.find((x) => x.id === presetId)?.adjust,
+        watermark: buildWatermark(),
       })
       if (r.cancelled) {
         useStore
@@ -230,6 +251,92 @@ export function ExportDialog(): React.JSX.Element | null {
               </button>
             ))}
           </div>
+        </div>
+
+        {presets.length > 0 && (
+          <div>
+            <p className="mb-1.5 text-[12px] text-ink3">编辑预设（可选，写导出副本不改原图）</p>
+            <select
+              value={presetId}
+              onChange={(e) => setPresetId(e.target.value)}
+              className="h-8 w-full rounded-md border border-line bg-panel px-2 text-xs outline-none"
+            >
+              <option value="">不应用</option>
+              {presets.map((x) => (
+                <option key={x.id} value={x.id}>
+                  {x.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        <div>
+          <p className="mb-1.5 text-[12px] text-ink3">文字水印（可选）</p>
+          <input
+            value={wmText}
+            onChange={(e) => setWmText(e.target.value)}
+            placeholder="水印文字，留空则不启用"
+            maxLength={60}
+            className="h-8 w-full rounded-md border border-line bg-panel px-2.5 text-xs outline-none focus:border-[var(--c-accent)]"
+          />
+          {wmText.trim() && (
+            <div className="mt-2 space-y-2">
+              <div className="flex gap-1.5">
+                {(
+                  [
+                    ['tl', '左上'],
+                    ['tr', '右上'],
+                    ['bl', '左下'],
+                    ['br', '右下'],
+                    ['center', '居中'],
+                    ['tile', '平铺']
+                  ] as const
+                ).map(([v, label]) => (
+                  <button
+                    key={v}
+                    onClick={() => setWmPos(v)}
+                    className={cn(
+                      'flex-1 rounded-md border px-1 py-1 text-[11px] transition-colors',
+                      wmPos === v
+                        ? 'border-[var(--c-accent)] bg-accent-soft text-accent'
+                        : 'border-line text-ink2 hover:bg-hover hover:text-ink'
+                    )}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <div>
+                <div className="mb-1 flex items-center justify-between text-[11px] text-ink3">
+                  <span>字号</span>
+                  <span>{wmSize}px</span>
+                </div>
+                <input
+                  type="range"
+                  min={12}
+                  max={200}
+                  value={wmSize}
+                  onChange={(e) => setWmSize(Number(e.target.value))}
+                  className="w-full"
+                />
+              </div>
+              <div>
+                <div className="mb-1 flex items-center justify-between text-[11px] text-ink3">
+                  <span>不透明度</span>
+                  <span>{wmOpacity}%</span>
+                </div>
+                <input
+                  type="range"
+                  min={10}
+                  max={100}
+                  value={wmOpacity}
+                  onChange={(e) => setWmOpacity(Number(e.target.value))}
+                  className="w-full"
+                />
+              </div>
+            </div>
+          )}
         </div>
 
         {(fmt === 'jpeg' || fmt === 'webp' || fmt === 'avif') && (

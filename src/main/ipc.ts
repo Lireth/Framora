@@ -58,8 +58,10 @@ import {
 } from './updater'
 import type {
   DeleteResult,
+  EditAdjustments,
   EditSpec,
   ExportOptions,
+  EditPreset,
   FolderInfo,
   MetaPair,
   PhotoQuery,
@@ -77,6 +79,37 @@ const undoStore = new UndoStore({
   read: () => db.getSetting('undoStack'),
   write: (raw) => db.setSetting('undoStack', raw),
 })
+
+/* ---------- 编辑预设（FEAT-10）---------- */
+
+function readPresets(): EditPreset[] {
+  try {
+    const raw = db.getSetting('editPresets')
+    if (!raw) return []
+    const list = JSON.parse(raw) as unknown
+    if (!Array.isArray(list)) return []
+    return list.flatMap((x) => {
+      const p = x as Partial<EditPreset>
+      if (!p || typeof p.id !== 'string' || typeof p.name !== 'string' || !p.name.trim()) return []
+      return [{ id: p.id, name: p.name, adjust: sanitizeAdjustments(p.adjust) }]
+    })
+  } catch {
+    return []
+  }
+}
+
+function sanitizeAdjustments(a: EditAdjustments | undefined): EditAdjustments {
+  const clamp100 = (v: unknown, lo: number, hi: number): number | undefined =>
+    typeof v === 'number' && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : undefined
+  return {
+    brightness: clamp100(a?.brightness, -100, 100),
+    contrast: clamp100(a?.contrast, -100, 100),
+    saturation: clamp100(a?.saturation, -100, 100),
+    temperature: clamp100(a?.temperature, -100, 100),
+    tint: clamp100(a?.tint, -100, 100),
+    sharpen: clamp100(a?.sharpen, 0, 100),
+  }
+}
 
 export function registerIpc(): void {
   // 旧版编辑备份（裸 id 命名）按当前库一次性重绑定到路径哈希命名（O3）
@@ -260,6 +293,23 @@ export function registerIpc(): void {
 
   ipcMain.handle('library:stats', () => db.libraryStats())
   ipcMain.handle('library:distribution', () => db.libraryDistribution())
+
+  /* ---------- 编辑预设（FEAT-10）：持久化在 settings 的 editPresets 键 ---------- */
+  ipcMain.handle('presets:list', () => readPresets())
+  ipcMain.handle('presets:save', (_e, preset: EditPreset) => {
+    const name = typeof preset?.name === 'string' ? preset.name.trim().slice(0, 40) : ''
+    if (!name) throw new Error('预设名称不能为空')
+    const adjust = sanitizeAdjustments(preset?.adjust)
+    const list = readPresets().filter((x) => x.id !== preset.id)
+    list.push({ id: preset.id || crypto.randomUUID(), name, adjust })
+    db.setSetting('editPresets', JSON.stringify(list))
+    return list
+  })
+  ipcMain.handle('presets:delete', (_e, id: string) => {
+    const list = readPresets().filter((x) => x.id !== id)
+    db.setSetting('editPresets', JSON.stringify(list))
+    return list
+  })
 
   /** 导出索引库备份为单文件 */
   ipcMain.handle('library:exportBackup', async () => {

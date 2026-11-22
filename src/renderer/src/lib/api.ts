@@ -6,6 +6,7 @@ import type {
   DeleteResult,
   EditSpec,
   ExifData,
+  EditPreset,
   ExportOptions,
   ExportResult,
   FolderInfo,
@@ -67,6 +68,9 @@ export const api = {
   removeFolder: (id: number): Promise<{ removed: number }> => call('library:removeFolder', id),
   stats: (): Promise<LibraryStats> => call('library:stats'),
   distribution: (): Promise<LibraryDistribution> => call('library:distribution'),
+  listPresets: (): Promise<EditPreset[]> => call('presets:list'),
+  savePreset: (preset: EditPreset): Promise<EditPreset[]> => call('presets:save', preset),
+  deletePreset: (id: string): Promise<EditPreset[]> => call('presets:delete', id),
   exportBackup: (): Promise<string | null> => call('library:exportBackup'),
   importBackup: (): Promise<{ photos: number; rebuiltThumbs: number } | null> =>
     call('library:importBackup'),

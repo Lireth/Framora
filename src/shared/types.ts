@@ -120,12 +120,43 @@ export interface EditSpec {
   crop?: CropRect
 }
 
+/** 调整类编辑参数（FEAT-10 预设；不含裁剪/旋转等与单张几何相关的操作） */
+export interface EditAdjustments {
+  brightness?: number
+  contrast?: number
+  saturation?: number
+  temperature?: number
+  tint?: number
+  sharpen?: number
+}
+
+/** 编辑预设：查看器调整参数的命名快照，批量导出/转换时应用 */
+export interface EditPreset {
+  id: string
+  name: string
+  adjust: EditAdjustments
+}
+
+/** 文字水印（FEAT-11）：导出/转换管线末端合成 */
+export interface WatermarkOptions {
+  text: string
+  position: 'tl' | 'tr' | 'bl' | 'br' | 'center' | 'tile'
+  /** 字号 px（输出坐标系） */
+  fontSize: number
+  /** 不透明度 0-100 */
+  opacity: number
+}
+
 export interface ExportOptions {
   maxSide?: number
   quality?: number
   format?: 'original' | 'jpeg' | 'webp' | 'png' | 'avif'
   /** 文件名模板，支持 {name} 原文件名、{date} 拍摄日期、{index} 三位序号 */
   nameTemplate?: string
+  /** 应用编辑预设的调整参数（FEAT-10）：写导出副本，不改原图 */
+  adjust?: EditAdjustments
+  /** 文字水印（FEAT-11） */
+  watermark?: WatermarkOptions
 }
 
 export interface SmartAlbumInfo {

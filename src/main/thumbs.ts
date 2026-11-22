@@ -19,6 +19,7 @@ import { enqueuePhash } from './phash'
 import { logError } from './log'
 import { isRawExt } from '@shared/formats'
 import { extractRawPreviewPair, readQuickExif, type ExifQuick } from './rawPreview'
+import { IO_CONCURRENCY, mapLimited } from './disk'
 import type { CleanupResult } from '@shared/types'
 
 const CONCURRENCY = Math.max(2, Math.min(6, os.cpus().length - 1))
@@ -110,7 +111,8 @@ export function previewBudgetMb(): number {
   }
 }
 
-/** 预览缓存占用（仅统计 *.preview.jpg）；异步化避免万级文件全目录 stat 阻塞主进程 */
+/** 预览缓存占用（仅统计 *.preview.jpg）；异步化 + 有界并发（OPT-46）避免
+ *  万级文件全目录无界 stat 的句柄毛刺，也不再阻塞主进程 */
 export async function previewStats(): Promise<{ bytes: number; files: number }> {
   const dir = thumbsDir()
   let names: string[]
@@ -121,20 +123,20 @@ export async function previewStats(): Promise<{ bytes: number; files: number }> 
   }
   let bytes = 0
   let files = 0
-  await Promise.all(
-    names
-      .filter((name) => name.endsWith('.preview.jpg'))
-      .map(async (name) => {
-        try {
-          const st = await fs.promises.stat(path.join(dir, name))
-          if (st.isFile()) {
-            bytes += st.size
-            files++
-          }
-        } catch {
-          /* 单文件不可读忽略 */
+  await mapLimited(
+    names.filter((name) => name.endsWith('.preview.jpg')),
+    IO_CONCURRENCY,
+    async (name) => {
+      try {
+        const st = await fs.promises.stat(path.join(dir, name))
+        if (st.isFile()) {
+          bytes += st.size
+          files++
         }
-      }),
+      } catch {
+        /* 单文件不可读忽略 */
+      }
+    }
   )
   return { bytes, files }
 }
@@ -150,20 +152,20 @@ export async function clearPreviews(): Promise<CleanupResult> {
   }
   let deleted = 0
   let bytes = 0
-  await Promise.all(
-    names
-      .filter((name) => name.endsWith('.preview.jpg'))
-      .map(async (name) => {
-        const p = path.join(dir, name)
-        try {
-          const st = await fs.promises.stat(p)
-          await fs.promises.rm(p, { force: true })
-          deleted++
-          bytes += st.size
-        } catch {
-          /* 被占用或已删除：跳过 */
-        }
-      }),
+  await mapLimited(
+    names.filter((name) => name.endsWith('.preview.jpg')),
+    IO_CONCURRENCY,
+    async (name) => {
+      const p = path.join(dir, name)
+      try {
+        const st = await fs.promises.stat(p)
+        await fs.promises.rm(p, { force: true })
+        deleted++
+        bytes += st.size
+      } catch {
+        /* 被占用或已删除：跳过 */
+      }
+    }
   )
   return { deleted, bytes }
 }
@@ -184,20 +186,20 @@ export async function enforcePreviewBudget(): Promise<CleanupResult> {
   }
   const entries: { name: string; path: string; size: number; mtimeMs: number }[] = []
   let total = 0
-  await Promise.all(
-    names
-      .filter((name) => name.endsWith('.preview.jpg'))
-      .map(async (name) => {
-        const p = path.join(dir, name)
-        try {
-          const st = await fs.promises.stat(p)
-          if (!st.isFile()) return
-          entries.push({ name, path: p, size: st.size, mtimeMs: st.mtimeMs })
-          total += st.size
-        } catch {
-          /* 单文件不可读忽略 */
-        }
-      }),
+  await mapLimited(
+    names.filter((name) => name.endsWith('.preview.jpg')),
+    IO_CONCURRENCY,
+    async (name) => {
+      const p = path.join(dir, name)
+      try {
+        const st = await fs.promises.stat(p)
+        if (!st.isFile()) return
+        entries.push({ name, path: p, size: st.size, mtimeMs: st.mtimeMs })
+        total += st.size
+      } catch {
+        /* 单文件不可读忽略 */
+      }
+    }
   )
   if (total <= budget) return { deleted: 0, bytes: 0 }
   entries.sort((a, b) => a.mtimeMs - b.mtimeMs || a.name.localeCompare(b.name))

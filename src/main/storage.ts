@@ -24,7 +24,7 @@ import {
   thumbsDir,
 } from './thumbs'
 import { logsDir } from './log'
-import { freeBytes as probeFreeBytes } from './disk'
+import { IO_CONCURRENCY, freeBytes as probeFreeBytes, mapLimited } from './disk'
 import type {
   CleanupResult,
   StorageBucket,
@@ -48,8 +48,12 @@ async function scanDir(dir: string, match: (name: string) => boolean): Promise<S
   }
   let bytes = 0
   let files = 0
-  await Promise.all(
-    names.filter(match).map(async (name) => {
+  // 有界并发 stat（OPT-46）：thumbs 目录 2 万+ 文件时无界 Promise.all 会瞬时产生
+  // 数万并发 promise，且 storage:stats 可被 UI 反复触发
+  await mapLimited(
+    names.filter(match),
+    IO_CONCURRENCY,
+    async (name) => {
       try {
         const st = await fs.promises.stat(path.join(dir, name))
         if (st.isFile()) {
@@ -59,7 +63,7 @@ async function scanDir(dir: string, match: (name: string) => boolean): Promise<S
       } catch {
         /* 单文件不可读忽略 */
       }
-    }),
+    }
   )
   return { bytes, files }
 }

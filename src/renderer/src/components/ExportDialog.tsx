@@ -93,7 +93,9 @@ export function ExportDialog(): React.JSX.Element | null {
           if (r.exported > 0) converted.push(id)
           else failed++
         }
-        if (converted.length) await deletePhotosAction(converted)
+        // silent：转换完成的总提示已含「源已移入回收站」（OPT-49），
+        // 不再叠加删除动作自身的 toast
+        if (converted.length) await deletePhotosAction(converted, { silent: true })
         else useStore.getState().refreshPhotos()
         useStore
           .getState()

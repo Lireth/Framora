@@ -2,7 +2,13 @@ import React, { useState } from 'react'
 import { ArchiveRestore, Columns2, Download, Images, Pencil, Repeat, Star, Tag, Trash2, X } from 'lucide-react'
 import { useStore } from '../store'
 import { api } from '../lib/api'
-import { deletePhotosAction, purgePhotosAction, restorePhotosAction } from '../lib/actions'
+import {
+  batchAlbumAction,
+  deletePhotosAction,
+  purgePhotosAction,
+  rateGridPhotosAction,
+  restorePhotosAction
+} from '../lib/actions'
 import { ConfirmDialog, InputDialog, type MenuItem } from './ui'
 import { useContextMenu } from './useContextMenu'
 import { TagPicker } from './TagPicker'
@@ -27,24 +33,18 @@ export function BatchBar(): React.JSX.Element {
 
   const openAlbumMenu = (e: React.MouseEvent): void => {
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+    // OPT-49 收敛：加入相册/移出走 batchAlbumAction（refreshLibrary + refreshPhotos
+    // 两处都刷新——此前只刷 library，正处于相册 scope 时网格数据过期）
     const items: MenuItem[] = [
       ...albums.map((a) => ({
         label: `加入「${a.name}」`,
         icon: <Images size={13} />,
-        onClick: async () => {
-          await api.batchAlbum(ids, a.id)
-          useStore.getState().toast('success', `已加入相册「${a.name}」`)
-          useStore.getState().refreshLibrary()
-        }
+        onClick: () => void batchAlbumAction(ids, a.id)
       })),
       ...(albums.length ? [{ separator: true } as MenuItem] : []),
       {
         label: '从所有相册移出',
-        onClick: async () => {
-          await api.batchAlbum(ids, null)
-          useStore.getState().toast('success', '已从所有相册移出')
-          useStore.getState().refreshLibrary()
-        }
+        onClick: () => void batchAlbumAction(ids, null)
       }
     ]
     openMenu(rect.left, rect.top - 8, items)
@@ -52,13 +52,11 @@ export function BatchBar(): React.JSX.Element {
 
   const openRateMenu = (e: React.MouseEvent): void => {
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+    // OPT-49 收敛：与网格快捷键评分同一条路径（batchRate + patchPhotos 乐观更新），
+    // 替代此前的全量重查询 + 独立 toast 文案
     const items: MenuItem[] = [0, 1, 2, 3, 4, 5].map((v) => ({
       label: v === 0 ? '清除星级' : `${'★'.repeat(v)}`,
-      onClick: async () => {
-        await api.batchRate(ids, v)
-        useStore.getState().toast('success', `已设置 ${v === 0 ? '清除' : v + ' 星'}（${ids.length} 张）`)
-        useStore.getState().refreshPhotos()
-      }
+      onClick: () => void rateGridPhotosAction(v)
     }))
     openMenu(rect.left, rect.top - 8, items)
   }

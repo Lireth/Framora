@@ -14,14 +14,14 @@ import {
 import { themeBackground } from './theme'
 import type { ThemeMode } from '@shared/types'
 import { registerIpc } from './ipc'
-import { isImagePath } from './scanner'
+import { isImagePath, isPathInsideRoot, parseThumbRequest } from './scanner'
 import { stopAllWatchers, reconcileWatchers } from './watcher'
-import { thumbsDir, enqueueThumb } from './thumbs'
-import { ensurePreview, isPreviewFileName, previewIdFromName } from './previewService'
+import { bumpThumbGeneration, clearThumbQueue, enqueueThumb, thumbsDir } from './thumbs'
+import { ensurePreview } from './previewService'
 import { enforceStorageBudgets } from './storage'
 import { initLogging, logError } from './log'
-import { resumePhash } from './phash'
-import { resumeExifMetaBackfill } from './exifmeta'
+import { bumpPhashGeneration, resumePhash } from './phash'
+import { bumpExifMetaGeneration, resumeExifMetaBackfill } from './exifmeta'
 
 const isDev = !app.isPackaged
 
@@ -151,16 +151,10 @@ function createWindow(): void {
   }
 }
 
-/** 校验路径位于已注册资料库文件夹内（media 协议纵深防御，防止任意路径读取） */
+/** 校验路径位于已注册资料库文件夹内（media 协议纵深防御，防止任意路径读取）；
+ *  判定核心抽取为 isPathInsideRoot 纯逻辑（OPT-50 可测） */
 function isInsideLibrary(p: string): boolean {
-  const resolved = path.resolve(p).toLowerCase()
-  const sep = path.sep
-  for (const root of listFolderPaths()) {
-    const r = path.resolve(root).toLowerCase()
-    const prefix = r.endsWith(sep) ? r : r + sep
-    if (resolved.startsWith(prefix)) return true
-  }
-  return false
+  return listFolderPaths().some((root) => isPathInsideRoot(root, p))
 }
 
 /** 读取本地文件并附加缓存头（media/thumb 的 URL 均带版本参数，可安全 immutable） */
@@ -193,34 +187,32 @@ function registerProtocols(): void {
 
   protocol.handle('thumb', async (req) => {
     try {
-      const u = new URL(req.url)
-      const name = u.hostname === 't' ? u.pathname.slice(1) : u.hostname + u.pathname
-      if (!/^\d+(\.webp|\.preview\.jpg)$/.test(name)) return new Response(null, { status: 400 })
+      // URL → {id, 是否预览} 纯逻辑解析（OPT-50 抽取可测）；白名单之外一律 400
+      const parsed = parseThumbRequest(req.url)
+      if (!parsed) return new Response(null, { status: 400 })
+      const name = `${parsed.id}${parsed.preview ? '.preview.jpg' : '.webp'}`
       const p = path.join(thumbsDir(), name)
       let st = await fs.promises.stat(p).catch(() => null)
       // 预览缓存按预算淘汰后，首次查看时即时从 RAW 嵌入段重建
-      if (!st && isPreviewFileName(name)) {
-        const id = previewIdFromName(name)
-        if (id !== null) {
-          await ensurePreview(id, p)
-          st = await fs.promises.stat(p).catch(() => null)
-        }
+      if (!st && parsed.preview) {
+        await ensurePreview(parsed.id, p)
+        st = await fs.promises.stat(p).catch(() => null)
       }
       if (!st) {
         // 缩略图缺失（生成中排队/缓存被外部清理）：以紧急优先级自动入队，
         // 用户翻到的照片无需排在批量导入队尾；失败态（2）不自动重试，
         // photos:regenerateThumb 是其手动恢复路径
-        if (name.endsWith('.webp')) {
-          const id = Number(name.slice(0, -'.webp'.length))
-          if (Number.isInteger(id) && id > 0) {
-            const row = getPhotoRow(id)
-            if (row && !row.missing && row.thumb_status !== 2) enqueueThumb(id, 'urgent')
-          }
+        if (!parsed.preview) {
+          const row = getPhotoRow(parsed.id)
+          if (row && !row.missing && row.thumb_status !== 2) enqueueThumb(parsed.id, 'urgent')
         }
         return new Response(null, { status: 404 })
       }
-      // mtime 近似 LRU：用户实际看过的预览在预算淘汰时优先保留
-      fs.promises.utimes(p, new Date(), new Date()).catch(() => undefined)
+      // mtime 近似 LRU：仅预览参与预算淘汰（OPT-47 收口：webp 不参与淘汰，
+      // 此前对每张缩略图网格滚动都多一次 utimes 系统调用）
+      if (parsed.preview) {
+        fs.promises.utimes(p, new Date(), new Date()).catch(() => undefined)
+      }
       return await fileResponse(p)
     } catch {
       return new Response(null, { status: 400 })
@@ -283,8 +275,27 @@ if (!gotLock) {
     app.quit()
   })
 
-  app.on('before-quit', () => {
-    stopAllWatchers()
-    closeDb()
+  // 退出时序（OPT-47）：先作废在途任务、清队列、停监听，再关库——此前
+  // stopAllWatchers() 未 await 即 closeDb，watcher 回调与缩略图/phash 在途任务
+  // 可能对已关闭句柄执行语句（uncaughtException 日志噪声）。preventDefault +
+  // 二次 quit 的模式保证清理完成后才真正退出。
+  let quitting = false
+  app.on('before-quit', (e) => {
+    if (quitting) return
+    quitting = true
+    e.preventDefault()
+    void (async () => {
+      try {
+        clearThumbQueue()
+        // 代次递增：在途任务检测到变化即作废 DB 写入（与换库同款守卫）
+        bumpThumbGeneration()
+        bumpPhashGeneration()
+        bumpExifMetaGeneration()
+        await stopAllWatchers()
+      } finally {
+        closeDb()
+        app.quit()
+      }
+    })()
   })
 }

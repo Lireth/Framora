@@ -58,6 +58,20 @@ export async function importFilesAction(): Promise<void> {
   }
 }
 
+/** 批量加入相册 / 从所有相册移出（OPT-49 收敛：与侧栏拖拽入册同一条路径，
+ *  相册成员变化同时影响侧栏计数与当前视图，两处刷新不再各写各的） */
+export async function batchAlbumAction(ids: number[], albumId: number | null): Promise<void> {
+  const s = useStore.getState()
+  try {
+    await api.batchAlbum(ids, albumId)
+    s.toast('success', albumId ? '已加入相册' : '已从所有相册移出')
+    await s.refreshLibrary()
+    s.refreshPhotos()
+  } catch (e) {
+    s.toast('error', e instanceof Error ? e.message : '相册操作失败')
+  }
+}
+
 /** 资源管理器拖入：文件走库内/库外分流，文件夹加入资料库并扫描；无新增时静默 */
 export async function importDroppedPaths(paths: string[]): Promise<void> {
   await importPaths(paths, true)
@@ -79,16 +93,22 @@ export async function selectRedundantAction(mode: 'best' | 'oldest'): Promise<vo
   }
 }
 
-/** 删除（移入应用内回收站，文件保留在原位置，可还原）所选照片 */
-export async function deletePhotosAction(ids: number[]): Promise<void> {
+/** 删除（移入应用内回收站，文件保留在原位置，可还原）所选照片；
+ *  silent 供库内转换等自带结果提示的流程复用（OPT-49：不再双重 toast） */
+export async function deletePhotosAction(
+  ids: number[],
+  opts?: { silent?: boolean }
+): Promise<void> {
   if (!ids.length) return
   const s = useStore.getState()
   try {
     const r = await api.deletePhotos(ids)
-    if (r.failed > 0) {
-      s.toast('error', `已删除 ${r.deleted} 张，${r.failed} 张删除失败`)
-    } else {
-      s.toast('success', `已将 ${r.deleted} 张照片移入回收站（可在回收站视图还原）`)
+    if (!opts?.silent) {
+      if (r.failed > 0) {
+        s.toast('error', `已删除 ${r.deleted} 张，${r.failed} 张删除失败`)
+      } else {
+        s.toast('success', `已将 ${r.deleted} 张照片移入回收站（可在回收站视图还原）`)
+      }
     }
     s.clearSelection()
     if (s.viewerOpen) s.closeViewer()

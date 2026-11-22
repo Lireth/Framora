@@ -28,6 +28,7 @@ vi.mock('electron', () => ({
 
 import * as db from '../src/main/db'
 import * as storage from '../src/main/storage'
+import { mapLimited } from '../src/main/disk'
 import { backupsDir, previewStats, thumbsDir, writePreviewFile } from '../src/main/thumbs'
 import { backupStats, cleanupOrphanBackups } from '../src/main/imageops'
 
@@ -203,5 +204,33 @@ describe('占用统计与预算设置', () => {
     expect(saved.previewBudgetMb).toBe(1024)
     expect(saved.backupBudgetMb).toBe(2048)
     expect(storage.getStorageLimits()).toEqual(saved)
+  })
+})
+
+describe('mapLimited 有界并发（OPT-46）', () => {
+  it('结果与输入顺序一致且并发受限于给定值', async () => {
+    let inflight = 0
+    let peak = 0
+    const r = await mapLimited([1, 2, 3, 4, 5, 6, 7, 8], 2, async (n) => {
+      inflight++
+      peak = Math.max(peak, inflight)
+      await new Promise((res) => setTimeout(res, 5))
+      inflight--
+      return n * 2
+    })
+    expect(r).toEqual([2, 4, 6, 8, 10, 12, 14, 16])
+    expect(peak).toBeLessThanOrEqual(2)
+    // 空集合与并发大于元素数时正常收敛
+    expect(await mapLimited([], 4, async (n) => n)).toEqual([])
+    expect(await mapLimited([1], 8, async (n) => n)).toEqual([1])
+  })
+
+  it('fn 拒绝时异常传导给调用方（调用点各自兜底逐项错误）', async () => {
+    await expect(
+      mapLimited([1, 2], 2, async (n) => {
+        if (n === 2) throw new Error('boom')
+        return n
+      })
+    ).rejects.toThrow('boom')
   })
 })

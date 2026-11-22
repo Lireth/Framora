@@ -28,3 +28,31 @@ export async function assertFreeSpace(
     )
   }
 }
+
+/* ---------- 有界并发批量 IO（OPT-46） ---------- */
+
+/** 目录级 stat/rm 扫描的默认并发度 */
+export const IO_CONCURRENCY = 32
+
+/**
+ * 有界并发映射：替代对目录全量文件的无界 Promise.all——万级文件的 stat/rm 会
+ * 瞬时产生数万并发 promise（句柄与内存毛刺），且 storage:stats 等入口可被 UI
+ * 反复触发。结果与输入顺序一致；fn 应自行兜底错误（扫描类调用逐项忽略失败），
+ * 异常会传导给调用方。
+ */
+export async function mapLimited<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T) => Promise<R>
+): Promise<R[]> {
+  const out = new Array<R>(items.length)
+  let cursor = 0
+  const worker = async (): Promise<void> => {
+    while (cursor < items.length) {
+      const i = cursor++
+      out[i] = await fn(items[i])
+    }
+  }
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, worker))
+  return out
+}

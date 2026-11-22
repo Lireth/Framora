@@ -79,6 +79,39 @@ export async function splitImportPaths(paths: string[]): Promise<SplitPaths> {
   return { dirs, files, skipped }
 }
 
+/* ---------- 协议边界纯逻辑（OPT-50 抽取可测） ---------- */
+
+/**
+ * 目标路径必须位于 root 内：media:// 协议防任意路径读取的判定核心。
+ * 与原 isInsideLibrary 循环体逐字一致——前缀归一后匹配，杜绝「C:\lib-evil」
+ * 这类共享前缀误判；大小写不敏感（Windows FS 语义）。
+ */
+export function isPathInsideRoot(root: string, target: string): boolean {
+  const resolved = path.resolve(target).toLowerCase()
+  const sep = path.sep
+  const r = path.resolve(root).toLowerCase()
+  const prefix = r.endsWith(sep) ? r : r + sep
+  return resolved.startsWith(prefix)
+}
+
+/**
+ * thumb:// URL 解析（协议安全边界，OPT-50 抽取可测）：
+ * - 现行格式 thumb://t/{id}.webp / thumb://t/{id}.preview.jpg
+ * - 非 t 主机名的遗留分支恒不匹配扩展名白名单（渲染层从未使用，仅保持行为一致）
+ * - id/扩展名白名单之外一律 null（调用方回 400/404）
+ */
+export function parseThumbRequest(url: string): { id: number; preview: boolean } | null {
+  try {
+    const u = new URL(url)
+    const name = u.hostname === 't' ? u.pathname.slice(1) : u.hostname + u.pathname
+    const m = /^(\d+)(\.webp|\.preview\.jpg)$/.exec(name)
+    if (!m) return null
+    return { id: Number(m[1]), preview: m[2] === '.preview.jpg' }
+  } catch {
+    return null
+  }
+}
+
 /** 编辑写回中断的崩溃残留后缀（imageops.atomicReplace 的移位文件） */
 const FRAMORA_OLD_SUFFIX = '.framora-old'
 
@@ -105,6 +138,7 @@ async function* walk(
   dir: string,
   onKnownUnsupported?: (p: string) => void,
   token?: { cancelled: boolean },
+  onSkippedLink?: (p: string) => void,
 ): AsyncGenerator<string> {
   if (token?.cancelled) return
   let entries: fs.Dirent[]
@@ -118,13 +152,17 @@ async function* walk(
     if (e.name.startsWith('.')) continue
     const full = path.join(dir, e.name)
     if (e.isDirectory()) {
-      yield* walk(full, onKnownUnsupported, token)
+      yield* walk(full, onKnownUnsupported, token, onSkippedLink)
     } else if (e.isFile()) {
       if (isImagePath(full)) yield full
       else if (full.toLowerCase().endsWith(FRAMORA_OLD_SUFFIX)) await recoverFramoraOld(full)
       else if (KNOWN_UNSUPPORTED_EXT_SET.has(normalizeExt(path.extname(full)))) {
         onKnownUnsupported?.(full)
       }
+    } else {
+      // junction/符号链接既非 isFile 也非 isDirectory（OPT-47）：此前整棵子树
+      // 静默漏索引且无任何提示；计数后由导入结果明确告知
+      onSkippedLink?.(full)
     }
   }
 }
@@ -191,11 +229,19 @@ export async function importFolder(folderPath: string): Promise<ImportResult> {
     let added = 0
     let updated = 0
     let unsupported = 0
+    let symlinks = 0
     const now = Date.now()
 
-    // 1. 收集全部图片文件路径，同时统计已知不支持的格式（如 HEIC）用于明确提示
+    // 1. 收集全部图片文件路径，同时统计已知不支持的格式（如 HEIC）与
+    //    未跟随的符号链接/junction（OPT-47）用于明确提示
     const files: string[] = []
-    for await (const file of walk(folderPath, () => unsupported++, token)) files.push(file)
+    for await (const file of walk(
+      folderPath,
+      () => unsupported++,
+      token,
+      () => symlinks++
+    ))
+      files.push(file)
     const found = files.length
 
     // 2. 并发 stat 后在内存中 diff
@@ -221,9 +267,10 @@ export async function importFolder(folderPath: string): Promise<ImportResult> {
         added: 0,
         updated: 0,
         unsupported,
+        symlinks,
         cancelled: true,
       })
-      return { folderId, found, added: 0, updated: 0, unsupported, cancelled: true }
+      return { folderId, found, added: 0, updated: 0, unsupported, symlinks, cancelled: true }
     }
 
     const inserts: {
@@ -292,11 +339,12 @@ export async function importFolder(folderPath: string): Promise<ImportResult> {
       updated,
       unsupported,
       missing: missings.length,
+      symlinks,
     })
     broadcastLibraryChanged()
     // 扫描写库阶段连续 4 个事务：PASSIVE 合并 WAL，控制库伴生文件体积
     checkpointWalPassive()
-    return { folderId, found, added, updated, unsupported, missing: missings.length }
+    return { folderId, found, added, updated, unsupported, missing: missings.length, symlinks }
   } catch (err) {
     broadcastScan({
       phase: 'error',

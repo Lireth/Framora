@@ -291,11 +291,12 @@ export function Sidebar(): React.JSX.Element {
     {
       label: '颜色',
       icon: <Palette size={13} />,
+      // 失败不再静默（OPT-49）：用户操作无任何反馈曾被列为已知缺陷
       submenu: colorMenu((c) =>
         api
           .setAlbumColor(album.id, c)
           .then(() => useStore.getState().refreshLibrary())
-          .catch(() => undefined),
+          .catch(() => useStore.getState().toast('error', '设置相册颜色失败')),
       ),
     },
     { separator: true },
@@ -323,7 +324,7 @@ export function Sidebar(): React.JSX.Element {
         api
           .setTagColor(tag.id, c)
           .then(() => useStore.getState().refreshLibrary())
-          .catch(() => undefined),
+          .catch(() => useStore.getState().toast('error', '设置标签颜色失败')),
       ),
     },
     { separator: true },
@@ -357,13 +358,18 @@ export function Sidebar(): React.JSX.Element {
       icon: <Trash2 size={13} />,
       danger: true,
       onClick: async () => {
-        await api.deleteSmartAlbum(sa.id).catch(() => undefined)
-        useStore.getState().toast('success', '智能相册已删除')
-        if (useStore.getState().scope === 'smart' && useStore.getState().scopeId === sa.id) {
-          useStore.getState().setScope('all')
+        const s = useStore.getState()
+        // 失败不再静默吞掉并误报成功（OPT-49）：此前吞异常后无条件提示已删除
+        try {
+          await api.deleteSmartAlbum(sa.id)
+        } catch (err) {
+          s.toast('error', err instanceof Error ? err.message : '删除智能相册失败')
+          return
         }
-        useStore.getState().refreshLibrary()
-        useStore.getState().refreshPhotos()
+        s.toast('success', '智能相册已删除')
+        if (s.scope === 'smart' && s.scopeId === sa.id) s.setScope('all')
+        s.refreshLibrary()
+        s.refreshPhotos()
       },
     },
   ]

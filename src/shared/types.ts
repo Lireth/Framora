@@ -237,6 +237,8 @@ export interface ScanEvent {
   unsupported?: number
   /** 本次扫描标记为缺失的数量（目录清单中已不存在的已知文件） */
   missing?: number
+  /** 未跟随的符号链接 / junction 数量（OPT-47：此前整棵子树静默漏索引无提示） */
+  symlinks?: number
   /** 用户取消扫描（此时尚未写库，无半成品索引） */
   cancelled?: boolean
   message?: string
@@ -280,6 +282,8 @@ export interface ImportResult {
   unsupported?: number
   /** 本次扫描标记为缺失的数量（目录清单中已不存在的已知文件） */
   missing?: number
+  /** 未跟随的符号链接 / junction 数量（OPT-47） */
+  symlinks?: number
   /** 用户取消导入 */
   cancelled?: boolean
 }
@@ -358,6 +362,24 @@ export const UNDO_KIND_LABEL: Record<UndoKind, string> = {
   album: '相册',
   smart: '智能相册',
 }
+
+/* ---------- 设置键注册表（OPT-32 写侧 / OPT-47 读侧白名单） ---------- */
+
+/** 渲染层可写键（settings:set 白名单）：预算/阈值等有各自专用通道与校验 */
+export const SETTING_WRITE_KEYS: ReadonlySet<string> = new Set([
+  'theme',
+  'viewState',
+  'searchHistory',
+])
+
+/** 渲染层可读键（settings:get 白名单）：undoStack/editPresets/windowBounds 等
+ *  主进程内部状态不暴露原文 */
+export const SETTING_READ_KEYS: ReadonlySet<string> = new Set([
+  'theme',
+  'viewState',
+  'searchHistory',
+  'phashThreshold',
+])
 
 /* ---------- 存储占用与预算 ---------- */
 

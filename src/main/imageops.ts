@@ -7,7 +7,7 @@ import { backupsDir, enqueueThumb, previewPath } from './thumbs'
 import { extractRawPreview } from './rawPreview'
 import { broadcastExport } from './scanner'
 import { logError } from './log'
-import { assertFreeSpace } from './disk'
+import { IO_CONCURRENCY, assertFreeSpace, mapLimited } from './disk'
 import { isRawExt } from '@shared/formats'
 import type {
   BackupInfo,
@@ -82,7 +82,18 @@ export async function exportPhotos(
     const fmt = opts.format ?? 'original'
     const total = ids.length
 
-    // 1. 顺序预分配输出路径：重名判定依赖会话内 used 集合，保持单线程避免并发撞名
+    // 1. 批量取行 + 有界并发探测源文件存在性（OPT-46）：此前预分配在主进程同步
+    //    执行万级点查 + 万级 existsSync，千级导出即阻塞主进程数百毫秒
+    const rowsById = new Map(listPhotoRowsByIds(ids).map((r) => [r.id, r]))
+    const exists = await mapLimited(ids, IO_CONCURRENCY, async (id) => {
+      const row = rowsById.get(id)
+      if (!row) return false
+      return fs.promises.access(row.path).then(
+        () => true,
+        () => false
+      )
+    })
+    // 2. 顺序预分配输出路径：重名判定依赖会话内 used 集合，保持单线程避免并发撞名
     const tasks: ExportTask[] = []
     const used = new Set<string>()
     let exported = 0
@@ -90,8 +101,8 @@ export async function exportPhotos(
     let done = 0
     for (let i = 0; i < ids.length; i++) {
       if (token.cancelled) break
-      const row = getPhotoRow(ids[i])
-      if (!row || row.missing || !fs.existsSync(row.path)) {
+      const row = rowsById.get(ids[i])
+      if (!row || row.missing || !exists[i]) {
         failed++
         done++
         // 进度节流：每 25 张或最后一张推送一次（千张导出不再逐张触发渲染端 set）
@@ -141,7 +152,7 @@ export async function exportPhotos(
       })
     }
 
-    // 2. 小并发池执行复制/重编码
+    // 3. 小并发池执行复制/重编码
     let cursor = 0
     const worker = async (): Promise<void> => {
       while (cursor < tasks.length && !token.cancelled) {

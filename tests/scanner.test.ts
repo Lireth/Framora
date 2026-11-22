@@ -29,6 +29,8 @@ import {
   cancelScan,
   importFolder,
   isImagePath,
+  isPathInsideRoot,
+  parseThumbRequest,
   splitImportPaths,
   trackChangedFile,
   trackDeletedFile,
@@ -245,7 +247,15 @@ describe('importFolder 已知不支持格式计数', () => {
     writeFileSync(path.join(dir, 'notes.txt'), 'x')
 
     const r = await importFolder(dir)
-    expect(r).toEqual({ folderId: 7, found: 1, added: 1, updated: 0, unsupported: 1, missing: 0 })
+    expect(r).toEqual({
+      folderId: 7,
+      found: 1,
+      added: 1,
+      updated: 0,
+      unsupported: 1,
+      missing: 0,
+      symlinks: 0,
+    })
     const inserted = vi.mocked(insertPhotosBatch).mock.calls[0][0]
     expect(inserted).toHaveLength(1)
     expect(inserted[0].ext).toBe('jpg')
@@ -384,5 +394,29 @@ describe('疑似改名迁移（OPT-39）', () => {
     await trackNewFile(1, other)
     expect(updatePhotoPath).not.toHaveBeenCalled()
     expect(insertPhoto).toHaveBeenCalled()
+  })
+})
+
+describe('协议边界纯逻辑（OPT-50）', () => {
+  it('isPathInsideRoot：库内通过，库外/前缀近似/相对路径拒绝，大小写不敏感', () => {
+    expect(isPathInsideRoot('C:\\lib', 'C:\\lib\\a.jpg')).toBe(true)
+    expect(isPathInsideRoot('C:\\lib\\', 'C:\\lib\\sub\\b.jpg')).toBe(true)
+    expect(isPathInsideRoot('C:\\Lib', 'c:\\lib\\A.JPG')).toBe(true)
+    // 共享前缀但非同目录树：绝不能以「前缀字符串命中」放行
+    expect(isPathInsideRoot('C:\\lib', 'C:\\lib-evil\\a.jpg')).toBe(false)
+    expect(isPathInsideRoot('C:\\lib', 'C:\\other\\a.jpg')).toBe(false)
+    // 相对路径解析到 cwd，不在库内
+    expect(isPathInsideRoot('C:\\lib', 'a.jpg')).toBe(false)
+  })
+
+  it('parseThumbRequest：现行格式解析，扩展名白名单与非法输入拒绝', () => {
+    expect(parseThumbRequest('thumb://t/12.webp?v=1')).toEqual({ id: 12, preview: false })
+    expect(parseThumbRequest('thumb://t/34.preview.jpg')).toEqual({ id: 34, preview: true })
+    // 遗留分支（非 t 主机名）恒不匹配白名单
+    expect(parseThumbRequest('thumb://t2/56.webp')).toBeNull()
+    expect(parseThumbRequest('thumb://t/abc.webp')).toBeNull()
+    expect(parseThumbRequest('thumb://t/12.gif')).toBeNull()
+    expect(parseThumbRequest('thumb://t/-1.webp')).toBeNull()
+    expect(parseThumbRequest('not a url')).toBeNull()
   })
 })

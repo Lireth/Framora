@@ -681,8 +681,11 @@ export const useStore = create<AppState>((set, get) => ({
   setExportProgress: (p) => set({ exportProgress: p }),
 
   toast: (type, text) => {
+    // 同文案去重 + 最多 5 条（OPT-49）：错误风暴时右下角不再无限堆叠
+    if (get().toasts.some((t) => t.text === text && t.type === type)) return
     const id = toastSeq++
-    set({ toasts: [...get().toasts, { id, type, text }] })
+    const toasts = [...get().toasts, { id, type, text }].slice(-5)
+    set({ toasts })
     setTimeout(() => get().dismissToast(id), 4000)
   },
 

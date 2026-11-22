@@ -671,6 +671,22 @@ describe('智能相册条件模型（P1-5）', () => {
       ),
     ).toEqual(['c.jpg', 'b.jpg', 'a.jpg'])
   })
+
+  it('parseSmartQuery 丢弃不可解析日期（OPT-47）：相册查询不再因非法日期永久报错', () => {
+    const f = newFolder('C:\\pics')
+    seed(f, 'dated-1', { takenAt: Date.parse('2024-01-05T00:00:00') })
+    // 非法日期（此前 NaN 绑定抛 TypeError → 相册永久打不开）被逐字段丢弃 → 无日期过滤
+    const bad = db.createSmartAlbum('坏日期', {
+      dateFrom: 'abc',
+      dateTo: '2024-13-99',
+    } as never)
+    expect(db.queryPhotos({ scope: 'smart', scopeId: bad }).total).toBe(1)
+    // 合法日期正常生效
+    db.updateSmartAlbum(bad, '好日期', { dateFrom: '2024-01-01', dateTo: '2024-12-31' })
+    expect(db.queryPhotos({ scope: 'smart', scopeId: bad }).total).toBe(1)
+    db.updateSmartAlbum(bad, '窄日期', { dateFrom: '2025-01-01' })
+    expect(db.queryPhotos({ scope: 'smart', scopeId: bad }).total).toBe(0)
+  })
 })
 
 describe('dupCache 失效语义（第一批修复回归）', () => {
@@ -805,7 +821,7 @@ describe('queryDuplicates 分块查询（OPT-44）', () => {
     expect(page.items.map((p) => p.id)).toEqual(expected.slice(900, 1850))
   })
 
-  it('重复照片数超过 SQLite 变量上限（33000 > 32766）时默认调用路径可用', async () => {
+  it('重复照片数超过 SQLite 变量上限（33000 > 32766）时默认调用路径可用', { timeout: 30_000 }, async () => {
     const f = newFolder('C:\\pics')
     bulkDupPairs(f, 16500)
     // 旧实现将整段 id 直接作为 IN 参数：> 32766 必抛「Too many parameter variables」

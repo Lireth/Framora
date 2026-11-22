@@ -6,7 +6,14 @@
  */
 import fs from 'node:fs'
 import exifr from 'exifr'
-import { getPhotoRow, listPhotoIdsForGps, markGpsChecked, setPhotoCamera, setPhotoGps } from './db'
+import {
+  getPhotoRow,
+  listPhotoIdsForGps,
+  markGpsChecked,
+  markGpsFailed,
+  setPhotoCamera,
+  setPhotoGps,
+} from './db'
 import { logError } from './log'
 
 const CONCURRENCY = 2
@@ -14,6 +21,10 @@ const CONCURRENCY = 2
 const queue: number[] = []
 const queued = new Set<number>()
 let running = 0
+
+/** 本会话内已失败一次的照片：再次失败即标记失败态（OPT-47），损坏文件不再
+ *  每次启动重放；首次失败保留 gps_checked=0，下次启动仍给一次机会 */
+const gpsFailedOnce = new Set<number>()
 
 /** 库代次：换库（备份导入）后递增，旧库在途任务作废 */
 let generation = 0
@@ -84,9 +95,18 @@ async function run(id: number): Promise<void> {
     }
     // 无论是否解析出坐标都标记已检查：无 GPS 的照片不再重复入队
     if (gen !== generation) return
+    gpsFailedOnce.delete(id)
     markGpsChecked(id)
   } catch (err) {
     logError('exifMeta', err)
+    // 两振失败态（OPT-47）：损坏/不支持的照片不再每次启动无限重放
+    if (gen !== generation) return
+    if (gpsFailedOnce.has(id)) {
+      gpsFailedOnce.delete(id)
+      markGpsFailed(id)
+    } else {
+      gpsFailedOnce.add(id)
+    }
   }
 }
 

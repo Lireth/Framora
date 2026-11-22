@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import sharp from 'sharp'
+import { isRawExt } from '@shared/formats'
 import {
   getPhotoRow,
   listPhotosForPhash,
@@ -79,7 +80,16 @@ async function run(id: number): Promise<void> {
   markPhashDirty()
 }
 
-/** 启动时为缺少哈希或缺少增强数据（翻转/颜色）的存量照片补算 */
+/**
+ * 启动时为缺少哈希或缺少增强数据（翻转/颜色）的存量照片补算。
+ * 无可用像素源的照片跳过（OPT-47）：RAW 无缩略图（预编译 libvips 无法解码 RAW
+ * 本体）与缩略图失败态（2）此前每次启动必然重放失败并制造日志噪声；
+ * 缩略图完成后经 enqueuePhash 自然进入队列。
+ */
 export function resumePhash(): void {
-  for (const r of listPhotosForPhash()) enqueuePhash(r.id)
+  for (const r of listPhotosForPhash()) {
+    if (r.thumb_status === 2) continue
+    if (isRawExt(r.ext) && !fs.existsSync(thumbPath(r.id))) continue
+    enqueuePhash(r.id)
+  }
 }

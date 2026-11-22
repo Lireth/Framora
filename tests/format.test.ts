@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { IMAGE_EXTS, KNOWN_UNSUPPORTED_EXTS, RAW_EXTS, isRawExt } from '@shared/formats'
+import { SETTING_READ_KEYS, SETTING_WRITE_KEYS } from '@shared/types'
 import { formatBytes, formatCount, formatDate, formatDateTime, mediaUrl, thumbUrl } from '../src/renderer/src/lib/format'
 
 describe('formatBytes', () => {
@@ -54,5 +55,27 @@ describe('shared formats（RAW 单一事实源不变量）', () => {
       expect(IMAGE_EXTS).not.toContain(ext)
     }
     expect(KNOWN_UNSUPPORTED_EXTS).toEqual(['heic', 'heif'])
+  })
+})
+
+describe('设置键注册表（OPT-32 写 / OPT-47 读）', () => {
+  it('写侧白名单仅含 UI 状态键', () => {
+    for (const k of ['theme', 'viewState', 'searchHistory']) {
+      expect(SETTING_WRITE_KEYS.has(k)).toBe(true)
+    }
+    // 预算/阈值有专用通道；撤销栈/预设/窗口位置为主进程内部状态
+    expect(SETTING_WRITE_KEYS.has('previewBudgetMb')).toBe(false)
+    expect(SETTING_WRITE_KEYS.has('undoStack')).toBe(false)
+    expect(SETTING_WRITE_KEYS.has('editPresets')).toBe(false)
+  })
+
+  it('读侧白名单覆盖渲染层实际读取的全部键且不含内部状态', () => {
+    // 与渲染层 api.getSetting 调用点保持一致：theme/searchHistory/viewState/phashThreshold
+    for (const k of ['theme', 'viewState', 'searchHistory', 'phashThreshold']) {
+      expect(SETTING_READ_KEYS.has(k)).toBe(true)
+    }
+    expect(SETTING_READ_KEYS.has('undoStack')).toBe(false)
+    expect(SETTING_READ_KEYS.has('windowBounds')).toBe(false)
+    expect(SETTING_READ_KEYS.has('editPresets')).toBe(false)
   })
 })

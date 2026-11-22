@@ -52,6 +52,19 @@ jobs:
       - name: Unit tests
         run: npm run test
 
+      # 覆盖率门禁（OPT-50）：阈值在 vitest.config.ts（语句 80 / 分支 65 起步），
+      # 低于阈值即失败，防止分支覆盖无感下滑
+      - name: Coverage gate
+        run: node scripts/run-vitest.mjs --coverage
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage/
+          if-no-files-found: ignore
+
       - name: Build
         run: npm run build
 

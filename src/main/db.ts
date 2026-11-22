@@ -683,11 +683,16 @@ export async function backupDatabase(): Promise<string | null> {
 }
 
 export function closeDb(): void {
-  // 退出前尽力把搜索文本落库，避免下次启动检索缺标签/相册名
-  try {
-    flushSearchText()
-  } catch (err) {
-    logError('searchText', err)
+  // 退出前尽力把搜索文本落库，避免下次启动检索缺标签/相册名。
+  // 冲刷失败重试两次再放弃（OPT-47）：此前失败即连同队列一起丢弃，
+  // 标签/相册名/标题改动从 search_text 永久丢失，与「尽力落库」意图不符
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      flushSearchText()
+      break
+    } catch (err) {
+      logError('searchText', err)
+    }
   }
   discardSearchTextQueue()
   // 关库前把 WAL 全量合并回主库并截断：缩小库文件足迹，换库/迁移备份的
@@ -915,19 +920,36 @@ export function findPhotoByPath(photoPath: string): PhotoLite | undefined {
   ) as PhotoLite | undefined
 }
 
-/** 按 id 批量取行（重复治理「保留最佳」、批量重命名等）：一次分块 IN 查询替代 N+1 点查（OPT-43） */
+/** 按 id 批量取行（重复治理「保留最佳」、导出预分配等）：一次分块 IN 查询替代 N+1 点查（OPT-43） */
 export function listPhotoRowsByIds(
   ids: number[],
-): { id: number; path: string; name: string; ext: string; size: number; imported_at: number; missing: number }[] {
+): {
+  id: number
+  path: string
+  name: string
+  ext: string
+  size: number
+  taken_at: number | null
+  imported_at: number
+  orientation: number
+  flip_h: number
+  flip_v: number
+  missing: number
+}[] {
   const sql = (ph: string): string =>
-    `SELECT id, path, name, ext, size, imported_at, missing FROM photos p WHERE p.id IN (${ph})`
+    `SELECT id, path, name, ext, size, taken_at, imported_at, orientation, flip_h, flip_v, missing
+     FROM photos p WHERE p.id IN (${ph})`
   return chunkedIn(ids, (chunk, ph) => stmt(sql(ph)).all(chunk)) as {
     id: number
     path: string
     name: string
     ext: string
     size: number
+    taken_at: number | null
     imported_at: number
+    orientation: number
+    flip_h: number
+    flip_v: number
     missing: number
   }[]
 }
@@ -1481,8 +1503,14 @@ function parseSmartQuery(raw: string): SmartAlbumQuery {
   const src = q as Record<string, unknown>
   const out: SmartAlbumQuery = {}
   if (typeof src.keyword === 'string') out.keyword = src.keyword
-  if (typeof src.dateFrom === 'string') out.dateFrom = src.dateFrom
-  if (typeof src.dateTo === 'string') out.dateTo = src.dateTo
+  // 日期必须可解析（OPT-47）：按 buildPhotoFilter 的实际拼接形态校验——此前仅验
+  // 字符串类型，非法值使绑定 NaN 抛错，正是本函数声称要防的「相册永久打不开」场景
+  const parsable = (v: string, suffix: string): boolean =>
+    !Number.isNaN(new Date(`${v}${suffix}`).getTime())
+  if (typeof src.dateFrom === 'string' && parsable(src.dateFrom, 'T00:00:00'))
+    out.dateFrom = src.dateFrom
+  if (typeof src.dateTo === 'string' && parsable(src.dateTo, 'T23:59:59.999'))
+    out.dateTo = src.dateTo
   if (typeof src.minRating === 'number' && Number.isFinite(src.minRating) && src.minRating >= 1) {
     out.minRating = Math.min(5, Math.floor(src.minRating))
   }
@@ -1885,11 +1913,17 @@ export function markGpsChecked(id: number): void {
   stmt('UPDATE photos SET gps_checked = 1 WHERE id = ?').run(id)
 }
 
+/** GPS 解析失败态（OPT-47）：2 = 已两次解析失败，不再每次启动自动重试
+ *  （与 thumb_status=2 的失败态语义对齐）；重新导入文件夹可重置为 0 */
+export function markGpsFailed(id: number): void {
+  stmt('UPDATE photos SET gps_checked = 2 WHERE id = ?').run(id)
+}
+
 export function setPhotoCamera(id: number, camera: string | null): void {
   stmt('UPDATE photos SET camera = ? WHERE id = ?').run(camera, id)
 }
 
-/** GPS 回填队列的待处理行：未尝试解析且仍在库中的照片 */
+/** GPS 回填队列的待处理行：未尝试解析（0）且仍在库中的照片；失败态（2）不重入队 */
 export function listPhotoIdsForGps(): number[] {
   const rows = stmt(
     `SELECT p.id FROM photos p
@@ -1930,13 +1964,20 @@ export function setPhotoPhashExtra(id: number, flo: number, fhi: number, cm: num
 }
 
 /** 哈希补算队列的待处理行：缺主哈希，或缺增强数据（FEAT-17 存量回填） */
-export function listPhotosForPhash(): { id: number; path: string }[] {
+export function listPhotosForPhash(): {
+  id: number
+  path: string
+  ext: string
+  thumb_status: number
+}[] {
   return stmt(
-    `SELECT p.id, p.path FROM photos p
+    `SELECT p.id, p.path, p.ext, p.thumb_status FROM photos p
      WHERE (p.phash_lo IS NULL OR p.phash_x_checked = 0) AND p.missing = 0 AND p.deleted_at IS NULL AND ${VISIBLE_FOLDER_SQL}`,
   ).all() as {
     id: number
     path: string
+    ext: string
+    thumb_status: number
   }[]
 }
 

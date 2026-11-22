@@ -3,6 +3,13 @@ import fs from 'node:fs'
 import exifr from 'exifr'
 import sharp from 'sharp'
 import { BrowserWindow, dialog, ipcMain, shell, app } from 'electron'
+import type {
+  IpcMainInvokeEvent,
+  OpenDialogOptions,
+  OpenDialogReturnValue,
+  SaveDialogOptions,
+  SaveDialogReturnValue,
+} from 'electron'
 import * as db from './db'
 import { IMAGE_EXTS, formatBytes, formatDateTime } from '@shared/formats'
 import {
@@ -70,6 +77,7 @@ import type {
   StorageLimits,
   ThemeMode,
 } from '@shared/types'
+import { SETTING_READ_KEYS, SETTING_WRITE_KEYS } from '@shared/types'
 import { UndoStore } from './undo'
 
 /* ---------- 元数据删除撤销栈 ----------
@@ -112,6 +120,30 @@ function sanitizeAdjustments(a: EditAdjustments | undefined): EditAdjustments {
   }
 }
 
+/* ---------- 对话框宿主窗口（OPT-46） ----------
+ * 此前六处对话框依赖 getFocusedWindow() + 非空断言：应用失焦时（典型场景是从
+ * 资源管理器拖拽文件触发导入）返回 null，showOpenDialog(null) 直接抛错导致
+ * 导入/导出对话框失效。统一按 IPC 来源定位窗口，兜底现有主窗口。 */
+function dialogWin(e: IpcMainInvokeEvent): BrowserWindow | undefined {
+  return BrowserWindow.fromWebContents(e.sender) ?? BrowserWindow.getAllWindows()[0] ?? undefined
+}
+
+function showOpenDialogFor(
+  e: IpcMainInvokeEvent,
+  options: OpenDialogOptions
+): Promise<OpenDialogReturnValue> {
+  const win = dialogWin(e)
+  return win ? dialog.showOpenDialog(win, options) : dialog.showOpenDialog(options)
+}
+
+function showSaveDialogFor(
+  e: IpcMainInvokeEvent,
+  options: SaveDialogOptions
+): Promise<SaveDialogReturnValue> {
+  const win = dialogWin(e)
+  return win ? dialog.showSaveDialog(win, options) : dialog.showSaveDialog(options)
+}
+
 export function registerIpc(): void {
   // 旧版编辑备份（裸 id 命名）按当前库一次性重绑定到路径哈希命名（O3）
   migrateLegacyEditBackups()
@@ -124,11 +156,13 @@ export function registerIpc(): void {
   }))
 
   /* ---------- settings ---------- */
-  ipcMain.handle('settings:get', (_e, key: string) => db.getSetting(key))
-  // 设置键白名单（OPT-32）：渲染层不可写任意键（预算/阈值等键有各自专用通道与校验）
-  const SETTABLE_KEYS = new Set(['theme', 'viewState', 'searchHistory'])
+  // 读侧白名单（OPT-47）：键注册表在 shared/types（与写侧 OPT-32 同源可测），
+  // undoStack/editPresets/windowBounds 等主进程内部状态不暴露原文
+  ipcMain.handle('settings:get', (_e, key: string) =>
+    typeof key === 'string' && SETTING_READ_KEYS.has(key) ? db.getSetting(key) : null
+  )
   ipcMain.handle('settings:set', (_e, key: string, value: string) => {
-    if (!SETTABLE_KEYS.has(key) || typeof value !== 'string') return
+    if (!SETTING_WRITE_KEYS.has(key) || typeof value !== 'string') return
     db.setSetting(key, value)
   })
 
@@ -139,27 +173,24 @@ export function registerIpc(): void {
   ipcMain.handle('storage:enforce', () => enforceStorageBudgets())
 
   /* ---------- dialogs ---------- */
-  ipcMain.handle('dialog:pickFolder', async () => {
-    const win = BrowserWindow.getFocusedWindow()
-    const r = await dialog.showOpenDialog(win!, {
+  ipcMain.handle('dialog:pickFolder', async (e) => {
+    const r = await showOpenDialogFor(e, {
       title: '选择包含照片的文件夹',
       properties: ['openDirectory', 'createDirectory'],
     })
     return r.canceled ? null : r.filePaths[0]
   })
 
-  ipcMain.handle('dialog:pickExportDir', async () => {
-    const win = BrowserWindow.getFocusedWindow()
-    const r = await dialog.showOpenDialog(win!, {
+  ipcMain.handle('dialog:pickExportDir', async (e) => {
+    const r = await showOpenDialogFor(e, {
       title: '选择导出位置',
       properties: ['openDirectory', 'createDirectory'],
     })
     return r.canceled ? null : r.filePaths[0]
   })
 
-  ipcMain.handle('dialog:pickFiles', async () => {
-    const win = BrowserWindow.getFocusedWindow()
-    const r = await dialog.showOpenDialog(win!, {
+  ipcMain.handle('dialog:pickFiles', async (e) => {
+    const r = await showOpenDialogFor(e, {
       title: '选择要导入的照片',
       properties: ['openFile', 'multiSelections'],
       filters: [{ name: '图片', extensions: [...IMAGE_EXTS] }],
@@ -189,7 +220,7 @@ export function registerIpc(): void {
     return result
   })
 
-  ipcMain.handle('library:importFiles', async (_e, filePaths: string[]) => {
+  ipcMain.handle('library:importFiles', async (e, filePaths: string[]) => {
     // 拖入/选择可能混合文件与文件夹：按真实类型分流（渲染层拿不到可靠的目录标记）
     const { dirs, files, skipped: classifySkipped } = await splitImportPaths(filePaths)
     let skipped = classifySkipped
@@ -229,8 +260,7 @@ export function registerIpc(): void {
     }
     let copied = 0
     if (external.length) {
-      const win = BrowserWindow.getFocusedWindow()
-      const r = await dialog.showOpenDialog(win!, {
+      const r = await showOpenDialogFor(e, {
         title: '选择库外照片的导入目标文件夹',
         properties: ['openDirectory', 'createDirectory'],
       })
@@ -301,9 +331,11 @@ export function registerIpc(): void {
   ipcMain.handle('presets:save', (_e, preset: EditPreset) => {
     const name = typeof preset?.name === 'string' ? preset.name.trim().slice(0, 40) : ''
     if (!name) throw new Error('预设名称不能为空')
+    // id 必须为字符串（OPT-47）：非字符串 id 曾被原样存入 JSON
+    const id = typeof preset?.id === 'string' ? preset.id : ''
     const adjust = sanitizeAdjustments(preset?.adjust)
-    const list = readPresets().filter((x) => x.id !== preset.id)
-    list.push({ id: preset.id || crypto.randomUUID(), name, adjust })
+    const list = readPresets().filter((x) => x.id !== id)
+    list.push({ id: id || crypto.randomUUID(), name, adjust })
     db.setSetting('editPresets', JSON.stringify(list))
     return list
   })
@@ -314,12 +346,11 @@ export function registerIpc(): void {
   })
 
   /** 导出索引库备份为单文件 */
-  ipcMain.handle('library:exportBackup', async () => {
-    const win = BrowserWindow.getFocusedWindow()
+  ipcMain.handle('library:exportBackup', async (e) => {
     const d = new Date()
     const pad = (n: number): string => String(n).padStart(2, '0')
     const defaultName = `framora-backup-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}.db`
-    const r = await dialog.showSaveDialog(win!, {
+    const r = await showSaveDialogFor(e, {
       title: '导出索引库备份',
       defaultPath: defaultName,
       filters: [{ name: 'SQLite 数据库', extensions: ['db'] }],
@@ -330,9 +361,8 @@ export function registerIpc(): void {
   })
 
   /** 用备份文件替换当前索引库，并重挂监听、补建缺失缩略图 */
-  ipcMain.handle('library:importBackup', async () => {
-    const win = BrowserWindow.getFocusedWindow()
-    const r = await dialog.showOpenDialog(win!, {
+  ipcMain.handle('library:importBackup', async (e) => {
+    const r = await showOpenDialogFor(e, {
       title: '选择索引库备份文件',
       properties: ['openFile'],
       filters: [{ name: 'SQLite 数据库', extensions: ['db'] }],
@@ -606,7 +636,12 @@ export function registerIpc(): void {
     if (entry.kind === 'folder') {
       const folder = db.restoreFolder(entry.id)
       // 路径已不存在时仅恢复索引（照片会在下次扫描标记缺失），不重挂监听
-      if (folder && fs.existsSync(folder.path)) await startWatcher(entry.id, folder.path)
+      if (folder && fs.existsSync(folder.path)) {
+        await startWatcher(entry.id, folder.path)
+        // 自动重扫对账（OPT-47）：文件夹被整体移动/改名后撤销删除，索引行仍是
+        // missing=1 的空壳——复用导入的完整 diff（同路径行复活，不新建重复根）
+        void importFolder(folder.path).catch((err) => logError('undoRescan', err))
+      }
     } else if (entry.kind === 'tag') {
       db.restoreTag(entry.id)
     } else if (entry.kind === 'album') {
@@ -735,10 +770,12 @@ export function registerIpc(): void {
       db.updateSmartAlbum(id, name.trim(), query),
   )
   ipcMain.handle('smartAlbums:delete', (_e, id: number) => {
-    // 软删除（FEAT-13）：与普通相册一致纳入撤销栈
+    // 软删除（FEAT-13）：与普通相册一致纳入撤销栈，并同步广播侧栏刷新
+    // （OPT-47：tags/albums/folder 删除都广播 evt:library，唯独此处曾遗漏）
     const info = db.deleteSmartAlbum(id)
     if (!info) return null
     undoStore.push({ kind: 'smart', id, label: info.name, photos: info.photos })
+    broadcastLibraryChanged()
     return info
   })
 

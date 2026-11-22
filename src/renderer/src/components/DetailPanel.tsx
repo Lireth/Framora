@@ -142,9 +142,10 @@ export function DetailPanel({ inViewer }: { inViewer?: boolean }): React.JSX.Ele
             value={storeRating ?? record.rating}
             size={17}
             onChange={async (v) => {
+              // updateMeta + 乐观 patch 已覆盖面板（storeRating）与网格（OPT-49）：
+              // 此前额外的 getPhoto + refreshLibrary 属于冗余三重 IPC
               await api.updateMeta(record.id, { rating: v })
               useStore.getState().patchPhoto(record.id, { rating: v })
-              void refresh()
             }}
           />
         </div>

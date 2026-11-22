@@ -66,6 +66,20 @@ export async function writePreviewFile(target: string, buf: Buffer): Promise<voi
   }
 }
 
+/** 缩略图落盘用临时文件 + rename：与预览落盘同款保护——崩溃不会留下半截 webp
+ * 被 `?v=thumb_ts` immutable 缓存头永久固化（thumb_ts 不再变化，孤儿清理也无法识别） */
+async function writeThumbFile(target: string, pipe: sharp.Sharp): Promise<void> {
+  const tmp = `${target}.tmp`
+  try {
+    await pipe.toFile(tmp)
+    await fs.promises.rm(target, { force: true })
+    await fs.promises.rename(tmp, target)
+  } catch (err) {
+    await fs.promises.rm(tmp, { force: true }).catch(() => undefined)
+    throw err
+  }
+}
+
 /* ---------- RAW 预览缓存预算 ---------- */
 
 const PREVIEW_BUDGET_KEY = 'previewBudgetMb'
@@ -287,11 +301,10 @@ async function run(id: number): Promise<void> {
       await writePreviewFile(previewPath(id), preview)
       schedulePreviewBudgetCheck()
     }
-    await img
-      .rotate()
-      .resize(512, 512, { fit: 'inside', withoutEnlargement: true })
-      .webp({ quality: 80 })
-      .toFile(thumbPath(id))
+    await writeThumbFile(
+      thumbPath(id),
+      img.rotate().resize(512, 512, { fit: 'inside', withoutEnlargement: true }).webp({ quality: 80 })
+    )
     // 编码期间换库的残余窗口：已写出的错位产物随写随清，不污染新库
     if (gen !== generation) {
       fs.promises.rm(thumbPath(id), { force: true }).catch(() => undefined)
@@ -333,6 +346,9 @@ export async function rebuildAllThumbs(): Promise<void> {
   }
 }
 
+/** 原子写残留临时文件的最低年龄：避开进行中的写入，只清理崩溃残留 */
+const TMP_RESIDUE_MIN_AGE_MS = 5 * 60 * 1000
+
 /** 清理索引库中不存在照片的孤儿缩略图文件，返回删除数量 */
 export function cleanupOrphanThumbs(): number {
   const ids = new Set(listAllPhotoIds())
@@ -345,10 +361,18 @@ export function cleanupOrphanThumbs(): number {
     return 0
   }
   for (const name of names) {
-    const m = /^(\d+)(?:\.webp|\.preview\.jpg)$/.exec(name)
-    if (!m || ids.has(Number(m[1]))) continue
+    const m = /^(\d+)(?:\.webp|\.preview\.jpg)(\.tmp)?$/.exec(name)
+    if (!m) continue
+    const p = path.join(dir, name)
     try {
-      fs.rmSync(path.join(dir, name), { force: true })
+      if (m[2] !== undefined) {
+        // 原子写（tmp + rename）崩溃残留：仅清理超过最低年龄的，避开进行中的写入
+        const st = fs.statSync(p)
+        if (Date.now() - st.mtimeMs < TMP_RESIDUE_MIN_AGE_MS) continue
+      } else if (ids.has(Number(m[1]))) {
+        continue
+      }
+      fs.rmSync(p, { force: true })
       removed++
     } catch {
       /* 单个文件删除失败忽略 */

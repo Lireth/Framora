@@ -97,6 +97,8 @@ const Tile = React.memo(function Tile({
 
   return (
     <div
+      role="button"
+      aria-label={`${p.name}${selected ? '（已选中）' : ''}`}
       className={cn(
         'group relative shrink-0 overflow-hidden rounded-lg bg-raised transition-all duration-150',
         selected ? 'ring-2 ring-[var(--c-accent)]' : 'hover:ring-1 hover:ring-[var(--c-line)]'

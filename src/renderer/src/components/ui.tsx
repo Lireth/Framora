@@ -378,8 +378,36 @@ function MenuList({
   depth?: number
 }): React.JSX.Element {
   const [openSub, setOpenSub] = useState<number | null>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+  // 打开即聚焦首项：方向键导航的入口（焦点圈禁在当前层级的菜单项之间）
+  useEffect(() => {
+    listRef.current?.querySelector<HTMLElement>('button:not([disabled])')?.focus()
+  }, [])
+  const onKeyDown = (e: React.KeyboardEvent): void => {
+    const root = listRef.current
+    if (!root) return
+    const buttons = Array.from(root.querySelectorAll<HTMLElement>('button:not([disabled])'))
+    if (!buttons.length) return
+    const idx = buttons.indexOf(document.activeElement as HTMLElement)
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      buttons[(idx + 1) % buttons.length]?.focus()
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      buttons[(idx - 1 + buttons.length) % buttons.length]?.focus()
+    } else if (e.key === 'Home') {
+      e.preventDefault()
+      buttons[0]?.focus()
+    } else if (e.key === 'End') {
+      e.preventDefault()
+      buttons[buttons.length - 1]?.focus()
+    }
+  }
   return (
     <div
+      ref={listRef}
+      role="menu"
+      onKeyDown={onKeyDown}
       className={cn(
         'min-w-[168px] rounded-lg border border-line bg-raised py-1.5 shadow-2xl animate-popIn',
         depth > 0 && 'shadow-xl'
@@ -395,6 +423,8 @@ function MenuList({
             onMouseEnter={() => setOpenSub(item.submenu ? i : null)}
           >
             <button
+              role="menuitem"
+              tabIndex={-1}
               disabled={item.disabled}
               onClick={() => {
                 if (item.submenu) return
@@ -533,10 +563,15 @@ export function Toasts(): React.JSX.Element {
   const toasts = useStore((s) => s.toasts)
   const dismiss = useStore((s) => s.dismissToast)
   return (
-    <div className="pointer-events-none fixed bottom-5 right-5 z-[70] flex flex-col items-end gap-2">
+    <div
+      className="pointer-events-none fixed bottom-5 right-5 z-[70] flex flex-col items-end gap-2"
+      aria-live="polite"
+      aria-atomic="false"
+    >
       {toasts.map((t) => (
         <div
           key={t.id}
+          role={t.type === 'error' ? 'alert' : 'status'}
           className="pointer-events-auto flex max-w-[380px] items-center gap-2.5 rounded-lg border border-line bg-raised px-3.5 py-2.5 shadow-2xl animate-popIn"
         >
           <span

@@ -42,6 +42,8 @@ export function Filmstrip({ activeId, activeIdx }: { activeId: number | null; ac
             <button
               key={p.id}
               data-photo={p.id}
+              aria-label={`第 ${vi.index + 1} 张：${p.name}`}
+              aria-current={p.id === activeId ? 'true' : undefined}
               onClick={() => setActive(p.id)}
               style={{
                 position: 'absolute',

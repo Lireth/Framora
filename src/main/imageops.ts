@@ -669,6 +669,16 @@ export async function revertEdits(id: number, backupName?: string): Promise<void
     files.sort((a, b) => tsOf(b) - tsOf(a))
     latest = path.join(backupsDir(), files[0])
   }
+  // 恢复前先备份当前状态（OPT-33）：此前被覆盖的「当前编辑结果」没有任何副本，
+  // 恢复是不可逆的单向操作。先备份形成 A↔B 往返——恢复后可再次撤销回当前版本，
+  // 与 saveEdits 的备份共用同一命名、上限与预算清理
+  if (fs.existsSync(row.path)) {
+    const curStat = await fs.promises.stat(row.path)
+    await assertFreeSpace(backupsDir(), curStat.size + 64 * 1024 * 1024, '恢复前备份')
+    const curBackup = backupNameOf(id, row.path, Date.now(), path.extname(row.path))
+    await fs.promises.copyFile(row.path, path.join(backupsDir(), curBackup))
+    void prunePhotoBackups(id)
+  }
   // tmp 写入后经 atomicReplace 原子落位（直接覆盖已存在文件在 Windows 上可能因目标被占用报 UNKNOWN）
   const tmp = `${row.path}.framora-revert-tmp${path.extname(row.path)}`
   const backupStat = await fs.promises.stat(latest)

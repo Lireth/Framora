@@ -388,6 +388,25 @@ describe('编辑写回原子性（O2 回归）', () => {
     expect(readFileSync(path.join(srcDir, 'revert-1.jpg'))).toEqual(original)
     expect(readdirSync(srcDir).filter((n) => n.includes('.framora-'))).toEqual([])
   })
+
+  it('恢复前先备份当前状态：恢复后可再撤销回被覆盖的版本（A↔B 往返，OPT-33）', async () => {
+    rows.clear()
+    await makeExifJpeg('revert-roundtrip.jpg')
+    addRow({ id: 710, file: 'revert-roundtrip.jpg' })
+    const originalBytes = readFileSync(path.join(srcDir, 'revert-roundtrip.jpg'))
+    await saveEdits(710, { brightness: 40 })
+    const editedBytes = readFileSync(path.join(srcDir, 'revert-roundtrip.jpg'))
+    expect(editedBytes).not.toEqual(originalBytes)
+    // 恢复到原始版本；被覆盖的编辑态此刻应有备份
+    await revertEdits(710)
+    expect(readFileSync(path.join(srcDir, 'revert-roundtrip.jpg'))).toEqual(originalBytes)
+    const backups = await listBackups(710)
+    expect(backups.length).toBeGreaterThanOrEqual(2)
+    // 指定「恢复前的编辑态」备份再恢复一次：回到编辑后版本
+    const editedBackup = backups.find((b) => b.ts > 0 && b.size > 0 && b.name !== backups[backups.length - 1].name)
+    await revertEdits(710, editedBackup!.name)
+    expect(readFileSync(path.join(srcDir, 'revert-roundtrip.jpg'))).toEqual(editedBytes)
+  })
 })
 
 describe('编辑备份身份绑定（O3）', () => {

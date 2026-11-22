@@ -3,12 +3,16 @@ name: Release
 on:
   push:
     tags: ['v*']
+  # 发布演练（OPT-26）：手动触发 drill-dist，跑通「构建 → 产物校验 → 上传」
+  # 全链路但不创建 Release——让发布流程从「写完即视为正确」变成随时可验证
+  workflow_dispatch: {}
 
 permissions:
   contents: write
 
 jobs:
   dist:
+    if: github.event_name == 'push'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -74,3 +78,55 @@ jobs:
             release/*.exe
             release/latest.yml
             release/*.blockmap
+
+  # 发布演练：与 dist 相同的构建与产物校验，但以 package.json 版本为基准，
+  # 产物上传为 workflow artifact（保留 7 天）而非 GitHub Release
+  drill-dist:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify
+        run: |
+          npm run typecheck
+          npm run lint
+          npm run test
+
+      - name: Build installer
+        run: npm run dist
+
+      - name: Verify build artifacts match package.json version
+        shell: bash
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          BUILT=$(node -e 'const s=require("fs").readFileSync("release/latest.yml","utf8");const m=/^version:\s*(.+)$/m.exec(s);if(!m){console.error("latest.yml 缺少 version 字段");process.exit(1)}console.log(m[1].trim())')
+          if [ "$BUILT" != "$PKG_VERSION" ]; then
+            echo "::error::构建产物 latest.yml 版本 ($BUILT) 与 package.json ($PKG_VERSION) 不一致"
+            exit 1
+          fi
+          if [ ! -f "release/Framora-$PKG_VERSION-setup.exe" ]; then
+            echo "::error::安装包 Framora-$PKG_VERSION-setup.exe 不存在"
+            exit 1
+          fi
+          echo "演练校验通过：Framora-$PKG_VERSION-setup.exe（latest.yml version=$BUILT）"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: framora-dist-drill
+          path: |
+            release/*.exe
+            release/latest.yml
+            release/*.blockmap
+          retention-days: 7
+          if-no-files-found: error

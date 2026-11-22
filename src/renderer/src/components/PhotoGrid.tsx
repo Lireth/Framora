@@ -3,7 +3,7 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { AlertTriangle, Check, FolderPlus, ImageOff, SearchX } from 'lucide-react'
 import { useStore } from '../store'
 import { thumbUrl } from '../lib/format'
-import { cn, StarRating, type MenuItem } from './ui'
+import { cn, type MenuItem } from './ui'
 import { useContextMenu } from './useContextMenu'
 import { api } from '../lib/api'
 import { importFolderAction, restorePhotosAction } from '../lib/actions'
@@ -188,10 +188,20 @@ const Tile = React.memo(function Tile({
         {selected && <Check size={11} className="text-[#171310]" strokeWidth={3.2} />}
       </button>
 
-      {/* 星级角标 */}
+      {/* 星级角标：纯展示用只读 SVG（OPT-52）——禁用 button 带交互语义，
+          万级库下带评分瓦片的 DOM 数可观 */}
       {p.rating > 0 && (
         <div className="absolute bottom-1 left-1.5 flex rounded bg-black/55 px-1 py-0.5 backdrop-blur-sm">
-          <StarRating value={p.rating} size={9} />
+          {[1, 2, 3, 4, 5].map((i) => (
+            <svg key={i} width="9" height="9" viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"
+                fill={i <= p.rating ? 'var(--c-accent)' : 'none'}
+                stroke={i <= p.rating ? 'var(--c-accent)' : 'rgba(255,255,255,0.55)'}
+                strokeWidth={1.6}
+              />
+            </svg>
+          ))}
         </div>
       )}
 
@@ -218,7 +228,9 @@ function EmptyState(): React.JSX.Element {
   const albumIds = useStore((s) => s.albumIds)
   const folderIds = useStore((s) => s.folderIds)
   const untagged = useStore((s) => s.untagged)
-  // 含组合筛选（FEAT-18）：空态需给出「清除搜索与筛选」的出路
+  const camera = useStore((s) => s.camera)
+  const orientation = useStore((s) => s.orientation)
+  // 含组合筛选（FEAT-18/FEAT-20）：空态需给出「清除搜索与筛选」的出路
   const hasFilter = !!(
     dateFrom ||
     dateTo ||
@@ -226,7 +238,9 @@ function EmptyState(): React.JSX.Element {
     tagIds.length ||
     albumIds.length ||
     folderIds.length ||
-    untagged
+    untagged ||
+    camera ||
+    orientation
   )
 
   if (folders.length === 0) {
@@ -269,7 +283,9 @@ function EmptyState(): React.JSX.Element {
               tagIds: [],
               albumIds: [],
               folderIds: [],
-              untagged: false
+              untagged: false,
+              camera: '',
+              orientation: ''
             })
           }
           className="rounded-md border border-line px-3 py-1.5 text-xs text-ink2 hover:bg-hover hover:text-ink"

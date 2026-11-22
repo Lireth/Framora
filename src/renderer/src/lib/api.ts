@@ -76,6 +76,8 @@ export const api = {
     call('library:importBackup'),
   peekUndo: (): Promise<UndoEntry | null> => call('undo:peek'),
   performUndo: (): Promise<UndoEntry | null> => call('undo:perform'),
+  /** 撤销栈全量列表（FEAT-24 历史展示，栈顶在前） */
+  listUndo: (): Promise<UndoEntry[]> => call('undo:list'),
   selectRedundant: (mode: 'best' | 'oldest'): Promise<{ ids: number[]; clusters: number }> =>
     call('duplicates:selectRedundant', mode),
   setPhashThreshold: (v: number): Promise<number> => call('duplicates:setThreshold', v),
@@ -147,6 +149,8 @@ export const api = {
     call('smartAlbums:rename', id, name),
   updateSmartAlbum: (id: number, name: string, query: SmartAlbumQuery): Promise<void> =>
     call('smartAlbums:update', id, name, query),
+  setSmartAlbumColor: (id: number, color: string | null): Promise<void> =>
+    call('smartAlbums:setColor', id, color),
   deleteSmartAlbum: (id: number): Promise<void> => call('smartAlbums:delete', id),
 
   setTheme: (mode: ThemeMode): Promise<void> => call('window:setTheme', mode),

@@ -436,6 +436,28 @@ function MenuList({
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
       buttons[(idx - 1 + buttons.length) % buttons.length]?.focus()
+    } else if (e.key === 'ArrowRight') {
+      // 进入子菜单（OPT-52 键盘可达性）：此前子菜单仅 onMouseEnter 展开，键盘用户
+      // 无法触达「颜色」等 submenu 项
+      const host = (document.activeElement as HTMLElement | null)?.closest<HTMLElement>(
+        'div[data-menu-idx]'
+      )
+      const i = host?.dataset['menuIdx']
+      if (host && i !== undefined && items[Number(i)]?.submenu) {
+        e.preventDefault()
+        setOpenSub(Number(i))
+        // 子菜单渲染后聚焦其首项
+        setTimeout(() => {
+          host.querySelector<HTMLElement>('div[role="menu"] button:not([disabled])')?.focus()
+        }, 0)
+      }
+    } else if (e.key === 'ArrowLeft') {
+      // 子菜单内返回上级：关闭当前展开的 submenu 并聚焦其宿主项
+      if (openSub === null) return
+      e.preventDefault()
+      const host = root.querySelector<HTMLElement>(`div[data-menu-idx="${openSub}"]`)
+      setOpenSub(null)
+      host?.querySelector<HTMLElement>(':scope > button')?.focus()
     } else if (e.key === 'Home') {
       e.preventDefault()
       buttons[0]?.focus()
@@ -461,6 +483,7 @@ function MenuList({
           <div
             key={i}
             className="relative"
+            data-menu-idx={i}
             onMouseEnter={() => setOpenSub(item.submenu ? i : null)}
           >
             <button
@@ -549,7 +572,7 @@ export const SHORTCUT_GROUPS: { title: string; items: ShortcutEntry[] }[] = [
       { keys: '方向键', desc: '移动选中项' },
       { keys: '0 – 5', desc: '为所选照片评分（无选中时评锚点照片），0 清除' },
       { keys: 'Enter / 空格', desc: '打开查看器（单选时）' },
-      { keys: '对比视图', desc: '恰好选中 2 张时经批量栏进入：←/→ 焦点、1-5 评分、滚轮同步缩放' },
+      { keys: 'C', desc: '对比视图（恰好选中 2 张时）：←/→ 焦点、1-5 评分、滚轮同步缩放' },
       { keys: 'Delete', desc: '删除所选（确认后移入回收站）' },
       { keys: 'Esc', desc: '清除选择' },
       { keys: '拖拽', desc: '拖入侧边栏相册/标签，或拖出窗口到资源管理器' }

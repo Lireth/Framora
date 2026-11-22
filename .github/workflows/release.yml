@@ -14,12 +14,18 @@ jobs:
   dist:
     if: github.event_name == 'push'
     runs-on: windows-latest
+    # 与 drill-dist 对齐的超时上限（此前缺失，挂起最长等待 6h）；
+    # 并发组保证短间隔推多个标签时串行构建，避免并行任务竞争同一 Release
+    timeout-minutes: 40
+    concurrency:
+      group: release-dist-${{ github.ref }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       # 闸门 1（fail fast）：标签必须与 package.json 版本一致。安装包版本取自构建期
@@ -90,7 +96,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Install dependencies

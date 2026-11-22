@@ -56,6 +56,8 @@ export function DetailPanel({ inViewer }: { inViewer?: boolean }): React.JSX.Ele
   const selection = useStore((s) => s.selection)
   const albums = useStore((s) => s.albums)
   const [record, setRecord] = useState<PhotoRecord | null>(null)
+  const [recordError, setRecordError] = useState(false)
+  const [reloadTick, setReloadTick] = useState(0)
   const [exif, setExif] = useState<MetaPair[] | null>(null)
   const [showExif, setShowExif] = useState(false)
   const [tagPickerOpen, setTagPickerOpen] = useState(false)
@@ -70,6 +72,7 @@ export function DetailPanel({ inViewer }: { inViewer?: boolean }): React.JSX.Ele
   useEffect(() => {
     if (id === null) {
       setRecord(null)
+      setRecordError(false)
       setExif(null)
       return
     }
@@ -77,9 +80,15 @@ export function DetailPanel({ inViewer }: { inViewer?: boolean }): React.JSX.Ele
     api
       .getPhoto(id)
       .then((r) => {
-        if (!cancelled) setRecord(r)
+        if (!cancelled) {
+          setRecord(r)
+          setRecordError(false)
+        }
       })
-      .catch(() => undefined)
+      .catch(() => {
+        // 失败不再静默归约为「未选中」（OPT-52 三态分离），给出可重试错误态
+        if (!cancelled) setRecordError(true)
+      })
     api
       .metadata(id)
       .then((r) => {
@@ -91,12 +100,36 @@ export function DetailPanel({ inViewer }: { inViewer?: boolean }): React.JSX.Ele
     return () => {
       cancelled = true
     }
-  }, [id, record?.mtime])
+  }, [id, record?.mtime, reloadTick])
 
-  if (!record) {
+  if (id === null) {
     return (
       <aside className={cn('flex w-[300px] shrink-0 flex-col items-center justify-center border-l border-line bg-panel text-ink3', inViewer && 'h-full')}>
         <p className="text-[12px]">选中一张照片查看详情</p>
+      </aside>
+    )
+  }
+
+  // 未选中 / 加载中 / 加载失败 三态分离（OPT-52）：此前失败被归约为「未选中」误导空态
+  if (!record) {
+    return (
+      <aside className={cn('flex w-[300px] shrink-0 flex-col items-center justify-center gap-2 border-l border-line bg-panel text-ink3', inViewer && 'h-full')}>
+        {recordError ? (
+          <>
+            <p className="text-[12px] text-ink2">详情加载失败（照片可能已被移除）</p>
+            <button
+              onClick={() => {
+                setRecordError(false)
+                setReloadTick((t) => t + 1)
+              }}
+              className="rounded-md border border-line px-3 py-1.5 text-xs text-ink2 hover:bg-hover hover:text-ink"
+            >
+              重试
+            </button>
+          </>
+        ) : (
+          <p className="text-[12px]">详情加载中…</p>
+        )}
       </aside>
     )
   }

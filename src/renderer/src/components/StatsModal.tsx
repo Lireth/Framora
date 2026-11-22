@@ -75,13 +75,20 @@ export function StatsModal(): React.JSX.Element | null {
   const setOpen = useStore((s) => s.setStatsOpen)
   const stats = useStore((s) => s.stats)
   const [dist, setDist] = useState<LibraryDistribution | null>(null)
+  // 三态分离（OPT-52）：此前 catch 归约成 loading 态，失败被永久显示为「统计加载中…」
+  const [loadError, setLoadError] = useState<string | null>(null)
 
-  useEffect(() => {
-    if (!open) return
+  const load = (): void => {
+    setLoadError(null)
     api
       .distribution()
       .then(setDist)
-      .catch(() => setDist(null))
+      .catch((e) => setLoadError(e instanceof Error ? e.message : String(e)))
+  }
+
+  useEffect(() => {
+    if (!open) return
+    load()
   }, [open])
 
   const maxTag = dist ? Math.max(1, ...dist.topTags.map((t) => t.count)) : 1
@@ -90,7 +97,17 @@ export function StatsModal(): React.JSX.Element | null {
 
   return (
     <Modal open={open} onClose={() => setOpen(false)} title="资料库统计" width={560}>
-      {dist === null ? (
+      {loadError !== null ? (
+        <div className="flex flex-col items-center gap-3 py-8 text-center text-[13px] text-ink2">
+          <p>统计加载失败：{loadError}</p>
+          <button
+            onClick={load}
+            className="rounded-md border border-line px-3 py-1.5 text-xs text-ink2 hover:bg-hover hover:text-ink"
+          >
+            重试
+          </button>
+        </div>
+      ) : dist === null ? (
         <p className="py-8 text-center text-[13px] text-ink3">统计加载中…</p>
       ) : (
         <div className="space-y-6 text-[13px]">

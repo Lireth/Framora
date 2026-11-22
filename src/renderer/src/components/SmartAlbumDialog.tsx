@@ -37,6 +37,9 @@ export function SmartAlbumDialog({
   const [albumIds, setAlbumIds] = useState<number[]>([])
   const [folderIds, setFolderIds] = useState<number[]>([])
   const [untagged, setUntagged] = useState(false)
+  const [camera, setCamera] = useState('')
+  const [orientation, setOrientation] = useState<'' | 'landscape' | 'portrait'>('')
+  const [cameras, setCameras] = useState<{ name: string; count: number }[]>([])
   const [sort, setSort] = useState<SortKey>('taken')
   const [dir, setDir] = useState<'asc' | 'desc'>('desc')
   const [saving, setSaving] = useState(false)
@@ -53,9 +56,16 @@ export function SmartAlbumDialog({
     setAlbumIds(q.albumIds ?? [])
     setFolderIds(q.folderIds ?? [])
     setUntagged(q.untagged ?? false)
+    setCamera(q.camera ?? '')
+    setOrientation(q.orientation ?? '')
     setSort(q.sort ?? 'taken')
     setDir(q.dir ?? 'desc')
     setSaving(false)
+    // 相机候选（FEAT-20）：与工具栏筛选面板同源（统计分布 TOP-N）
+    api
+      .distribution()
+      .then((d) => setCameras(d.byCamera))
+      .catch(() => undefined)
   }, [open, album, draft])
 
   if (!open) return null
@@ -68,7 +78,9 @@ export function SmartAlbumDialog({
     tagIds.length > 0 ||
     albumIds.length > 0 ||
     folderIds.length > 0 ||
-    untagged
+    untagged ||
+    !!camera ||
+    !!orientation
 
   const save = async (): Promise<void> => {
     const s = useStore.getState()
@@ -90,6 +102,8 @@ export function SmartAlbumDialog({
       albumIds: albumIds.length ? albumIds : undefined,
       folderIds: folderIds.length ? folderIds : undefined,
       untagged: untagged || undefined,
+      camera: camera || undefined,
+      orientation: orientation || undefined,
       sort,
       dir,
     }
@@ -260,6 +274,40 @@ export function SmartAlbumDialog({
           ) : (
             <p className="text-[11.5px] text-ink3">暂无资料库文件夹</p>
           )}
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <p className="mb-1.5 text-[12px] text-ink3">方向（FEAT-20）</p>
+            <div className="flex gap-1.5">
+              {(
+                [
+                  ['', '不限'],
+                  ['landscape', '横幅'],
+                  ['portrait', '竖幅']
+                ] as const
+              ).map(([v, label]) => (
+                <button key={v || 'any'} onClick={() => setOrientation(v)} className={chipCls(orientation === v)}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <p className="mb-1.5 text-[12px] text-ink3">相机（FEAT-20）</p>
+            <select
+              value={camera}
+              onChange={(e) => setCamera(e.target.value)}
+              className={INPUT_CLS}
+            >
+              <option value="">全部相机</option>
+              {cameras.map((c) => (
+                <option key={c.name} value={c.name}>
+                  {c.name}（{c.count}）
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
 
         <div className="grid grid-cols-2 gap-3">

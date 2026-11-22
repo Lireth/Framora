@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Clock, FilePlus, FolderPlus, Grid3x3, Info, LayoutGrid, Search, SlidersHorizontal, Square, Trash2, X } from 'lucide-react'
 import { useStore, type SortKey } from '../store'
+import { api } from '../lib/api'
 import { emptyTrashAction, importFilesAction, importFolderAction, selectRedundantAction } from '../lib/actions'
 import { SORT_OPTIONS } from '@shared/formats'
 import {
@@ -54,6 +55,8 @@ function FilterPopover({ onClose }: { onClose: () => void }): React.JSX.Element 
   const albumIds = useStore((s) => s.albumIds)
   const folderIds = useStore((s) => s.folderIds)
   const untagged = useStore((s) => s.untagged)
+  const camera = useStore((s) => s.camera)
+  const orientation = useStore((s) => s.orientation)
   const tags = useStore((s) => s.tags)
   const albums = useStore((s) => s.albums)
   const folders = useStore((s) => s.folders)
@@ -67,6 +70,21 @@ function FilterPopover({ onClose }: { onClose: () => void }): React.JSX.Element 
 
   /* 组合筛选（FEAT-18）：多标签 AND、多相册/文件夹 OR，语义与智能相册条件一致 */
   const hasCombo = tagIds.length > 0 || albumIds.length > 0 || folderIds.length > 0 || untagged
+
+  // 相机候选（FEAT-20）：来自统计分布 TOP-N（面板短暂挂载，随开随取）
+  const [cameras, setCameras] = useState<{ name: string; count: number }[]>([])
+  useEffect(() => {
+    let cancelled = false
+    api
+      .distribution()
+      .then((d) => {
+        if (!cancelled) setCameras(d.byCamera)
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   return (
     <div
@@ -188,6 +206,46 @@ function FilterPopover({ onClose }: { onClose: () => void }): React.JSX.Element 
           )}
         </div>
         <div>
+          <p className="mb-1.5 text-[11.5px] text-ink3">方向（FEAT-20 按显示宽高）</p>
+          <div className="flex gap-1.5">
+            {(
+              [
+                ['', '不限'],
+                ['landscape', '横幅'],
+                ['portrait', '竖幅']
+              ] as const
+            ).map(([v, label]) => (
+              <button
+                key={v || 'any'}
+                onClick={() => setFilter({ orientation: v })}
+                className={chipCls(orientation === v)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div>
+          <p className="mb-1.5 text-[11.5px] text-ink3">
+            相机（来自统计解析的 TOP 机型）
+          </p>
+          <select
+            value={camera}
+            onChange={(e) => setFilter({ camera: e.target.value })}
+            className="h-8 w-full rounded-md border border-line bg-panel px-2 text-xs outline-none"
+          >
+            <option value="">全部相机</option>
+            {cameras.map((c) => (
+              <option key={c.name} value={c.name}>
+                {c.name}（{c.count}）
+              </option>
+            ))}
+          </select>
+          {camera && cameras.every((c) => c.name !== camera) && (
+            <p className="mt-1 text-[10.5px] text-ink3">当前筛选的相机不在 TOP 8 内，仍按精确匹配生效</p>
+          )}
+        </div>
+        <div>
           <p className="mb-1.5 text-[11.5px] text-ink3">排序方式</p>
           <div className="flex gap-2">
             <select
@@ -209,7 +267,7 @@ function FilterPopover({ onClose }: { onClose: () => void }): React.JSX.Element 
             </button>
           </div>
         </div>
-        {(dateFrom || dateTo || minRating > 0 || hasCombo) && (
+        {(dateFrom || dateTo || minRating > 0 || hasCombo || camera || orientation) && (
           <button
             onClick={() =>
               setFilter({
@@ -219,7 +277,9 @@ function FilterPopover({ onClose }: { onClose: () => void }): React.JSX.Element 
                 tagIds: [],
                 albumIds: [],
                 folderIds: [],
-                untagged: false
+                untagged: false,
+                camera: '',
+                orientation: ''
               })
             }
             className="flex w-full items-center justify-center gap-1.5 rounded-md border border-line py-1.5 text-xs text-ink2 hover:bg-hover hover:text-ink"
@@ -245,6 +305,8 @@ export function Toolbar(): React.JSX.Element {
   const albumIds = useStore((s) => s.albumIds)
   const folderIds = useStore((s) => s.folderIds)
   const untagged = useStore((s) => s.untagged)
+  const camera = useStore((s) => s.camera)
+  const orientation = useStore((s) => s.orientation)
   const searchHistory = useStore((s) => s.searchHistory)
   const stats = useStore((s) => s.stats)
   const setKeyword = useStore((s) => s.setFilter)
@@ -296,7 +358,9 @@ export function Toolbar(): React.JSX.Element {
     (tagIds.length ? 1 : 0) +
     (albumIds.length ? 1 : 0) +
     (folderIds.length ? 1 : 0) +
-    (untagged ? 1 : 0)
+    (untagged ? 1 : 0) +
+    (camera ? 1 : 0) +
+    (orientation ? 1 : 0)
 
   return (
     <div className="relative flex h-12 shrink-0 items-center gap-2 border-b border-line bg-app px-4">

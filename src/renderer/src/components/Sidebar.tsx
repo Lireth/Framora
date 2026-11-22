@@ -29,6 +29,7 @@ import { SmartAlbumDialog } from './SmartAlbumDialog'
 import type {
   AlbumInfo,
   FolderInfo,
+  PhotoScope,
   SmartAlbumInfo,
   SmartAlbumQuery,
   TagInfo,
@@ -162,16 +163,6 @@ function NavRow({
               if (dragging && dragging.ids.length && Date.now() - dragging.at < 10000) {
                 s.setDraggingPhotos(null)
                 onDropPhotos?.(dragging.ids)
-                return
-              }
-              try {
-                const raw = e.dataTransfer.getData('application/x-framora-photos')
-                const ids = JSON.parse(raw) as unknown
-                if (Array.isArray(ids) && ids.length && ids.every((x) => typeof x === 'number')) {
-                  onDropPhotos?.(ids)
-                }
-              } catch {
-                /* 无效拖拽数据忽略 */
               }
             }
           : undefined
@@ -352,6 +343,17 @@ export function Sidebar(): React.JSX.Element {
         setRename({ kind: 'smart', id: sa.id, name: sa.name })
       },
     },
+    {
+      label: '颜色',
+      icon: <Palette size={13} />,
+      // 智能相册颜色（FEAT-20）：与标签/相册的色点视觉体系对齐
+      submenu: colorMenu((c) =>
+        api
+          .setSmartAlbumColor(sa.id, c)
+          .then(() => useStore.getState().refreshLibrary())
+          .catch(() => useStore.getState().toast('error', '设置智能相册颜色失败')),
+      ),
+    },
     { separator: true },
     {
       label: '删除智能相册',
@@ -418,61 +420,38 @@ export function Sidebar(): React.JSX.Element {
     setSmartEdit({ album: null, draft: q })
   }
 
+  /** 资料库导航（OPT-52 数据驱动）：8 行同构 NavRow 收敛为配置数组 */
+  const libraryNav: {
+    key: PhotoScope | 'stats'
+    label: string
+    icon: React.ReactNode
+    count?: number
+  }[] = [
+    { key: 'all', label: '全部照片', icon: <Image size={15} />, count: stats.total },
+    { key: 'recent', label: '最近导入', icon: <Clock size={15} /> },
+    { key: 'untagged', label: '未加标签', icon: <Tag size={15} />, count: stats.untagged },
+    { key: 'missing', label: '缺失文件', icon: <AlertTriangle size={15} />, count: stats.missing },
+    { key: 'stats', label: '资料库统计', icon: <BarChart3 size={15} /> },
+    { key: 'map', label: '地点', icon: <MapPin size={15} /> },
+    { key: 'duplicates', label: '疑似重复', icon: <Copy size={15} /> },
+    { key: 'trash', label: '回收站', icon: <Trash2 size={15} />, count: stats.trash },
+  ]
+
   return (
     <aside className="flex w-[216px] shrink-0 flex-col overflow-y-auto border-r border-line bg-panel pb-3">
       <SectionHeader title="资料库" />
-      <NavRow
-        icon={<Image size={15} />}
-        label="全部照片"
-        count={stats.total}
-        active={scope === 'all'}
-        onClick={() => setScope('all')}
-      />
-      <NavRow
-        icon={<Clock size={15} />}
-        label="最近导入"
-        active={scope === 'recent'}
-        onClick={() => setScope('recent')}
-      />
-      <NavRow
-        icon={<Tag size={15} />}
-        label="未加标签"
-        count={stats.untagged}
-        active={scope === 'untagged'}
-        onClick={() => setScope('untagged')}
-      />
-      <NavRow
-        icon={<AlertTriangle size={15} />}
-        label="缺失文件"
-        count={stats.missing}
-        active={scope === 'missing'}
-        onClick={() => setScope('missing')}
-      />
-      <NavRow
-        icon={<BarChart3 size={15} />}
-        label="资料库统计"
-        active={false}
-        onClick={() => useStore.getState().setStatsOpen(true)}
-      />
-      <NavRow
-        icon={<MapPin size={15} />}
-        label="地点"
-        active={scope === 'map'}
-        onClick={() => setScope('map')}
-      />
-      <NavRow
-        icon={<Copy size={15} />}
-        label="疑似重复"
-        active={scope === 'duplicates'}
-        onClick={() => setScope('duplicates')}
-      />
-      <NavRow
-        icon={<Trash2 size={15} />}
-        label="回收站"
-        count={stats.trash}
-        active={scope === 'trash'}
-        onClick={() => setScope('trash')}
-      />
+      {libraryNav.map((n) => (
+        <NavRow
+          key={n.key}
+          icon={n.icon}
+          label={n.label}
+          count={n.count}
+          active={n.key !== 'stats' && scope === n.key}
+          onClick={() =>
+            n.key === 'stats' ? useStore.getState().setStatsOpen(true) : setScope(n.key)
+          }
+        />
+      ))}
 
       <SectionHeader
         title="文件夹"
@@ -582,7 +561,17 @@ export function Sidebar(): React.JSX.Element {
       {smartAlbums.map((sa) => (
         <NavRow
           key={sa.id}
-          icon={<SlidersHorizontal size={15} />}
+          icon={
+            // 色点（FEAT-20）：已设色的智能相册与标签/相册同样以色点呈现
+            sa.color ? (
+              <span
+                className="inline-block h-2.5 w-2.5 rounded-full"
+                style={{ background: sa.color }}
+              />
+            ) : (
+              <SlidersHorizontal size={15} />
+            )
+          }
           label={sa.name}
           title={smartSummary(sa.query, tags, albums, folders)}
           active={scope === 'smart' && scopeId === sa.id}

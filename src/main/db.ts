@@ -1389,6 +1389,17 @@ function buildPhotoFilter(q: PhotoQuery): { whereSql: string; params: Record<str
     where.push('p.rating >= @minRating')
     params.minRating = q.minRating
   }
+  // 相机/方向筛选（FEAT-20）：camera 为精确匹配（"Make Model" 来自统计分布）；
+  // 方向用显示宽高（入库已按 EXIF 方向换算），无尺寸行排除在外
+  if (q.camera) {
+    where.push('p.camera = @camera')
+    params.camera = q.camera
+  }
+  if (q.orientation === 'landscape') {
+    where.push('p.width IS NOT NULL AND p.height IS NOT NULL AND p.width > p.height')
+  } else if (q.orientation === 'portrait') {
+    where.push('p.width IS NOT NULL AND p.height IS NOT NULL AND p.width < p.height')
+  }
   return { whereSql: where.length ? `WHERE ${where.join(' AND ')}` : '', params }
 }
 
@@ -1466,6 +1477,8 @@ function resolveSmartFilters(q: PhotoQuery): PhotoQuery {
         albumIds: saved.albumIds,
         folderIds: saved.folderIds,
         untagged: saved.untagged,
+        camera: saved.camera,
+        orientation: saved.orientation,
         sort: saved.sort ?? q.sort,
         dir: saved.dir ?? q.dir,
       }
@@ -1526,6 +1539,13 @@ function parseSmartQuery(raw: string): SmartAlbumQuery {
   const folderIds = idsOf(src.folderIds)
   if (folderIds) out.folderIds = folderIds
   if (typeof src.untagged === 'boolean') out.untagged = src.untagged
+  // 相机精确串 + 方向枚举（FEAT-20）：非法值丢弃，语义与整体白名单策略一致
+  if (typeof src.camera === 'string' && src.camera.trim() && src.camera.length <= 120) {
+    out.camera = src.camera
+  }
+  if (src.orientation === 'landscape' || src.orientation === 'portrait') {
+    out.orientation = src.orientation
+  }
   if (typeof src.sort === 'string' && SMART_SORT_KEYS.has(src.sort)) {
     out.sort = src.sort as SmartAlbumQuery['sort']
   }
@@ -1627,6 +1647,11 @@ export function setTagColor(id: number, color: string | null): void {
 
 export function setAlbumColor(id: number, color: string | null): void {
   stmt('UPDATE albums SET color = ? WHERE id = ? AND deleted_at IS NULL').run(color, id)
+}
+
+/** 智能相册颜色（FEAT-20）：侧栏色点与标签/相册视觉体系对齐 */
+export function setSmartAlbumColor(id: number, color: string | null): void {
+  stmt('UPDATE smart_albums SET color = ? WHERE id = ? AND deleted_at IS NULL').run(color, id)
 }
 
 function countTagPhotos(tagId: number): number {

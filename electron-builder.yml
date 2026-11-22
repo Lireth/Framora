@@ -5,6 +5,10 @@ copyright: Copyright © 2026 Framora Studio
 
 npmRebuild: false
 
+# asar 显式声明（OPT-51）：不依赖隐式默认；后续启用 Fuses（onlyLoadAppFromAsar）
+# 与代码签名时以此为先决条件
+asar: true
+
 # 应用内更新通道（electron-updater）：dist 时生成 latest.yml 与 blockmap；
 # 发布由 release.yml 在打 tag 时创建 GitHub Release 并上传对应产物
 publish:

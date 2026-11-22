@@ -1,9 +1,10 @@
-import React, { useEffect, useMemo, useState } from 'react'
-import { MapPin, X } from 'lucide-react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { MapPin, Square, X } from 'lucide-react'
 import { useStore } from '../store'
 import { api } from '../lib/api'
 import { thumbUrl } from '../lib/format'
 import { formatDate } from '@shared/formats'
+import { cn } from './ui'
 import type { GeoPhoto } from '@shared/types'
 
 /**
@@ -11,6 +12,8 @@ import type { GeoPhoto } from '@shared/types'
  * GPS 照片按 ~2° 网格聚簇为圆点（半径随数量增长）。点击簇弹出照片清单
  * （缩略图 / 打开查看器 / OSM 外链）。完全离线——不上传任何数据，
  * 仅在用户显式点击「OSM」时经系统浏览器打开网页地图。
+ * 框选选片（FEAT-21）：开启「框选」后拖出矩形，框内照片进入选择集
+ * （复用全局选择模型——批量栏随之出现，可评分/加标签/入相册）。
  */
 
 /** 聚簇网格度数：约 220km 纬向粒度 */
@@ -41,11 +44,51 @@ function cluster(list: GeoPhoto[]): Cluster[] {
   return [...cells.values()]
 }
 
+/** SVG 像素 → 经纬度（等距圆柱投影的逆变换） */
+function svgToLatLon(x: number, y: number): { lat: number; lon: number } {
+  return { lat: 90 - (y / MAP_H) * 180, lon: (x / MAP_W) * 360 - 180 }
+}
+
 export function MapPanel(): React.JSX.Element {
   const openViewer = useStore((s) => s.openViewer)
   const [all, setAll] = useState<GeoPhoto[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [active, setActive] = useState<Cluster | null>(null)
+  // 框选选片（FEAT-21）
+  const [selectMode, setSelectMode] = useState(false)
+  const [rect, setRect] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null)
+  const svgRef = useRef<SVGSVGElement>(null)
+
+  /** 客户端坐标 → SVG viewBox 坐标（preserveAspectRatio="meet" 的居中偏移修正） */
+  const toSvg = (clientX: number, clientY: number): { x: number; y: number } | null => {
+    const el = svgRef.current
+    if (!el) return null
+    const r = el.getBoundingClientRect()
+    if (!r.width || !r.height) return null
+    const scale = Math.min(r.width / MAP_W, r.height / MAP_H)
+    const ox = (r.width - MAP_W * scale) / 2
+    const oy = (r.height - MAP_H * scale) / 2
+    return {
+      x: Math.max(0, Math.min(MAP_W, (clientX - r.left - ox) / scale)),
+      y: Math.max(0, Math.min(MAP_H, (clientY - r.top - oy) / scale)),
+    }
+  }
+
+  const finishSelect = (r: { x0: number; y0: number; x1: number; y1: number }): void => {
+    const a = svgToLatLon(Math.min(r.x0, r.x1), Math.min(r.y0, r.y1))
+    const b = svgToLatLon(Math.max(r.x0, r.x1), Math.max(r.y0, r.y1))
+    if (!all) return
+    const ids = all
+      .filter((p) => p.lat >= a.lat && p.lat <= b.lat && p.lon >= a.lon && p.lon <= b.lon)
+      .map((p) => p.id)
+    const s = useStore.getState()
+    if (ids.length) {
+      s.setSelection(ids)
+      s.toast('success', `已框选 ${ids.length} 张照片，可用批量栏评分 / 加标签 / 入相册`)
+    } else {
+      s.toast('info', '框选区域内没有带定位的照片')
+    }
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -110,17 +153,58 @@ export function MapPanel(): React.JSX.Element {
 
   return (
     <div className="relative flex h-full min-w-0 flex-1 flex-col p-3">
-      <p className="mb-2 shrink-0 text-[11.5px] text-ink3">
-        {all.length} 张带定位照片 · {clusters.length} 个聚合点 ·
-        离线示意投影（等距圆柱），点击聚合点查看照片；OSM 为外部网页地图
-      </p>
+      <div className="mb-2 flex shrink-0 items-center gap-2">
+        <p className="min-w-0 flex-1 truncate text-[11.5px] text-ink3">
+          {all.length} 张带定位照片 · {clusters.length} 个聚合点 ·
+          离线示意投影（等距圆柱），点击聚合点查看照片；OSM 为外部网页地图
+        </p>
+        <button
+          onClick={() => {
+            setSelectMode((v) => !v)
+            setRect(null)
+          }}
+          className={cn(
+            'flex h-7 shrink-0 items-center gap-1.5 rounded-md border px-2.5 text-[11.5px] transition-colors',
+            selectMode
+              ? 'border-[var(--c-accent)] bg-accent-soft text-accent'
+              : 'border-line text-ink2 hover:bg-hover hover:text-ink'
+          )}
+          title="拖出矩形，框内照片进入选择集（可批量评分 / 加标签 / 入相册）"
+        >
+          <Square size={12} /> {selectMode ? '框选中（点击退出）' : '框选照片'}
+        </button>
+      </div>
       <div className="min-h-0 flex-1 overflow-hidden rounded-xl border border-line bg-raised">
         <svg
+          ref={svgRef}
           viewBox={`0 0 ${MAP_W} ${MAP_H}`}
-          className="h-full w-full"
+          className={cn('h-full w-full', selectMode && 'cursor-crosshair')}
           preserveAspectRatio="xMidYMid meet"
           role="img"
           aria-label={`世界地点分布：${all.length} 张照片，${clusters.length} 个聚合点`}
+          onPointerDown={(e) => {
+            if (!selectMode) return
+            const p = toSvg(e.clientX, e.clientY)
+            if (!p) return
+            e.currentTarget.setPointerCapture(e.pointerId)
+            setRect({ x0: p.x, y0: p.y, x1: p.x, y1: p.y })
+          }}
+          onPointerMove={(e) => {
+            if (!selectMode || !rect) return
+            const p = toSvg(e.clientX, e.clientY)
+            if (!p) return
+            setRect({ ...rect, x1: p.x, y1: p.y })
+          }}
+          onPointerUp={(e) => {
+            if (!selectMode || !rect) return
+            const p = toSvg(e.clientX, e.clientY)
+            const final = p ? { ...rect, x1: p.x, y1: p.y } : rect
+            setRect(null)
+            // 极小矩形视为误触，不改变选择集
+            if (Math.abs(final.x1 - final.x0) > 4 || Math.abs(final.y1 - final.y0) > 4) {
+              finishSelect(final)
+            }
+          }}
         >
           {/* 经纬网格：30° 间隔 */}
           {[-150, -120, -90, -60, -30, 0, 30, 60, 90, 120, 150].map((lon) => (
@@ -145,6 +229,21 @@ export function MapPanel(): React.JSX.Element {
               strokeWidth={lat === 0 ? 1.2 : 0.6}
             />
           ))}
+          {/* 框选矩形（FEAT-21） */}
+          {selectMode && rect && (
+            <rect
+              x={Math.min(rect.x0, rect.x1)}
+              y={Math.min(rect.y0, rect.y1)}
+              width={Math.abs(rect.x1 - rect.x0)}
+              height={Math.abs(rect.y1 - rect.y0)}
+              fill="var(--c-accent)"
+              fillOpacity={0.12}
+              stroke="var(--c-accent)"
+              strokeWidth={1.2}
+              strokeDasharray="4 3"
+              style={{ pointerEvents: 'none' }}
+            />
+          )}
           {/* 聚合点 */}
           {clusters.map((c) => {
             const n = c.items.length
@@ -152,8 +251,8 @@ export function MapPanel(): React.JSX.Element {
             return (
               <g
                 key={c.key}
-                onClick={() => setActive(c)}
-                className="cursor-pointer"
+                onClick={() => !selectMode && setActive(c)}
+                className={selectMode ? '' : 'cursor-pointer'}
                 data-testid={`geo-cluster-${c.key}`}
               >
                 <circle

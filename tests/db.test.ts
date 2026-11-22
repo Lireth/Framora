@@ -1120,3 +1120,43 @@ describe('元数据软删除与撤销（P0-1）', () => {
     )
   })
 })
+
+describe('相机/方向筛选与智能相册颜色（FEAT-20）', () => {
+  const ids = (r: { items: { id: number }[] }): number[] => r.items.map((p) => p.id)
+
+  function camSetup(): { portraitId: number; landscapeId: number } {
+    const f = newFolder('C:\\pics')
+    const portraitId = seed(f, 'portrait-1')
+    db.setPhotoDimsAndDate(portraitId, 80, 120, null)
+    const landscapeId = seed(f, 'landscape-1')
+    db.setPhotoDimsAndDate(landscapeId, 120, 80, null)
+    return { portraitId, landscapeId }
+  }
+
+  it('方向筛选按显示宽高（横/竖），无尺寸行被排除', () => {
+    const { portraitId, landscapeId } = camSetup()
+    expect(ids(db.queryPhotos({ scope: 'all', orientation: 'portrait' }))).toEqual([portraitId])
+    expect(ids(db.queryPhotos({ scope: 'all', orientation: 'landscape' }))).toEqual([landscapeId])
+  })
+
+  it('相机精确筛选；智能相册条件经 parseSmartQuery 透传', () => {
+    camSetup()
+    const f = newFolder('C:\\pics')
+    const id = seed(f, 'cam-1')
+    db.setPhotoDimsAndDate(id, 120, 80, null) // 横幅
+    db.setPhotoCamera(id, 'Canon EOS R6')
+    expect(ids(db.queryPhotos({ scope: 'all', camera: 'Canon EOS R6' }))).toEqual([id])
+    expect(db.queryPhotos({ scope: 'all', camera: 'Canon' }).total).toBe(0)
+
+    const sa = db.createSmartAlbum('R6 精选', { camera: 'Canon EOS R6', orientation: 'landscape' })
+    expect(ids(db.queryPhotos({ scope: 'smart', scopeId: sa }))).toEqual([id])
+  })
+
+  it('setSmartAlbumColor 写入色点并可回读', () => {
+    const sa = db.createSmartAlbum('有色的相册', { minRating: 5 })
+    db.setSmartAlbumColor(sa, '#e0533d')
+    expect(db.listSmartAlbums().find((a) => a.id === sa)?.color).toBe('#e0533d')
+    db.setSmartAlbumColor(sa, null)
+    expect(db.listSmartAlbums().find((a) => a.id === sa)?.color).toBeNull()
+  })
+})

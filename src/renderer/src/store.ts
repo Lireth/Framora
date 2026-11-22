@@ -43,6 +43,10 @@ export interface Filters {
   folderIds: number[]
   /** 组合筛选：仅看未加标签的照片（与标签互斥） */
   untagged: boolean
+  /** 相机精确筛选（FEAT-20）：'' 为不限 */
+  camera: string
+  /** 方向筛选（FEAT-20）：'' 为不限 */
+  orientation: '' | 'landscape' | 'portrait'
   sort: SortKey
   dir: 'asc' | 'desc'
 }
@@ -265,6 +269,8 @@ function buildQuery(s: AppState): PhotoQuery {
     albumIds: s.albumIds.length ? s.albumIds : undefined,
     folderIds: s.folderIds.length ? s.folderIds : undefined,
     untagged: s.untagged || undefined,
+    camera: s.camera || undefined,
+    orientation: s.orientation || undefined,
     sort: s.sort,
     dir: s.dir,
   }
@@ -283,6 +289,8 @@ export const useStore = create<AppState>((set, get) => ({
   albumIds: [],
   folderIds: [],
   untagged: false,
+  camera: '',
+  orientation: '',
   sort: 'taken',
   dir: 'desc',
   folders: [],

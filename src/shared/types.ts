@@ -84,6 +84,10 @@ export interface PhotoQuery {
   folderIds?: number[]
   /** 仅返回未加标签的照片 */
   untagged?: boolean
+  /** 按相机精确筛选（FEAT-20："Make Model" 组合串，来自统计分布 TOP-N） */
+  camera?: string
+  /** 按方向筛选（FEAT-20：显示宽高，已按 EXIF 方向换算） */
+  orientation?: 'landscape' | 'portrait'
   sort?: 'taken' | 'imported' | 'name' | 'rating' | 'size'
   dir?: 'asc' | 'desc'
   limit?: number
@@ -157,6 +161,9 @@ export interface ExportOptions {
   adjust?: EditAdjustments
   /** 文字水印（FEAT-11） */
   watermark?: WatermarkOptions
+  /** 中心裁剪到指定宽高比（FEAT-22，如 1 = 1:1、4/3 = 4:3）：作用于旋转/翻转后的
+   *  视觉空间，裁剪先于 maxSide 缩放；缺省为不裁剪。裁剪强制走重编码管线 */
+  cropAspect?: number
 }
 
 export interface SmartAlbumInfo {
@@ -182,6 +189,10 @@ export interface SmartAlbumQuery {
   folderIds?: number[]
   /** 仅未加标签 */
   untagged?: boolean
+  /** 按相机精确筛选（FEAT-20） */
+  camera?: string
+  /** 按方向筛选（FEAT-20） */
+  orientation?: 'landscape' | 'portrait'
   /** 保存时固定排序；缺省则沿用工具栏当前排序 */
   sort?: 'taken' | 'imported' | 'name' | 'rating' | 'size'
   dir?: 'asc' | 'desc'

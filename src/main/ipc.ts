@@ -629,6 +629,9 @@ export function registerIpc(): void {
 
   ipcMain.handle('undo:peek', () => undoStore.peek())
 
+  // 撤销历史（FEAT-24）：栈顶在前，仅供状态栏历史展示（撤销仍按栈顶顺序执行）
+  ipcMain.handle('undo:list', () => undoStore.list())
+
   ipcMain.handle('undo:perform', async () => {
     const entry = undoStore.peek()
     if (!entry) return null
@@ -769,6 +772,10 @@ export function registerIpc(): void {
     (_e, id: number, name: string, query: SmartAlbumQuery) =>
       db.updateSmartAlbum(id, name.trim(), query),
   )
+  ipcMain.handle('smartAlbums:setColor', (_e, id: number, color: string | null) =>
+    db.setSmartAlbumColor(id, color),
+  )
+
   ipcMain.handle('smartAlbums:delete', (_e, id: number) => {
     // 软删除（FEAT-13）：与普通相册一致纳入撤销栈，并同步广播侧栏刷新
     // （OPT-47：tags/albums/folder 删除都广播 evt:library，唯独此处曾遗漏）

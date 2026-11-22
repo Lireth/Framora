@@ -47,6 +47,11 @@ export class UndoStore {
     return this.stack.length ? this.stack[this.stack.length - 1] : null
   }
 
+  /** 栈全量快照（FEAT-24 历史展示），栈顶在前 */
+  list(): UndoEntry[] {
+    return [...this.stack].reverse()
+  }
+
   /** 弹出栈顶（撤销执行成功后调用）并持久化 */
   pop(): UndoEntry | null {
     const e = this.stack.pop() ?? null

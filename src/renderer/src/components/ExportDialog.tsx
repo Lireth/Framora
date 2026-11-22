@@ -24,6 +24,7 @@ export function ExportDialog(): React.JSX.Element | null {
   const [fmt, setFmt] = useState<Fmt>('jpeg')
   const [maxSide, setMaxSide] = useState(0)
   const [quality, setQuality] = useState(92)
+  const [cropAspect, setCropAspect] = useState(0)
   const [nameTemplate, setNameTemplate] = useState('{name}')
   const [presets, setPresets] = useState<EditPreset[]>([])
   const [presetId, setPresetId] = useState('')
@@ -41,6 +42,7 @@ export function ExportDialog(): React.JSX.Element | null {
       setFmt('jpeg')
       setMaxSide(0)
       setQuality(92)
+      setCropAspect(0)
       setNameTemplate('{name}')
       setPresetId('')
       api
@@ -83,6 +85,7 @@ export function ExportDialog(): React.JSX.Element | null {
             format: fmt,
             quality,
             maxSide: maxSide || undefined,
+            cropAspect: cropAspect || undefined,
             adjust: presets.find((x) => x.id === presetId)?.adjust,
             watermark: buildWatermark(),
           })
@@ -124,6 +127,7 @@ export function ExportDialog(): React.JSX.Element | null {
         format: fmt,
         maxSide: maxSide || undefined,
         quality,
+        cropAspect: cropAspect || undefined,
         nameTemplate: nameTemplate.trim() || undefined,
         adjust: presets.find((x) => x.id === presetId)?.adjust,
         watermark: buildWatermark(),
@@ -162,6 +166,15 @@ export function ExportDialog(): React.JSX.Element | null {
     [2048, '长边 2048px'],
     [1080, '长边 1080px'],
     [800, '长边 800px']
+  ]
+  // 中心裁剪比例（FEAT-22）：作用于旋转/翻转后的视觉空间，裁剪先于尺寸缩放
+  const cropOptions: [number, string][] = [
+    [0, '不裁剪'],
+    [1, '1:1 方形'],
+    [4 / 3, '4:3 横幅'],
+    [3 / 4, '3:4 竖幅'],
+    [16 / 9, '16:9 宽幅'],
+    [9 / 16, '9:16 竖长']
   ]
 
   return (
@@ -248,6 +261,26 @@ export function ExportDialog(): React.JSX.Element | null {
                 className={cn(
                   'rounded-md border px-2.5 py-1.5 text-xs transition-colors',
                   maxSide === v
+                    ? 'border-[var(--c-accent)] bg-accent-soft text-accent'
+                    : 'border-line text-ink2 hover:bg-hover hover:text-ink'
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <p className="mb-1.5 text-[12px] text-ink3">比例裁剪（中心裁剪，不改原图）</p>
+          <div className="flex flex-wrap gap-1.5">
+            {cropOptions.map(([v, label]) => (
+              <button
+                key={label}
+                onClick={() => setCropAspect(v)}
+                className={cn(
+                  'rounded-md border px-2.5 py-1.5 text-xs transition-colors',
+                  Math.abs(cropAspect - v) < 1e-9
                     ? 'border-[var(--c-accent)] bg-accent-soft text-accent'
                     : 'border-line text-ink2 hover:bg-hover hover:text-ink'
                 )}

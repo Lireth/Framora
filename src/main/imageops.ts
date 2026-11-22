@@ -57,6 +57,8 @@ interface ExportTask {
   maxSide?: number
   adjust?: EditAdjustments
   watermark?: WatermarkOptions
+  /** 中心裁剪宽高比（FEAT-22）：作用于旋转/翻转后的视觉空间 */
+  cropAspect?: number
 }
 
 /** 导出重编码并发数：与 libvips 内部线程池配合，重叠 I/O 等待 */
@@ -110,7 +112,7 @@ export async function exportPhotos(
         continue
       }
       const base = applyTemplate(opts.nameTemplate ?? '{name}', row, i)
-      // 有调整/水印时 original 格式也必须走重编码管线（否则变换被静默跳过）
+      // 有调整/水印/裁剪时 original 格式也必须走重编码管线（否则变换被静默跳过）
       const noTransform =
         fmt === 'original' &&
         !opts.maxSide &&
@@ -118,7 +120,8 @@ export async function exportPhotos(
         !row.flip_h &&
         !row.flip_v &&
         !opts.adjust &&
-        !opts.watermark
+        !opts.watermark &&
+        !opts.cropAspect
       // sharp 预编译 libvips 不含 libraw，无法解码 RAW 本体；需转码时改用嵌入预览（JPEG）作为源
       const rawPreviewSrc = !noTransform && isRawExt(row.ext)
       let ext = row.ext
@@ -148,7 +151,8 @@ export async function exportPhotos(
         quality: opts.quality ?? 90,
         maxSide: opts.maxSide,
         adjust: opts.adjust,
-        watermark: opts.watermark
+        watermark: opts.watermark,
+        cropAspect: opts.cropAspect
       })
     }
 
@@ -176,6 +180,14 @@ export async function exportPhotos(
             if (t.orientation) pipe = pipe.rotate(t.orientation)
             if (t.flipH) pipe = pipe.flop()
             if (t.flipV) pipe = pipe.flip()
+            // 中心裁剪到目标宽高比（FEAT-22）：extract 在 rotate/flip 之后调用，
+            // 作用于视觉空间（sharp 的 post-extract）；中心裁剪对翻转对称，
+            // 尺寸按「EXIF 转正 + 用户旋转」后的最终画布计算
+            if (t.cropAspect && t.cropAspect > 0) {
+              const visual = await visualDims(srcInput, t.orientation)
+              const box = centerCropBox(visual.w, visual.h, t.cropAspect)
+              if (box) pipe = pipe.extract(box)
+            }
             if (t.maxSide) {
               pipe = pipe.resize(t.maxSide, t.maxSide, { fit: 'inside', withoutEnlargement: true })
             }
@@ -252,6 +264,39 @@ function escapeXml(text: string): string {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&apos;')
+}
+
+/** 视觉尺寸（FEAT-22）：EXIF 转正 + 应用旋转后的宽高（翻转不改变尺寸） */
+async function visualDims(
+  srcInput: string | Buffer,
+  orientation: number
+): Promise<{ w: number; h: number }> {
+  const meta = await sharp(srcInput, { failOn: 'none' }).metadata()
+  let w = meta.width ?? 0
+  let h = meta.height ?? 0
+  if ((meta.orientation ?? 1) >= 5 && (meta.orientation ?? 1) <= 8) [w, h] = [h, w]
+  if (orientation === 90 || orientation === 270) [w, h] = [h, w]
+  return { w: Math.max(1, w), h: Math.max(1, h) }
+}
+
+/** 中心裁剪框（FEAT-22）：把 w×h 画面裁到目标宽高比，返回 sharp post-extract 参数；
+ *  尺寸不足或比例相同（差异 < 1px）时返回 null 跳过裁剪 */
+function centerCropBox(
+  w: number,
+  h: number,
+  aspect: number
+): { left: number; top: number; width: number; height: number } | null {
+  if (!Number.isFinite(aspect) || aspect <= 0 || w < 2 || h < 2) return null
+  const cropW = Math.min(w, Math.floor(h * aspect))
+  const cropH = Math.min(h, Math.floor(cropW / aspect))
+  if (cropW < 1 || cropH < 1) return null
+  if (cropW === w && cropH === h) return null
+  return {
+    left: Math.floor((w - cropW) / 2),
+    top: Math.floor((h - cropH) / 2),
+    width: cropW,
+    height: cropH
+  }
 }
 
 /** 输出画布尺寸估算：EXIF 旋转 → 应用旋转 → maxSide 缩放（与导出管线变换序一致） */

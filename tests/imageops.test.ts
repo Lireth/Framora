@@ -457,3 +457,46 @@ describe('编辑备份身份绑定（O3）', () => {
     expect(items[0].ts).toBe(1700000000000)
   })
 })
+
+describe('导出中心裁剪（FEAT-22）', () => {
+  it('40×20 显示画面按 1:1 中心裁剪为 20×20（裁剪先于尺寸缩放）', async () => {
+    rows.clear()
+    await makeExifJpeg('crop-1.jpg')
+    addRow({ id: 900, file: 'crop-1.jpg' })
+    const dest = mkdtempSync(path.join(tmpdir(), 'framora-exp-crop-'))
+    const r = await exportPhotos([900], dest, { format: 'jpeg', cropAspect: 1 })
+    expect(r).toEqual({ exported: 1, failed: 0 })
+    const meta = await sharp(path.join(dest, 'crop-1.jpg')).metadata()
+    expect(meta.width).toBe(20)
+    expect(meta.height).toBe(20)
+  })
+
+  it('4:3 目标比例：宽画面按高定宽居中裁剪', async () => {
+    rows.clear()
+    await sharp({ create: { width: 120, height: 60, channels: 3, background: '#336699' } })
+      .jpeg()
+      .toFile(path.join(srcDir, 'crop-wide.jpg'))
+    addRow({ id: 901, file: 'crop-wide.jpg' })
+    const dest = mkdtempSync(path.join(tmpdir(), 'framora-exp-crop2-'))
+    const r = await exportPhotos([901], dest, { format: 'jpeg', cropAspect: 4 / 3 })
+    expect(r.exported).toBe(1)
+    const meta = await sharp(path.join(dest, 'crop-wide.jpg')).metadata()
+    // 120×60 → 目标 4:3 → 高 60 定宽 80
+    expect(meta.width).toBe(80)
+    expect(meta.height).toBe(60)
+  })
+
+  it('比例与原画面一致时不裁剪（尺寸不变），裁剪强制重编码（original 也生效）', async () => {
+    rows.clear()
+    await sharp({ create: { width: 40, height: 40, channels: 3, background: '#336699' } })
+      .png()
+      .toFile(path.join(srcDir, 'crop-same.png'))
+    addRow({ id: 902, file: 'crop-same.png', ext: 'png' })
+    const dest = mkdtempSync(path.join(tmpdir(), 'framora-exp-crop3-'))
+    const r = await exportPhotos([902], dest, { format: 'original', cropAspect: 1 })
+    expect(r).toEqual({ exported: 1, failed: 0 })
+    const meta = await sharp(path.join(dest, 'crop-same.png')).metadata()
+    expect(meta.width).toBe(40)
+    expect(meta.height).toBe(40)
+  })
+})

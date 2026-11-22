@@ -264,18 +264,6 @@ export function enqueueThumb(id: number, priority: 'urgent' | 'bulk' = 'bulk'): 
   pump()
 }
 
-export function dequeueThumb(id: number): void {
-  if (queuedUrgent.has(id)) {
-    const i = queueUrgent.indexOf(id)
-    if (i >= 0) queueUrgent.splice(i, 1)
-    queuedUrgent.delete(id)
-  } else if (queuedBulk.has(id)) {
-    const i = queueBulk.indexOf(id)
-    if (i >= 0) queueBulk.splice(i, 1)
-    queuedBulk.delete(id)
-  }
-}
-
 /** 清空待生成队列（进行中的单张会自然完成），返回被移除的数量；剩余照片下次启动续跑 */
 export function clearThumbQueue(): number {
   const drained = queueUrgent.length + queueBulk.length

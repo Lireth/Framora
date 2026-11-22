@@ -256,6 +256,17 @@ export default function App(): React.JSX.Element {
         s.setConfirmDeleteOpen(true)
       } else if (e.key === 'Enter' && s.selection.size === 1) {
         s.openViewer([...s.selection][0])
+      } else if (
+        e.key.toLowerCase() === 'c' &&
+        s.selection.size === 2 &&
+        s.scope !== 'trash' &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey
+      ) {
+        // 对比视图（FEAT-09 收口，OPT-52）：批量栏提示的 C 键此前并不存在
+        e.preventDefault()
+        s.openCompare([...s.selection] as [number, number])
       } else if (e.key >= '0' && e.key <= '5' && !e.ctrlKey && !e.metaKey && !e.altKey) {
         // 网格快速评分：多选作用于全部选中项，否则作用于锚点照片（0 清除）
         e.preventDefault()

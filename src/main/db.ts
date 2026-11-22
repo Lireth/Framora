@@ -365,6 +365,12 @@ const MIGRATIONS: ((db: Database.Database) => void)[] = [
   (db) => {
     addColumnIfMissing(db, 'smart_albums', 'deleted_at', 'INTEGER')
   },
+  // v15: 检索文本纳入所属文件夹名（FEAT-15）——按文件夹名检索其内容；
+  //      存量库全量重算 + FTS 重建（新增行由脏队列按新表达式维护）
+  (db) => {
+    db.exec(`UPDATE photos SET search_text = ${SEARCH_TEXT_EXPR};`)
+    db.exec(`INSERT INTO photos_fts(photos_fts) VALUES ('rebuild');`)
+  },
 ]
 
 function migrate(): void {
@@ -981,12 +987,14 @@ const SEARCH_TEXT_EXPR_V8 = `
   IFNULL((SELECT group_concat(a.name, ' ') FROM album_photos ap JOIN albums a ON a.id = ap.album_id
           WHERE ap.photo_id = photos.id), '')`
 
+/** 运行期检索文本表达式（v15 起含所属文件夹名；文件夹名导入后不可改，无需联动触发器） */
 const SEARCH_TEXT_EXPR = `
   name || ' ' || IFNULL(title, '') || ' ' || IFNULL(description, '') || ' ' ||
   IFNULL((SELECT group_concat(t.name, ' ') FROM photo_tags pt JOIN tags t ON t.id = pt.tag_id
           WHERE pt.photo_id = photos.id AND t.deleted_at IS NULL), '') || ' ' ||
   IFNULL((SELECT group_concat(a.name, ' ') FROM album_photos ap JOIN albums a ON a.id = ap.album_id
-          WHERE ap.photo_id = photos.id AND a.deleted_at IS NULL), '')`
+          WHERE ap.photo_id = photos.id AND a.deleted_at IS NULL), '') || ' ' ||
+  IFNULL((SELECT f.name FROM folders f WHERE f.id = photos.folder_id AND f.deleted_at IS NULL), '')`
 
 /* ---------- 搜索文本脏队列 ---------- */
 

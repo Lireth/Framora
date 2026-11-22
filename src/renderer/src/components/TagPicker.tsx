@@ -24,7 +24,7 @@ export function TagPicker({
   const refreshLibrary = useStore((s) => s.refreshLibrary)
   const refreshPhotos = useStore((s) => s.refreshPhotos)
   const [selected, setSelected] = useState<Set<number>>(initialSelected ?? new Set())
-  const [newName, setNewName] = useState('')
+  const [filter, setFilter] = useState('')
   const ref = useRef<HTMLDivElement>(null)
   useOutsideClose(ref, onClose)
 
@@ -57,12 +57,17 @@ export function TagPicker({
     }
   }
 
+  // 子串过滤（FEAT-15）：标签任意位置匹配（大小写不敏感），Enter 无同名时新建
+  const kw = filter.trim().toLowerCase()
+  const visibleTags = kw ? tags.filter((t) => t.name.toLowerCase().includes(kw)) : tags
+  const exactExists = tags.some((t) => t.name.toLowerCase() === kw)
+
   const create = async (): Promise<void> => {
-    const name = newName.trim()
+    const name = filter.trim()
     if (!name) return
     try {
       const t = await api.createTag(name, null)
-      setNewName('')
+      setFilter('')
       refreshLibrary()
       setSelected((prev) => {
         const next = new Set(prev)
@@ -98,8 +103,11 @@ export function TagPicker({
         {tags.length === 0 && (
           <p className="px-1 py-2 text-[11.5px] text-ink3">还没有标签，先在下方创建一个</p>
         )}
+        {tags.length > 0 && visibleTags.length === 0 && (
+          <p className="px-1 py-2 text-[11.5px] text-ink3">没有匹配的标签，按 Enter 新建</p>
+        )}
         <div className="flex flex-wrap gap-1.5 py-1">
-          {tags.map((t) => (
+          {visibleTags.map((t) => (
             <button
               key={t.id}
               onClick={() => toggle(t.id)}
@@ -121,12 +129,21 @@ export function TagPicker({
       </div>
       <div className="mt-2 flex items-center gap-1.5 border-t border-line pt-2.5">
         <input
-          value={newName}
-          onChange={(e) => setNewName(e.target.value)}
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') create()
+            // 有精确同名 → Enter 视为选中该标签而非新建
+            if (e.key === 'Enter') {
+              if (kw && exactExists) {
+                const hit = tags.find((t) => t.name.toLowerCase() === kw)
+                if (hit) void toggle(hit.id)
+                setFilter('')
+              } else {
+                create()
+              }
+            }
           }}
-          placeholder="新建标签…"
+          placeholder="筛选或新建标签…"
           className="h-7 flex-1 rounded-md border border-line bg-panel px-2 text-[12px] outline-none focus:border-[var(--c-accent)]"
         />
         <button

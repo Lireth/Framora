@@ -512,7 +512,7 @@ describe('智能相册（保存的搜索条件）', () => {
   })
 
   it('智能相册软删除：返回受影响照片数，可恢复且恢复后条件仍生效（FEAT-13）', () => {
-    const f = newFolder('C:\pics')
+    const f = newFolder('C:/pics')
     seed(f, 'sa-1', { title: '海边日落', rating: 5 })
     seed(f, 'sa-2', { title: '雪山' })
     const sa = db.createSmartAlbum('五星海景', { minRating: 4, keyword: '海边日落' })
@@ -766,6 +766,23 @@ describe('dupCache 失效语义（第一批修复回归）', () => {
     expect(r.total).toBe(2)
     expect(r.items).toHaveLength(1)
     expect([a, b]).toContain(r.items[0].id)
+  })
+})
+
+describe('v15 检索文本纳入文件夹名', () => {
+  it('按文件夹名检索命中其中照片（存量重算与新插入路径一致）', () => {
+    const f = newFolder('C:/travel-photos')
+    seed(f, 'f1', { title: '海边' })
+    // 存量行（v15 迁移重算）
+    expect(db.queryPhotos({ scope: 'all', keyword: 'travel-photos' }).total).toBe(1)
+    // 新插入行（脏队列按新表达式维护）
+    seed(f, 'f2')
+    expect(db.queryPhotos({ scope: 'all', keyword: 'travel-photos' }).total).toBe(2)
+    // 其他文件夹不受影响
+    const other = newFolder('C:/misc')
+    seed(other, 'm1')
+    expect(db.queryPhotos({ scope: 'all', keyword: 'travel-photos' }).total).toBe(2)
+    expect(db.queryPhotos({ scope: 'all', keyword: 'misc' }).total).toBe(1)
   })
 })
 

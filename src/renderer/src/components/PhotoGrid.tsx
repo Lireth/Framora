@@ -17,6 +17,8 @@ const HEADER_H = 34
 interface GridRow {
   kind: 'header' | 'tiles'
   label?: string
+  /** 头部行归属的 [年, 月(0-11)]：时间线锚点条跳转与压缩展示用 */
+  ym?: [number, number]
   items?: PhotoLite[]
 }
 
@@ -250,6 +252,8 @@ export function PhotoGrid(): React.JSX.Element {
   const loadMorePhotos = useStore((s) => s.loadMorePhotos)
   const sort = useStore((s) => s.sort)
   const scope = useStore((s) => s.scope)
+  const scopeId = useStore((s) => s.scopeId)
+  const smartAlbums = useStore((s) => s.smartAlbums)
   const parentRef = useRef<HTMLDivElement>(null)
   const [width, setWidth] = useState(1200)
 
@@ -268,15 +272,27 @@ export function PhotoGrid(): React.JSX.Element {
   const cols = Math.max(2, Math.floor((width + GAP) / (tileH + GAP)))
   const tileW = Math.floor((width - (cols - 1) * GAP) / cols)
 
+  /* 分组所依据的「实际生效排序」：主进程对 recent 恒按 imported_at 排（忽略 sort 参数），
+     smart scope 的固定排序覆盖工具栏排序（resolveSmartFilters），其余用工具栏排序。
+     分组键必须与实际排序一致，否则同一月份的头部会交错重复出现 */
+  const activeSort = useMemo<'taken' | 'imported' | 'name' | 'rating' | 'size'>(() => {
+    if (scope === 'recent') return 'imported'
+    if (scope === 'smart' && scopeId !== undefined) {
+      const saved = smartAlbums.find((a) => a.id === scopeId)?.query.sort
+      if (saved) return saved
+    }
+    return sort
+  }, [scope, scopeId, smartAlbums, sort])
+
   /* 行模型：按拍摄/导入月份分组的头部行 + 瓦片行（时间线视图）；
      疑似重复按簇排列、回收站按删除时间倒序，两者均不做分月分组 */
   const { rows, rowIndexOfPhoto } = useMemo(() => {
     const groupable =
-      scope !== 'duplicates' &&
-      scope !== 'trash' &&
-      (scope === 'recent' || sort === 'taken' || sort === 'imported')
+      scope !== 'duplicates' && scope !== 'trash' && (activeSort === 'taken' || activeSort === 'imported')
     const monthKey = (p: PhotoLite): [number, number] => {
-      const ts = scope === 'recent' || sort === 'imported' ? p.imported_at : (p.taken_at ?? p.imported_at)
+      // 与主进程排序键一致：imported 排序按导入时间，其余（taken）按 sort_ts =
+      // COALESCE(taken_at, imported_at) 的取值逻辑
+      const ts = activeSort === 'imported' ? p.imported_at : (p.taken_at ?? p.imported_at)
       const d = new Date(ts)
       return [d.getFullYear(), d.getMonth()]
     }
@@ -304,14 +320,23 @@ export function PhotoGrid(): React.JSX.Element {
       if (key !== curKey) {
         flush()
         curKey = key
-        rowsOut.push({ kind: 'header', label: `${y}年${m + 1}月` })
+        rowsOut.push({ kind: 'header', label: `${y}年${m + 1}月`, ym: [y, m] })
       }
       bucket.push(p)
       if (bucket.length === cols) flush()
     }
     flush()
     return { rows: rowsOut, rowIndexOfPhoto: indexById }
-  }, [photos, cols, sort, scope])
+  }, [photos, cols, activeSort, scope])
+
+  /* 时间线锚点条数据：头部行的压缩标签与行号（≥2 个月份时显示） */
+  const monthHeaders = useMemo(
+    () =>
+      rows.flatMap((r, i) =>
+        r.kind === 'header' && r.ym ? [{ row: i, ym: r.ym }] : []
+      ),
+    [rows]
+  )
 
   // 上报列数，供方向键导航按行列位移
   useEffect(() => {
@@ -343,49 +368,92 @@ export function PhotoGrid(): React.JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [virtualizer.getVirtualItems().length, rows.length, hasMore])
 
+  // 当前可视区所处月份：首个可视行之前最近的头部行（高亮锚点）
+  const firstVisibleRow = virtualizer.getVirtualItems()[0]?.index ?? -1
+  let activeMonthIdx = -1
+  for (let i = 0; i < monthHeaders.length; i++) {
+    if (monthHeaders[i].row <= firstVisibleRow) activeMonthIdx = i
+    else break
+  }
+
+  // 锚点条内部跟随高亮滚动（仅滚动锚点容器本身，不影响网格滚动位置）
+  const anchorListRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const list = anchorListRef.current
+    if (activeMonthIdx < 0 || !list) return
+    const el = list.querySelector<HTMLElement>(`[data-idx="${activeMonthIdx}"]`)
+    if (!el) return
+    const top = el.offsetTop - list.clientHeight / 2 + el.clientHeight / 2
+    list.scrollTop = Math.max(0, Math.min(top, list.scrollHeight - list.clientHeight))
+  }, [activeMonthIdx])
+
   return (
-    <div
-      ref={parentRef}
-      className="relative flex-1 overflow-y-auto overflow-x-hidden px-3 py-3"
-      data-testid="photo-grid"
-    >
-      {photos.length === 0 ? (
-        <EmptyState />
-      ) : (
+    <div className="relative min-w-0 flex-1">
+      <div
+        ref={parentRef}
+        className="absolute inset-0 overflow-y-auto overflow-x-hidden px-3 py-3"
+        data-testid="photo-grid"
+      >
+        {photos.length === 0 ? (
+          <EmptyState />
+        ) : (
+          <div
+            style={{ height: virtualizer.getTotalSize(), position: 'relative', width: '100%' }}
+          >
+            {virtualizer.getVirtualItems().map((vi) => {
+              const row = rows[vi.index]
+              return (
+                <div
+                  key={vi.key}
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    width: '100%',
+                    height: vi.size,
+                    transform: `translateY(${vi.start}px)`
+                  }}
+                >
+                  {row.kind === 'header' ? (
+                    <div
+                      className="flex items-end pb-1.5 text-[12px] font-semibold tracking-wide text-ink2"
+                      style={{ height: HEADER_H }}
+                    >
+                      {row.label}
+                    </div>
+                  ) : (
+                    <div className="flex" style={{ gap: GAP }}>
+                      {row.items!.map((p) => (
+                        <Tile key={p.id} p={p} tileW={tileW} tileH={tileH} />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+      {/* 时间线月份锚点条：月份 ≥2 时显示，点击跳转到对应分组头部 */}
+      {monthHeaders.length >= 2 && (
         <div
-          style={{ height: virtualizer.getTotalSize(), position: 'relative', width: '100%' }}
+          ref={anchorListRef}
+          className="absolute right-1.5 top-1/2 z-10 max-h-[72%] -translate-y-1/2 overflow-y-auto rounded-lg border border-line bg-raised/85 py-1 shadow-lg backdrop-blur-sm [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         >
-          {virtualizer.getVirtualItems().map((vi) => {
-            const row = rows[vi.index]
-            return (
-              <div
-                key={vi.key}
-                style={{
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  width: '100%',
-                  height: vi.size,
-                  transform: `translateY(${vi.start}px)`
-                }}
-              >
-                {row.kind === 'header' ? (
-                  <div
-                    className="flex items-end pb-1.5 text-[12px] font-semibold tracking-wide text-ink2"
-                    style={{ height: HEADER_H }}
-                  >
-                    {row.label}
-                  </div>
-                ) : (
-                  <div className="flex" style={{ gap: GAP }}>
-                    {row.items!.map((p) => (
-                      <Tile key={p.id} p={p} tileW={tileW} tileH={tileH} />
-                    ))}
-                  </div>
-                )}
-              </div>
-            )
-          })}
+          {monthHeaders.map((h, i) => (
+            <button
+              key={`${h.ym[0]}-${h.ym[1]}`}
+              data-idx={i}
+              onClick={() => virtualizer.scrollToIndex(h.row, { align: 'start' })}
+              className={cn(
+                'block w-full px-2 py-0.5 text-center text-[10.5px] font-medium tabular-nums transition-colors',
+                i === activeMonthIdx ? 'bg-accent-soft text-accent' : 'text-ink3 hover:text-ink'
+              )}
+              title={`${h.ym[0]}年${h.ym[1] + 1}月`}
+            >
+              {String(h.ym[0] % 100).padStart(2, '0')}.{h.ym[1] + 1}
+            </button>
+          ))}
         </div>
       )}
       {loading && (

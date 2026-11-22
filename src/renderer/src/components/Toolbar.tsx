@@ -134,16 +134,26 @@ export function Toolbar(): React.JSX.Element {
 
   useOutsideClose(searchRef, () => setHistoryOpen(false))
 
-  // 外部关键词变化（如清除筛选）时同步输入框
+  // 外部关键词变化（如清除筛选）时同步输入框；卸载时清理防抖定时器
   useEffect(() => setInput(keyword), [keyword])
+  useEffect(
+    () => () => {
+      if (debounced.current) clearTimeout(debounced.current)
+    },
+    [],
+  )
 
   const onSearch = (v: string): void => {
     setInput(v)
     if (debounced.current) clearTimeout(debounced.current)
-    debounced.current = setTimeout(() => {
-      setKeyword({ keyword: v })
-      if (v.trim()) useStore.getState().recordSearch(v)
-    }, 250)
+    // 仅做实时过滤，不记录历史：输入中途的停顿会把「s」「sa」这类碎片词
+    // 写入历史并多次持久化（OPT-40），历史只在 Enter/失焦时记录
+    debounced.current = setTimeout(() => setKeyword({ keyword: v }), 250)
+  }
+
+  const recordOnce = (v: string): void => {
+    const t = v.trim()
+    if (t) useStore.getState().recordSearch(t)
   }
 
   const applyHistory = (term: string): void => {
@@ -168,6 +178,15 @@ export function Toolbar(): React.JSX.Element {
         <input
           value={input}
           onChange={(e) => onSearch(e.target.value)}
+          onKeyDown={(e) => {
+            // Enter：立即提交并记录完整词条（替代碎片化的防抖中途记录）
+            if (e.key === 'Enter') {
+              if (debounced.current) clearTimeout(debounced.current)
+              setKeyword({ keyword: input })
+              recordOnce(input)
+            }
+          }}
+          onBlur={() => recordOnce(input)}
           onFocus={() => {
             if (!input) setHistoryOpen(true)
           }}

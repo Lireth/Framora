@@ -6,9 +6,38 @@ on:
   pull_request:
     branches: [main]
 
+# 同一分支的新推送取消在途旧跑（push+PR 双触发不再双倍计费）
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  # 类型检查与 lint 是纯 JS 工具链，放 ubuntu 快跑省时省费；
+  # --ignore-scripts 跳过 electron 下载与图标生成（静态检查不需要）
+  static:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
   verify:
     runs-on: windows-latest
+    needs: static
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -19,12 +48,6 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-
-      - name: Typecheck
-        run: npm run typecheck
-
-      - name: Lint
-        run: npm run lint
 
       - name: Unit tests
         run: npm run test
@@ -53,3 +76,12 @@ jobs:
           $code = $LASTEXITCODE
           Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
           exit $code
+
+      # 冒烟失败取证：截图落在系统临时目录（framora-ui-test），上传为 artifact 便于排查
+      - name: Upload smoke screenshots on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-smoke-failure
+          path: ${{ runner.temp }}/framora-ui-test/
+          if-no-files-found: ignore

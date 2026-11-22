@@ -16,7 +16,8 @@
     "build": "electron-vite build",
     "icon": "node scripts/gen-icon.mjs",
     "dist": "electron-vite build && electron-builder --win",
-    "postinstall": "node scripts/gen-icon.mjs"
+    "postinstall": "node scripts/gen-icon.mjs",
+    "test:coverage": "node scripts/run-vitest.mjs --coverage"
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.13.0",
@@ -37,6 +38,7 @@
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",
+    "@vitest/coverage-v8": "^5.1.1",
     "autoprefixer": "^10.4.20",
     "electron": "^38.0.0",
     "electron-builder": "^25.1.8",

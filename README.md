@@ -53,8 +53,10 @@
 
 **环境要求**：Node.js ≥ 20（npm ≥ 10）、Windows 10/11。
 
+> 国内网络加速建议把 npm / Electron 镜像配置在**用户级** `~/.npmrc`（registry 与 electron 镜像等），仓库不再内置镜像配置，以保证 CI 环境稳定拉取。
+
 ```bash
-npm install        # 安装依赖（.npmrc 已配置国内镜像，自动生成应用图标）
+npm install        # 安装依赖（自动生成应用图标）
 npm run dev        # 开发模式（渲染进程热更新）
 npm run typecheck  # TypeScript 全量类型检查
 npm run build      # 构建产物到 out/

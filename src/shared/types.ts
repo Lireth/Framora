@@ -284,7 +284,7 @@ export interface UpdateState {
 }
 
 /** 可撤销的元数据删除类型：资料库文件夹 / 标签 / 相册 */
-export type UndoKind = 'folder' | 'tag' | 'album'
+export type UndoKind = 'folder' | 'tag' | 'album' | 'smart'
 
 /** 一次可撤销的元数据删除（软删除，恢复即清除 deleted_at） */
 export interface UndoEntry {
@@ -302,6 +302,7 @@ export const UNDO_KIND_LABEL: Record<UndoKind, string> = {
   folder: '文件夹',
   tag: '标签',
   album: '相册',
+  smart: '智能相册',
 }
 
 /* ---------- 存储占用与预算 ---------- */

@@ -12,7 +12,7 @@ export function isUndoEntry(v: unknown): v is UndoEntry {
   const o = v as Partial<UndoEntry> | null
   return (
     !!o &&
-    (o.kind === 'folder' || o.kind === 'tag' || o.kind === 'album') &&
+    (o.kind === 'folder' || o.kind === 'tag' || o.kind === 'album' || o.kind === 'smart') &&
     typeof o.id === 'number' &&
     Number.isFinite(o.id) &&
     typeof o.label === 'string' &&

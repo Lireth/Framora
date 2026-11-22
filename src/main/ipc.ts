@@ -548,8 +548,10 @@ export function registerIpc(): void {
       if (folder && fs.existsSync(folder.path)) await startWatcher(entry.id, folder.path)
     } else if (entry.kind === 'tag') {
       db.restoreTag(entry.id)
-    } else {
+    } else if (entry.kind === 'album') {
       db.restoreAlbum(entry.id)
+    } else {
+      db.restoreSmartAlbum(entry.id)
     }
     undoStore.pop()
     broadcastLibraryChanged()
@@ -668,7 +670,13 @@ export function registerIpc(): void {
     (_e, id: number, name: string, query: SmartAlbumQuery) =>
       db.updateSmartAlbum(id, name.trim(), query),
   )
-  ipcMain.handle('smartAlbums:delete', (_e, id: number) => db.deleteSmartAlbum(id))
+  ipcMain.handle('smartAlbums:delete', (_e, id: number) => {
+    // 软删除（FEAT-13）：与普通相册一致纳入撤销栈
+    const info = db.deleteSmartAlbum(id)
+    if (!info) return null
+    undoStore.push({ kind: 'smart', id, label: info.name, photos: info.photos })
+    return info
+  })
 
   /* ---------- window / theme ---------- */
   ipcMain.handle('window:setTheme', (_e, mode: ThemeMode) => {

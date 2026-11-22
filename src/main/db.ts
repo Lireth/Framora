@@ -361,6 +361,10 @@ const MIGRATIONS: ((db: Database.Database) => void)[] = [
       CREATE INDEX IF NOT EXISTS idx_photos_view_size ON photos(size, id) WHERE deleted_at IS NULL;
     `)
   },
+  // v14: 智能相册软删除（FEAT-13）——与文件夹/标签/相册对齐，删除可撤销
+  (db) => {
+    addColumnIfMissing(db, 'smart_albums', 'deleted_at', 'INTEGER')
+  },
 ]
 
 function migrate(): void {
@@ -1397,7 +1401,7 @@ function resolveSmartFilters(q: PhotoQuery): PhotoQuery {
 
 export function listSmartAlbums(): SmartAlbumInfo[] {
   const rows = stmt(
-    'SELECT id, name, color, created_at, query FROM smart_albums ORDER BY created_at ASC',
+    'SELECT id, name, color, created_at, query FROM smart_albums WHERE deleted_at IS NULL ORDER BY created_at ASC',
   ).all() as (Omit<SmartAlbumInfo, 'query'> & { query: string })[]
   return rows.map((r) => ({ ...r, query: parseSmartQuery(r.query) }))
 }
@@ -1447,7 +1451,7 @@ function parseSmartQuery(raw: string): SmartAlbumQuery {
 }
 
 export function getSmartAlbumQuery(id: number): SmartAlbumQuery | undefined {
-  const row = stmt('SELECT query FROM smart_albums WHERE id = ?').get(id) as
+  const row = stmt('SELECT query FROM smart_albums WHERE id = ? AND deleted_at IS NULL').get(id) as
     { query: string } | undefined
   return row ? parseSmartQuery(row.query) : undefined
 }
@@ -1472,8 +1476,25 @@ export function updateSmartAlbum(id: number, name: string, query: SmartAlbumQuer
   )
 }
 
-export function deleteSmartAlbum(id: number): void {
-  stmt('DELETE FROM smart_albums WHERE id = ?').run(id)
+/** 智能相册软删除（FEAT-13）：与普通相册的删除/撤销体系对齐 */
+export function deleteSmartAlbum(id: number): { name: string; photos: number } | null {
+  const row = stmt('SELECT name FROM smart_albums WHERE id = ? AND deleted_at IS NULL').get(id) as
+    { name: string } | undefined
+  if (!row) return null
+  // 命中的照片数需在软删前统计（getSmartAlbumQuery 此后将排除已删行）
+  const photos = queryPhotos({ scope: 'smart', scopeId: id }).total
+  stmt('UPDATE smart_albums SET deleted_at = ? WHERE id = ?').run(Date.now(), id)
+  return { name: row.name, photos }
+}
+
+/** 撤销删除智能相册 */
+export function restoreSmartAlbum(id: number): { name: string; photos: number } | null {
+  const row = stmt('SELECT name FROM smart_albums WHERE id = ? AND deleted_at IS NOT NULL').get(
+    id,
+  ) as { name: string } | undefined
+  if (!row) return null
+  stmt('UPDATE smart_albums SET deleted_at = NULL WHERE id = ?').run(id)
+  return { name: row.name, photos: queryPhotos({ scope: 'smart', scopeId: id }).total }
 }
 
 /* ---------- tags ---------- */

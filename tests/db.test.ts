@@ -511,6 +511,23 @@ describe('智能相册（保存的搜索条件）', () => {
     expect(db.listSmartAlbums()).toHaveLength(0)
   })
 
+  it('智能相册软删除：返回受影响照片数，可恢复且恢复后条件仍生效（FEAT-13）', () => {
+    const f = newFolder('C:\pics')
+    seed(f, 'sa-1', { title: '海边日落', rating: 5 })
+    seed(f, 'sa-2', { title: '雪山' })
+    const sa = db.createSmartAlbum('五星海景', { minRating: 4, keyword: '海边日落' })
+    expect(db.queryPhotos({ scope: 'smart', scopeId: sa }).total).toBe(1)
+    // 软删除：不再列出、条件解析失效、返回受影响照片数
+    const info = db.deleteSmartAlbum(sa)
+    expect(info).toEqual({ name: '五星海景', photos: 1 })
+    expect(db.listSmartAlbums()).toHaveLength(0)
+    expect(db.getSmartAlbumQuery(sa)).toBeUndefined()
+    // 恢复：重新列出且保存的条件继续生效
+    expect(db.restoreSmartAlbum(sa)?.name).toBe('五星海景')
+    expect(db.listSmartAlbums().map((a) => a.id)).toContain(sa)
+    expect(db.queryPhotos({ scope: 'smart', scopeId: sa }).total).toBe(1)
+  })
+
   it('损坏/非法的条件字段被丢弃，查询不再崩溃且相册可正常列出', () => {
     const f = newFolder('C:\\pics')
     seed(f, 'ok1', { title: '海边' })

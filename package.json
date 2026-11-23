@@ -15,8 +15,9 @@
     "test": "node scripts/run-vitest.mjs",
     "build": "electron-vite build",
     "icon": "node scripts/gen-icon.mjs",
+    "rebuild:native": "node scripts/rebuild-native.mjs",
     "dist": "electron-vite build && electron-builder --win",
-    "postinstall": "node scripts/gen-icon.mjs",
+    "postinstall": "npm run rebuild:native && node scripts/gen-icon.mjs",
     "test:coverage": "node scripts/run-vitest.mjs --coverage"
   },
   "dependencies": {
